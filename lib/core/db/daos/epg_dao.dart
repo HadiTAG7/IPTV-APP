@@ -2,6 +2,8 @@ import 'package:drift/drift.dart';
 
 import '../../../epg/epg_models.dart';
 import '../../../sources/models.dart';
+import '../../net/redact.dart';
+import '../../secure/secret_store.dart';
 import '../app_db.dart';
 import 'query_utils.dart';
 
@@ -17,27 +19,51 @@ class EpgDao extends DatabaseAccessor<AppDatabase> {
 
   /// Adds a guide URL for [sourceId], or returns the id of the existing entry
   /// with the same URL (its settings are kept).
+  ///
+  /// A URL with credentials (Xtream `xmltv.php?username=..&password=..`) is
+  /// stored masked and in full in [secrets] (default: this database, in the
+  /// same transaction); fetch with [epgSourceUrl].
   Future<int> addEpgSource(
     int sourceId,
     String url,
     EpgOrigin origin, {
     int priority = 0,
     bool enabled = true,
-  }) async {
-    final row = await into(db.epgSources).insertReturning(
-      EpgSourcesCompanion.insert(
-        sourceId: sourceId,
-        url: url,
-        origin: origin,
-        priority: Value(priority),
-        enabled: Value(enabled),
-      ),
-      onConflict: DoUpdate(
-        (_) => EpgSourcesCompanion(url: Value(url)),
-        target: [db.epgSources.sourceId, db.epgSources.url],
-      ),
-    );
-    return row.id;
+    SecretStore? secrets,
+  }) {
+    final store = secrets ?? DbSecretStore(db);
+    final masked = redact(url);
+    return transaction(() async {
+      final row = await into(db.epgSources).insertReturning(
+        EpgSourcesCompanion.insert(
+          sourceId: sourceId,
+          url: masked,
+          origin: origin,
+          priority: Value(priority),
+          enabled: Value(enabled),
+        ),
+        onConflict: DoUpdate(
+          (_) => EpgSourcesCompanion(url: Value(masked)),
+          target: [db.epgSources.sourceId, db.epgSources.url],
+        ),
+      );
+      final name = SecretNames.epgUrl(row.id);
+      if (masked == url) {
+        await store.delete(sourceId, name);
+      } else {
+        await store.write(sourceId, name, url);
+      }
+      return row.id;
+    });
+  }
+
+  /// Full URL of a guide source (credentials included), or null.
+  Future<String?> epgSourceUrl(int epgSourceId, [SecretStore? secrets]) async {
+    final row = await epgSourceById(epgSourceId);
+    if (row == null) return null;
+    final store = secrets ?? DbSecretStore(db);
+    return await store.read(row.sourceId, SecretNames.epgUrl(epgSourceId)) ??
+        row.url;
   }
 
   SimpleSelectStatement<$EpgSourcesTable, EpgSourceRecord> _sourcesOf(
@@ -101,9 +127,18 @@ class EpgDao extends DatabaseAccessor<AppDatabase> {
     ),
   );
 
-  /// Deletes a guide source with its channels, programmes and map entries.
-  Future<void> deleteEpgSource(int id) =>
-      (delete(db.epgSources)..where((e) => e.id.equals(id))).go();
+  /// Deletes a guide source with its channels, programmes, map entries and
+  /// saved URL.
+  Future<void> deleteEpgSource(int id, {SecretStore? secrets}) =>
+      transaction(() async {
+        final row = await epgSourceById(id);
+        if (row == null) return;
+        await (delete(db.epgSources)..where((e) => e.id.equals(id))).go();
+        await (secrets ?? DbSecretStore(db)).delete(
+          row.sourceId,
+          SecretNames.epgUrl(id),
+        );
+      });
 
   Future<void> _writeSource(int id, EpgSourcesCompanion values) =>
       (update(db.epgSources)..where((e) => e.id.equals(id))).write(values);
@@ -251,9 +286,10 @@ class EpgDao extends DatabaseAccessor<AppDatabase> {
   /// Current and next programme for each of [channelKeys] in one query.
   ///
   /// "Now" is the latest programme with `start <= now < stop`; "next" is the
-  /// earliest one starting after [now] (within [nextHorizon]). Channels
-  /// without guide data are absent from the result. Disabled guide sources
-  /// are ignored.
+  /// earliest one starting after [now] (within [nextHorizon]). Each channel's
+  /// `tvg-shift` is applied (see [programmesForChannels]). Channels without
+  /// guide data are absent from the result. Disabled guide sources are
+  /// ignored.
   Future<Map<String, NowNext>> nowNext(
     int sourceId,
     List<String> channelKeys,
@@ -263,19 +299,17 @@ class EpgDao extends DatabaseAccessor<AppDatabase> {
     final t = toEpochSec(now);
     final horizon = toEpochSec(now.add(nextHorizon));
     for (final keys in chunked(channelKeys.toSet().toList())) {
+      // `q.t` and `q.h` are now and the horizon in the guide's own time.
       final rows = await customSelect(
         'SELECT * FROM ('
-        'SELECT m.channel_key AS ck, p.*, '
-        'CASE WHEN p.start_utc <= ?2 THEN 0 ELSE 1 END AS slot, '
-        'ROW_NUMBER() OVER (PARTITION BY m.channel_key, p.start_utc <= ?2 '
-        'ORDER BY CASE WHEN p.start_utc <= ?2 THEN -p.start_utc '
+        'SELECT q.ck, q.sh, p.*, '
+        'CASE WHEN p.start_utc <= q.t THEN 0 ELSE 1 END AS slot, '
+        'ROW_NUMBER() OVER (PARTITION BY q.ck, p.start_utc <= q.t '
+        'ORDER BY CASE WHEN p.start_utc <= q.t THEN -p.start_utc '
         'ELSE p.start_utc END) AS rn '
-        'FROM channel_epg_map m '
-        'JOIN epg_sources es ON es.id = m.epg_source_id AND es.enabled = 1 '
-        'JOIN programmes p ON p.epg_source_id = m.epg_source_id '
-        'AND p.xmltv_id = m.xmltv_id '
-        'WHERE m.source_id = ?1 AND m.channel_key IN (${sqlParams(keys.length, 4)}) '
-        'AND p.stop_utc > ?2 AND p.start_utc < ?3'
+        'FROM (${_linkedChannelsSql(keys.length)}) q '
+        'JOIN programmes p ON p.epg_source_id = q.esid '
+        'AND p.xmltv_id = q.xid AND p.stop_utc > q.t AND p.start_utc < q.h'
         ') WHERE rn = 1',
         variables: [
           Variable.withInt(sourceId),
@@ -283,11 +317,11 @@ class EpgDao extends DatabaseAccessor<AppDatabase> {
           Variable.withInt(horizon),
           for (final k in keys) Variable.withString(k),
         ],
-        readsFrom: {db.channelEpgMap, db.epgSources, db.programmes},
+        readsFrom: _guideTables,
       ).get();
       for (final r in rows) {
         final key = r.read<String>('ck');
-        final programme = db.programmes.map(r.data).toProgramme();
+        final programme = _programme(r);
         final current = result[key] ?? (now: null, next: null);
         result[key] = r.read<int>('slot') == 0
             ? (now: programme, next: current.next)
@@ -299,6 +333,11 @@ class EpgDao extends DatabaseAccessor<AppDatabase> {
 
   /// Programmes overlapping `[from, to)` per channel key, ordered by start.
   /// Channels without guide data are absent.
+  ///
+  /// Programme times are stored as the guide publishes them; a channel's
+  /// `tvg-shift` (`channels.tvgShiftMin`, which already falls back to the
+  /// playlist header) is added here, so several playlist channels can share
+  /// one guide id with different shifts. Importers must not apply it again.
   Future<Map<String, List<EpgProgramme>>> programmesForChannels(
     int sourceId,
     List<String> channelKeys,
@@ -308,27 +347,57 @@ class EpgDao extends DatabaseAccessor<AppDatabase> {
     final result = <String, List<EpgProgramme>>{};
     for (final keys in chunked(channelKeys.toSet().toList())) {
       final rows = await customSelect(
-        'SELECT m.channel_key AS ck, p.* FROM channel_epg_map m '
-        'JOIN epg_sources es ON es.id = m.epg_source_id AND es.enabled = 1 '
-        'JOIN programmes p ON p.epg_source_id = m.epg_source_id '
-        'AND p.xmltv_id = m.xmltv_id '
-        'WHERE m.source_id = ?1 AND m.channel_key IN (${sqlParams(keys.length, 4)}) '
-        'AND p.stop_utc > ?2 AND p.start_utc < ?3 '
-        'ORDER BY m.channel_key, p.start_utc',
+        'SELECT q.ck, q.sh, p.* FROM (${_linkedChannelsSql(keys.length)}) q '
+        'JOIN programmes p ON p.epg_source_id = q.esid '
+        'AND p.xmltv_id = q.xid AND p.stop_utc > q.t AND p.start_utc < q.h '
+        'ORDER BY q.ck, p.start_utc',
         variables: [
           Variable.withInt(sourceId),
           Variable.withInt(toEpochSec(from)),
           Variable.withInt(toEpochSec(to)),
           for (final k in keys) Variable.withString(k),
         ],
-        readsFrom: {db.channelEpgMap, db.epgSources, db.programmes},
+        readsFrom: _guideTables,
       ).get();
       for (final r in rows) {
-        (result[r.read<String>('ck')] ??= []).add(
-          db.programmes.map(r.data).toProgramme(),
-        );
+        (result[r.read<String>('ck')] ??= []).add(_programme(r));
       }
     }
     return result;
   }
+
+  Set<ResultSetImplementation<HasResultSet, Object?>> get _guideTables => {
+    db.channelEpgMap,
+    db.epgSources,
+    db.programmes,
+    db.channels,
+  };
+
+  /// Programme with its times moved by the channel shift `sh` (seconds).
+  EpgProgramme _programme(QueryRow r) {
+    final p = db.programmes.map(r.data);
+    final shift = r.read<int>('sh');
+    return (shift == 0
+            ? p
+            : p.copyWith(
+                startUtc: p.startUtc + shift,
+                stopUtc: p.stopUtc + shift,
+              ))
+        .toProgramme();
+  }
 }
+
+/// Linked channels among `?4...` of source `?1` on enabled guide sources,
+/// with their shift `sh` (seconds) and the times `?2`, `?3` moved into guide
+/// time as `t`, `h`.
+String _linkedChannelsSql(int keyCount) =>
+    'SELECT m.channel_key AS ck, m.epg_source_id AS esid, m.xmltv_id AS xid, '
+    'COALESCE(c.tvg_shift_min, 0) * 60 AS sh, '
+    '?2 - COALESCE(c.tvg_shift_min, 0) * 60 AS t, '
+    '?3 - COALESCE(c.tvg_shift_min, 0) * 60 AS h '
+    'FROM channel_epg_map m '
+    'JOIN epg_sources es ON es.id = m.epg_source_id AND es.enabled = 1 '
+    'LEFT JOIN channels c ON c.source_id = m.source_id '
+    'AND c."key" = m.channel_key '
+    'WHERE m.source_id = ?1 '
+    'AND m.channel_key IN (${sqlParams(keyCount, 4)})';

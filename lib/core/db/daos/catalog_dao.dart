@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:drift/drift.dart';
 
 import '../../../sources/models.dart';
@@ -6,6 +8,8 @@ import '../app_db.dart';
 import 'query_utils.dart';
 
 const _allKinds = {ContentKind.live, ContentKind.movie, ContentKind.series};
+
+typedef _GenState = ({int committed, int? open, int last});
 
 /// Catalog writes (generation swap) and paged catalog reads.
 ///
@@ -26,8 +30,12 @@ const _allKinds = {ContentKind.live, ContentKind.movie, ContentKind.series};
 /// before the commit. Favourites, progress, prefs, recent channels and the
 /// EPG map are never touched here.
 ///
-/// One open generation per source at a time; calls for the same source must
-/// not run concurrently.
+/// The open generation is stored in `sources.openGeneration` and numbers are
+/// never reused. [beginGeneration] closes any earlier open generation, and
+/// every upsert, commit and abort checks its number inside its transaction,
+/// so a stale writer (a cancelled or superseded sync) fails with a
+/// [StateError] instead of mixing into, committing or aborting a newer one.
+/// Batches of one generation are written one after another by one writer.
 class CatalogDao extends DatabaseAccessor<AppDatabase> {
   CatalogDao(super.attachedDatabase);
 
@@ -37,13 +45,22 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
   // -------------------------------------------------------------------------
   // Generation swap.
 
-  /// Starts generation `committed + 1` and returns it. Leftovers of an
-  /// interrupted sync (rows above the committed generation) are discarded.
+  /// Opens a new generation of [sourceId] and returns its number (above every
+  /// number handed out before). Leftovers of an interrupted or superseded
+  /// sync are discarded; that sync's later writes are rejected.
   Future<int> beginGeneration(int sourceId) async {
     final gen = await transaction(() async {
-      final current = await committedGeneration(sourceId);
-      await _discardAbove(sourceId, current);
-      return current + 1;
+      final state = await _state(sourceId);
+      await _discardAbove(sourceId, state.committed);
+      final gen = math.max(state.last, state.committed) + 1;
+      await _writeSource(
+        sourceId,
+        SourcesCompanion(
+          openGeneration: Value(gen),
+          lastGeneration: Value(gen),
+        ),
+      );
+      return gen;
     });
     _open.removeWhere((k, _) => k.$1 == sourceId);
     _open[(sourceId, gen)] = {};
@@ -54,24 +71,30 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
   Future<CatalogWriteSession> openGeneration(int sourceId) async =>
       CatalogWriteSession._(this, sourceId, await beginGeneration(sourceId));
 
+  /// The generation a sync is writing for [sourceId], or null.
+  Future<int?> openGenerationOf(int sourceId) async =>
+      (await _state(sourceId)).open;
+
   Future<void> upsertCategories(
     int sourceId,
     int gen,
     List<CategoryData> items,
   ) async {
     if (items.isEmpty) return;
-    await _counters(sourceId, gen);
-    await batch((b) {
-      for (final c in items) {
-        final row = categoryCompanion(sourceId, gen, c);
-        b.insert(
-          db.categories,
-          row,
-          onConflict: DoUpdate(
-            (_) => row.copyWith(firstGen: const Value.absent()),
-          ),
-        );
-      }
+    await transaction(() async {
+      await _requireOpen(sourceId, gen);
+      await batch((b) {
+        for (final c in items) {
+          final row = categoryCompanion(sourceId, gen, c);
+          b.insert(
+            db.categories,
+            row,
+            onConflict: DoUpdate(
+              (_) => row.copyWith(firstGen: const Value.absent()),
+            ),
+          );
+        }
+      });
     });
   }
 
@@ -143,18 +166,20 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
     List<EpisodeData> items,
   ) async {
     if (items.isEmpty) return;
-    await _counters(sourceId, gen);
-    await batch((b) {
-      for (final e in items) {
-        final row = episodeCompanion(sourceId, gen, e);
-        b.insert(
-          db.episodes,
-          row,
-          onConflict: DoUpdate(
-            (_) => row.copyWith(firstGen: const Value.absent()),
-          ),
-        );
-      }
+    await transaction(() async {
+      await _requireOpen(sourceId, gen);
+      await batch((b) {
+        for (final e in items) {
+          final row = episodeCompanion(sourceId, gen, e);
+          b.insert(
+            db.episodes,
+            row,
+            onConflict: DoUpdate(
+              (_) => row.copyWith(firstGen: const Value.absent()),
+            ),
+          );
+        }
+      });
     });
   }
 
@@ -185,7 +210,7 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
 
   /// Makes [gen] the visible catalog in one short transaction: rows of older
   /// generations are deleted, `sources.generation` is set and category item
-  /// counts are refreshed.
+  /// counts are refreshed. Throws a [StateError] unless [gen] is open.
   ///
   /// Kinds missing from [kinds] were not fetched by this sync and keep their
   /// committed rows (carried into [gen]).
@@ -195,13 +220,7 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
     Set<ContentKind> kinds = _allKinds,
   }) async {
     await transaction(() async {
-      final current = await committedGeneration(sourceId);
-      if (gen != current + 1) {
-        throw StateError(
-          'Generation $gen is not open for source $sourceId '
-          '(committed: $current)',
-        );
-      }
+      await _requireOpen(sourceId, gen);
       for (final kind in _allKinds.difference(kinds)) {
         await _carryForward(sourceId, kind, gen);
       }
@@ -230,8 +249,12 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
         db.episodes,
         UpdateKind.delete,
       );
-      await (update(db.sources)..where((s) => s.id.equals(sourceId))).write(
-        SourcesCompanion(generation: Value(gen)),
+      await _writeSource(
+        sourceId,
+        SourcesCompanion(
+          generation: Value(gen),
+          openGeneration: const Value(null),
+        ),
       );
       await _write(
         'UPDATE categories SET item_count = ('
@@ -247,16 +270,58 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
     _open.remove((sourceId, gen));
   }
 
-  /// Drops everything written for [gen]. Rows that existed before keep their
-  /// (possibly refreshed) data and return to the committed generation; rows
-  /// first seen in [gen] are deleted. A no-op for committed generations.
+  /// Drops everything written for [gen] when it is the open generation.
+  /// Rows that existed before keep their (possibly refreshed) data and return
+  /// to the committed generation; rows first seen in [gen] are deleted.
+  ///
+  /// Does nothing when [gen] is not open (committed, aborted, superseded by
+  /// a newer [beginGeneration], or its source is gone), so a late cancel
+  /// never touches another sync's rows.
   Future<void> abortGeneration(int sourceId, int gen) async {
     _open.remove((sourceId, gen));
     await transaction(() async {
-      final current = await committedGeneration(sourceId);
-      if (gen > current) await _discardAbove(sourceId, current);
+      final state = await _stateOrNull(sourceId);
+      if (state == null || state.open != gen) return;
+      await _discardAbove(sourceId, state.committed);
+      await _writeSource(
+        sourceId,
+        const SourcesCompanion(openGeneration: Value(null)),
+      );
     });
   }
+
+  Future<_GenState?> _stateOrNull(int sourceId) {
+    final s = db.sources;
+    return (selectOnly(s)
+          ..addColumns([s.generation, s.openGeneration, s.lastGeneration])
+          ..where(s.id.equals(sourceId)))
+        .map(
+          (r) => (
+            committed: r.read(s.generation)!,
+            open: r.read(s.openGeneration),
+            last: r.read(s.lastGeneration)!,
+          ),
+        )
+        .getSingleOrNull();
+  }
+
+  Future<_GenState> _state(int sourceId) async =>
+      await _stateOrNull(sourceId) ??
+      (throw StateError('Unknown source $sourceId'));
+
+  /// Throws a [StateError] unless [gen] is the open generation.
+  Future<void> _requireOpen(int sourceId, int gen) async {
+    final state = await _state(sourceId);
+    if (state.open == gen) return;
+    _open.remove((sourceId, gen));
+    throw StateError(
+      'Generation $gen is not open for source $sourceId '
+      '(open: ${state.open}, committed: ${state.committed})',
+    );
+  }
+
+  Future<void> _writeSource(int sourceId, SourcesCompanion values) =>
+      (update(db.sources)..where((s) => s.id.equals(sourceId))).write(values);
 
   Future<void> _discardAbove(int sourceId, int current) async {
     final args = [Variable.withInt(sourceId), Variable.withInt(current)];
@@ -342,21 +407,14 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
     UpdateKind kind,
   ) => customUpdate(sql, variables: args, updates: {table}, updateKind: kind);
 
-  /// Position counters of an open generation, rebuilt from the rows already
-  /// written when this DAO did not start it (e.g. another isolate).
+  /// Position counters of the open generation [gen], rebuilt from the rows
+  /// already written when this DAO did not start it (e.g. another isolate).
   Future<Map<(ContentKind, String), int>> _counters(
     int sourceId,
     int gen,
   ) async {
     final open = _open[(sourceId, gen)];
     if (open != null) return open;
-    final current = await committedGeneration(sourceId);
-    if (gen != current + 1) {
-      throw StateError(
-        'Generation $gen is not open for source $sourceId '
-        '(committed: $current)',
-      );
-    }
     final rows = await customSelect(
       'SELECT kind, category_key, MAX(position) + 1 AS next '
       'FROM category_items WHERE source_id = ?1 AND generation = ?2 '
@@ -373,8 +431,40 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
     return _open[(sourceId, gen)] = counters;
   }
 
+  /// (categoryKey, itemKey) memberships of [keys] already written in [gen].
+  Future<Set<(String, String)>> _writtenMemberships(
+    int sourceId,
+    int gen,
+    ContentKind kind,
+    Iterable<String> keys,
+  ) async {
+    final found = <(String, String)>{};
+    for (final chunk in chunked(keys.toSet().toList())) {
+      final rows = await customSelect(
+        'SELECT category_key, item_key FROM category_items '
+        'WHERE source_id = ?1 AND kind = ?2 AND generation = ?3 '
+        'AND item_key IN (${sqlParams(chunk.length, 4)})',
+        variables: [
+          Variable.withInt(sourceId),
+          Variable.withString(kind.name),
+          Variable.withInt(gen),
+          for (final k in chunk) Variable.withString(k),
+        ],
+        readsFrom: {db.categoryItems},
+      ).get();
+      for (final r in rows) {
+        found.add((r.read<String>('category_key'), r.read<String>('item_key')));
+      }
+    }
+    return found;
+  }
+
   /// Writes item rows plus their `category_items` memberships with dense
-  /// positions per (kind, categoryKey), in one batch.
+  /// positions per (kind, categoryKey), in one transaction.
+  ///
+  /// An item repeated within a generation (Xtream per-category fetches list
+  /// a multi-category stream once per category) keeps one membership per
+  /// category. A position clash with another writer fails the batch.
   Future<void> _upsertItems<T>(
     int sourceId,
     int gen,
@@ -385,48 +475,58 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
     void Function(Batch b, T item) writeRow,
   ) async {
     if (items.isEmpty) return;
-    final counters = await _counters(sourceId, gen);
+    Map<(ContentKind, String), int>? counters;
     final previous = <(ContentKind, String), int?>{};
-    final memberships = <CategoryItemsCompanion>[];
-    for (final item in items) {
-      final key = keyOf(item);
-      for (final category in categoriesOf(item).toSet()) {
-        final slot = (kind, category);
-        previous.putIfAbsent(slot, () => counters[slot]);
-        final position = counters[slot] ?? 0;
-        counters[slot] = position + 1;
-        memberships.add(
-          CategoryItemsCompanion.insert(
-            sourceId: sourceId,
-            generation: gen,
-            kind: kind,
-            categoryKey: category,
-            position: position,
-            itemKey: key,
-          ),
-        );
-      }
-    }
     try {
-      await batch((b) {
-        for (final item in items) {
-          writeRow(b, item);
-        }
-        b.insertAll(
-          db.categoryItems,
-          memberships,
-          mode: InsertMode.insertOrReplace,
+      await transaction(() async {
+        await _requireOpen(sourceId, gen);
+        final next = counters = await _counters(sourceId, gen);
+        final written = await _writtenMemberships(
+          sourceId,
+          gen,
+          kind,
+          items.map(keyOf),
         );
+        final memberships = <CategoryItemsCompanion>[];
+        for (final item in items) {
+          final key = keyOf(item);
+          for (final category in categoriesOf(item)) {
+            if (!written.add((category, key))) continue;
+            final slot = (kind, category);
+            previous.putIfAbsent(slot, () => next[slot]);
+            final position = next[slot] ?? 0;
+            next[slot] = position + 1;
+            memberships.add(
+              CategoryItemsCompanion.insert(
+                sourceId: sourceId,
+                generation: gen,
+                kind: kind,
+                categoryKey: category,
+                position: position,
+                itemKey: key,
+              ),
+            );
+          }
+        }
+        await batch((b) {
+          for (final item in items) {
+            writeRow(b, item);
+          }
+          b.insertAll(db.categoryItems, memberships);
+        });
       });
     } on Object {
       // Hand the positions back so the category stays dense.
-      previous.forEach((slot, n) {
-        if (n == null) {
-          counters.remove(slot);
-        } else {
-          counters[slot] = n;
-        }
-      });
+      final next = counters;
+      if (next != null) {
+        previous.forEach((slot, n) {
+          if (n == null) {
+            next.remove(slot);
+          } else {
+            next[slot] = n;
+          }
+        });
+      }
       rethrow;
     }
   }
@@ -435,16 +535,8 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
   // Reads.
 
   /// Committed generation of [sourceId] (0 before the first sync).
-  Future<int> committedGeneration(int sourceId) async {
-    final gen =
-        await (selectOnly(db.sources)
-              ..addColumns([db.sources.generation])
-              ..where(db.sources.id.equals(sourceId)))
-            .map((r) => r.read(db.sources.generation))
-            .getSingleOrNull();
-    if (gen == null) throw StateError('Unknown source $sourceId');
-    return gen;
-  }
+  Future<int> committedGeneration(int sourceId) async =>
+      (await _state(sourceId)).committed;
 
   Expression<int> _committedGen(int sourceId) => subqueryExpression<int>(
     selectOnly(db.sources)

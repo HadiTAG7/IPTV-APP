@@ -152,6 +152,23 @@ class $SourcesTable extends Sources
     defaultValue: const Constant(0),
   );
   @override
+  late final GeneratedColumn<int> openGeneration = GeneratedColumn<int>(
+    'open_generation',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  @override
+  late final GeneratedColumn<int> lastGeneration = GeneratedColumn<int>(
+    'last_generation',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  @override
   late final GeneratedColumn<int> lastSyncAt = GeneratedColumn<int>(
     'last_sync_at',
     aliasedName,
@@ -194,6 +211,8 @@ class $SourcesTable extends Sources
     maxConnections,
     allowedFormatsJson,
     generation,
+    openGeneration,
+    lastGeneration,
     lastSyncAt,
     lastEpgAt,
     sortIndex,
@@ -283,6 +302,14 @@ class $SourcesTable extends Sources
         DriftSqlType.int,
         data['${effectivePrefix}generation'],
       )!,
+      openGeneration: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}open_generation'],
+      ),
+      lastGeneration: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}last_generation'],
+      )!,
       lastSyncAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}last_sync_at'],
@@ -326,7 +353,8 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
   final String name;
   final SourceKind kind;
 
-  /// Playlist URL, app-private file path or Xtream base URL.
+  /// Playlist URL, app-private file path or Xtream base URL, with any
+  /// credentials masked (the full URL is then in [Secrets]).
   final String url;
   final String? username;
   final String? userAgent;
@@ -342,6 +370,13 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
 
   /// Last committed catalog generation (0 = never synced).
   final int generation;
+
+  /// Generation a sync is writing, or null. Only this one accepts writes.
+  final int? openGeneration;
+
+  /// Highest generation ever handed out; numbers are never reused, so a
+  /// stale or aborted writer can never match a later sync.
+  final int lastGeneration;
   final int? lastSyncAt;
   final int? lastEpgAt;
   final int sortIndex;
@@ -362,6 +397,8 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
     this.maxConnections,
     this.allowedFormatsJson,
     required this.generation,
+    this.openGeneration,
+    required this.lastGeneration,
     this.lastSyncAt,
     this.lastEpgAt,
     required this.sortIndex,
@@ -415,6 +452,10 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
       map['allowed_formats_json'] = Variable<String>(allowedFormatsJson);
     }
     map['generation'] = Variable<int>(generation);
+    if (!nullToAbsent || openGeneration != null) {
+      map['open_generation'] = Variable<int>(openGeneration);
+    }
+    map['last_generation'] = Variable<int>(lastGeneration);
     if (!nullToAbsent || lastSyncAt != null) {
       map['last_sync_at'] = Variable<int>(lastSyncAt);
     }
@@ -459,6 +500,10 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
           ? const Value.absent()
           : Value(allowedFormatsJson),
       generation: Value(generation),
+      openGeneration: openGeneration == null && nullToAbsent
+          ? const Value.absent()
+          : Value(openGeneration),
+      lastGeneration: Value(lastGeneration),
       lastSyncAt: lastSyncAt == null && nullToAbsent
           ? const Value.absent()
           : Value(lastSyncAt),
@@ -503,6 +548,8 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
         json['allowedFormatsJson'],
       ),
       generation: serializer.fromJson<int>(json['generation']),
+      openGeneration: serializer.fromJson<int?>(json['openGeneration']),
+      lastGeneration: serializer.fromJson<int>(json['lastGeneration']),
       lastSyncAt: serializer.fromJson<int?>(json['lastSyncAt']),
       lastEpgAt: serializer.fromJson<int?>(json['lastEpgAt']),
       sortIndex: serializer.fromJson<int>(json['sortIndex']),
@@ -538,6 +585,8 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
       'maxConnections': serializer.toJson<int?>(maxConnections),
       'allowedFormatsJson': serializer.toJson<String?>(allowedFormatsJson),
       'generation': serializer.toJson<int>(generation),
+      'openGeneration': serializer.toJson<int?>(openGeneration),
+      'lastGeneration': serializer.toJson<int>(lastGeneration),
       'lastSyncAt': serializer.toJson<int?>(lastSyncAt),
       'lastEpgAt': serializer.toJson<int?>(lastEpgAt),
       'sortIndex': serializer.toJson<int>(sortIndex),
@@ -561,6 +610,8 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
     Value<int?> maxConnections = const Value.absent(),
     Value<String?> allowedFormatsJson = const Value.absent(),
     int? generation,
+    Value<int?> openGeneration = const Value.absent(),
+    int? lastGeneration,
     Value<int?> lastSyncAt = const Value.absent(),
     Value<int?> lastEpgAt = const Value.absent(),
     int? sortIndex,
@@ -585,6 +636,10 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
         ? allowedFormatsJson.value
         : this.allowedFormatsJson,
     generation: generation ?? this.generation,
+    openGeneration: openGeneration.present
+        ? openGeneration.value
+        : this.openGeneration,
+    lastGeneration: lastGeneration ?? this.lastGeneration,
     lastSyncAt: lastSyncAt.present ? lastSyncAt.value : this.lastSyncAt,
     lastEpgAt: lastEpgAt.present ? lastEpgAt.value : this.lastEpgAt,
     sortIndex: sortIndex ?? this.sortIndex,
@@ -621,6 +676,12 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
       generation: data.generation.present
           ? data.generation.value
           : this.generation,
+      openGeneration: data.openGeneration.present
+          ? data.openGeneration.value
+          : this.openGeneration,
+      lastGeneration: data.lastGeneration.present
+          ? data.lastGeneration.value
+          : this.lastGeneration,
       lastSyncAt: data.lastSyncAt.present
           ? data.lastSyncAt.value
           : this.lastSyncAt,
@@ -648,6 +709,8 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
           ..write('maxConnections: $maxConnections, ')
           ..write('allowedFormatsJson: $allowedFormatsJson, ')
           ..write('generation: $generation, ')
+          ..write('openGeneration: $openGeneration, ')
+          ..write('lastGeneration: $lastGeneration, ')
           ..write('lastSyncAt: $lastSyncAt, ')
           ..write('lastEpgAt: $lastEpgAt, ')
           ..write('sortIndex: $sortIndex')
@@ -656,7 +719,7 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     id,
     name,
     kind,
@@ -673,10 +736,12 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
     maxConnections,
     allowedFormatsJson,
     generation,
+    openGeneration,
+    lastGeneration,
     lastSyncAt,
     lastEpgAt,
     sortIndex,
-  );
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -697,6 +762,8 @@ class SourceRecord extends DataClass implements Insertable<SourceRecord> {
           other.maxConnections == this.maxConnections &&
           other.allowedFormatsJson == this.allowedFormatsJson &&
           other.generation == this.generation &&
+          other.openGeneration == this.openGeneration &&
+          other.lastGeneration == this.lastGeneration &&
           other.lastSyncAt == this.lastSyncAt &&
           other.lastEpgAt == this.lastEpgAt &&
           other.sortIndex == this.sortIndex);
@@ -719,6 +786,8 @@ class SourcesCompanion extends UpdateCompanion<SourceRecord> {
   final Value<int?> maxConnections;
   final Value<String?> allowedFormatsJson;
   final Value<int> generation;
+  final Value<int?> openGeneration;
+  final Value<int> lastGeneration;
   final Value<int?> lastSyncAt;
   final Value<int?> lastEpgAt;
   final Value<int> sortIndex;
@@ -739,6 +808,8 @@ class SourcesCompanion extends UpdateCompanion<SourceRecord> {
     this.maxConnections = const Value.absent(),
     this.allowedFormatsJson = const Value.absent(),
     this.generation = const Value.absent(),
+    this.openGeneration = const Value.absent(),
+    this.lastGeneration = const Value.absent(),
     this.lastSyncAt = const Value.absent(),
     this.lastEpgAt = const Value.absent(),
     this.sortIndex = const Value.absent(),
@@ -760,6 +831,8 @@ class SourcesCompanion extends UpdateCompanion<SourceRecord> {
     this.maxConnections = const Value.absent(),
     this.allowedFormatsJson = const Value.absent(),
     this.generation = const Value.absent(),
+    this.openGeneration = const Value.absent(),
+    this.lastGeneration = const Value.absent(),
     this.lastSyncAt = const Value.absent(),
     this.lastEpgAt = const Value.absent(),
     this.sortIndex = const Value.absent(),
@@ -783,6 +856,8 @@ class SourcesCompanion extends UpdateCompanion<SourceRecord> {
     Expression<int>? maxConnections,
     Expression<String>? allowedFormatsJson,
     Expression<int>? generation,
+    Expression<int>? openGeneration,
+    Expression<int>? lastGeneration,
     Expression<int>? lastSyncAt,
     Expression<int>? lastEpgAt,
     Expression<int>? sortIndex,
@@ -805,6 +880,8 @@ class SourcesCompanion extends UpdateCompanion<SourceRecord> {
       if (allowedFormatsJson != null)
         'allowed_formats_json': allowedFormatsJson,
       if (generation != null) 'generation': generation,
+      if (openGeneration != null) 'open_generation': openGeneration,
+      if (lastGeneration != null) 'last_generation': lastGeneration,
       if (lastSyncAt != null) 'last_sync_at': lastSyncAt,
       if (lastEpgAt != null) 'last_epg_at': lastEpgAt,
       if (sortIndex != null) 'sort_index': sortIndex,
@@ -828,6 +905,8 @@ class SourcesCompanion extends UpdateCompanion<SourceRecord> {
     Value<int?>? maxConnections,
     Value<String?>? allowedFormatsJson,
     Value<int>? generation,
+    Value<int?>? openGeneration,
+    Value<int>? lastGeneration,
     Value<int?>? lastSyncAt,
     Value<int?>? lastEpgAt,
     Value<int>? sortIndex,
@@ -849,6 +928,8 @@ class SourcesCompanion extends UpdateCompanion<SourceRecord> {
       maxConnections: maxConnections ?? this.maxConnections,
       allowedFormatsJson: allowedFormatsJson ?? this.allowedFormatsJson,
       generation: generation ?? this.generation,
+      openGeneration: openGeneration ?? this.openGeneration,
+      lastGeneration: lastGeneration ?? this.lastGeneration,
       lastSyncAt: lastSyncAt ?? this.lastSyncAt,
       lastEpgAt: lastEpgAt ?? this.lastEpgAt,
       sortIndex: sortIndex ?? this.sortIndex,
@@ -916,6 +997,12 @@ class SourcesCompanion extends UpdateCompanion<SourceRecord> {
     if (generation.present) {
       map['generation'] = Variable<int>(generation.value);
     }
+    if (openGeneration.present) {
+      map['open_generation'] = Variable<int>(openGeneration.value);
+    }
+    if (lastGeneration.present) {
+      map['last_generation'] = Variable<int>(lastGeneration.value);
+    }
     if (lastSyncAt.present) {
       map['last_sync_at'] = Variable<int>(lastSyncAt.value);
     }
@@ -947,6 +1034,8 @@ class SourcesCompanion extends UpdateCompanion<SourceRecord> {
           ..write('maxConnections: $maxConnections, ')
           ..write('allowedFormatsJson: $allowedFormatsJson, ')
           ..write('generation: $generation, ')
+          ..write('openGeneration: $openGeneration, ')
+          ..write('lastGeneration: $lastGeneration, ')
           ..write('lastSyncAt: $lastSyncAt, ')
           ..write('lastEpgAt: $lastEpgAt, ')
           ..write('sortIndex: $sortIndex')
@@ -5150,6 +5239,8 @@ class $EpgSourcesTable extends EpgSources
 class EpgSourceRecord extends DataClass implements Insertable<EpgSourceRecord> {
   final int id;
   final int sourceId;
+
+  /// Guide URL with credentials masked (the full URL is then in [Secrets]).
   final String url;
   final EpgOrigin origin;
   final bool enabled;
@@ -8145,11 +8236,19 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   );
   late final Index channelsNum = Index(
     'channels_num',
-    'CREATE INDEX channels_num ON channels (source_id, num, name_norm)',
+    'CREATE INDEX channels_num ON channels (source_id, num, name_norm, "key")',
   );
   late final Index channelsTvgId = Index(
     'channels_tvg_id',
     'CREATE INDEX channels_tvg_id ON channels (tvg_id)',
+  );
+  late final Index moviesName = Index(
+    'movies_name',
+    'CREATE INDEX movies_name ON movies (source_id, name_norm, "key")',
+  );
+  late final Index seriesName = Index(
+    'series_name',
+    'CREATE INDEX series_name ON series (source_id, name_norm, "key")',
   );
   late final Index episodesSeries = Index(
     'episodes_series',
@@ -8158,6 +8257,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final Index epgSourcesUrl = Index(
     'epg_sources_url',
     'CREATE UNIQUE INDEX epg_sources_url ON epg_sources (source_id, url)',
+  );
+  late final Index channelEpgMapGuide = Index(
+    'channel_epg_map_guide',
+    'CREATE INDEX channel_epg_map_guide ON channel_epg_map (epg_source_id, xmltv_id)',
   );
   late final Index watchProgressUpdated = Index(
     'watch_progress_updated',
@@ -8193,8 +8296,11 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     categoryItemsItem,
     channelsNum,
     channelsTvgId,
+    moviesName,
+    seriesName,
     episodesSeries,
     epgSourcesUrl,
+    channelEpgMapGuide,
     watchProgressUpdated,
     recentChannelsTime,
   ];

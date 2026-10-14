@@ -202,6 +202,26 @@
             "dsl_features": []
           },
           {
+            "name": "open_generation",
+            "getter_name": "openGeneration",
+            "moor_type": "int",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "last_generation",
+            "getter_name": "lastGeneration",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
             "name": "last_sync_at",
             "getter_name": "lastSyncAt",
             "moor_type": "int",
@@ -2269,6 +2289,10 @@
           {
             "column": "name_norm",
             "order_by": null
+          },
+          {
+            "column": "key",
+            "order_by": null
           }
         ]
       }
@@ -2294,6 +2318,60 @@
     },
     {
       "id": 21,
+      "references": [
+        5
+      ],
+      "type": "index",
+      "data": {
+        "on": 5,
+        "name": "movies_name",
+        "sql": null,
+        "unique": false,
+        "columns": [
+          {
+            "column": "source_id",
+            "order_by": null
+          },
+          {
+            "column": "name_norm",
+            "order_by": null
+          },
+          {
+            "column": "key",
+            "order_by": null
+          }
+        ]
+      }
+    },
+    {
+      "id": 22,
+      "references": [
+        6
+      ],
+      "type": "index",
+      "data": {
+        "on": 6,
+        "name": "series_name",
+        "sql": null,
+        "unique": false,
+        "columns": [
+          {
+            "column": "source_id",
+            "order_by": null
+          },
+          {
+            "column": "name_norm",
+            "order_by": null
+          },
+          {
+            "column": "key",
+            "order_by": null
+          }
+        ]
+      }
+    },
+    {
+      "id": 23,
       "references": [
         7
       ],
@@ -2324,7 +2402,7 @@
       }
     },
     {
-      "id": 22,
+      "id": 24,
       "references": [
         9
       ],
@@ -2347,7 +2425,30 @@
       }
     },
     {
-      "id": 23,
+      "id": 25,
+      "references": [
+        12
+      ],
+      "type": "index",
+      "data": {
+        "on": 12,
+        "name": "channel_epg_map_guide",
+        "sql": null,
+        "unique": false,
+        "columns": [
+          {
+            "column": "epg_source_id",
+            "order_by": null
+          },
+          {
+            "column": "xmltv_id",
+            "order_by": null
+          }
+        ]
+      }
+    },
+    {
+      "id": 26,
       "references": [
         15
       ],
@@ -2370,7 +2471,7 @@
       }
     },
     {
-      "id": 24,
+      "id": 27,
       "references": [
         16
       ],
@@ -2399,7 +2500,7 @@
       "sql": [
         {
           "dialect": "sqlite",
-          "sql": "CREATE TABLE IF NOT EXISTS \"sources\" (\"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"name\" TEXT NOT NULL, \"kind\" TEXT NOT NULL, \"url\" TEXT NOT NULL, \"username\" TEXT NULL, \"user_agent\" TEXT NULL, \"referer\" TEXT NULL, \"live_format\" TEXT NOT NULL DEFAULT 'ts', \"epg_offset_min\" INTEGER NOT NULL DEFAULT 0, \"engine_live\" TEXT NULL, \"engine_vod\" TEXT NULL, \"account_status\" TEXT NOT NULL DEFAULT 'unknown', \"expires_at\" INTEGER NULL, \"max_connections\" INTEGER NULL, \"allowed_formats_json\" TEXT NULL, \"generation\" INTEGER NOT NULL DEFAULT 0, \"last_sync_at\" INTEGER NULL, \"last_epg_at\" INTEGER NULL, \"sort_index\" INTEGER NOT NULL DEFAULT 0);"
+          "sql": "CREATE TABLE IF NOT EXISTS \"sources\" (\"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"name\" TEXT NOT NULL, \"kind\" TEXT NOT NULL, \"url\" TEXT NOT NULL, \"username\" TEXT NULL, \"user_agent\" TEXT NULL, \"referer\" TEXT NULL, \"live_format\" TEXT NOT NULL DEFAULT 'ts', \"epg_offset_min\" INTEGER NOT NULL DEFAULT 0, \"engine_live\" TEXT NULL, \"engine_vod\" TEXT NULL, \"account_status\" TEXT NOT NULL DEFAULT 'unknown', \"expires_at\" INTEGER NULL, \"max_connections\" INTEGER NULL, \"allowed_formats_json\" TEXT NULL, \"generation\" INTEGER NOT NULL DEFAULT 0, \"open_generation\" INTEGER NULL, \"last_generation\" INTEGER NOT NULL DEFAULT 0, \"last_sync_at\" INTEGER NULL, \"last_epg_at\" INTEGER NULL, \"sort_index\" INTEGER NOT NULL DEFAULT 0);"
         }
       ]
     },
@@ -2570,7 +2671,7 @@
       "sql": [
         {
           "dialect": "sqlite",
-          "sql": "CREATE INDEX channels_num ON channels (source_id, num, name_norm)"
+          "sql": "CREATE INDEX channels_num ON channels (source_id, num, name_norm, \"key\")"
         }
       ]
     },
@@ -2580,6 +2681,24 @@
         {
           "dialect": "sqlite",
           "sql": "CREATE INDEX channels_tvg_id ON channels (tvg_id)"
+        }
+      ]
+    },
+    {
+      "name": "movies_name",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE INDEX movies_name ON movies (source_id, name_norm, \"key\")"
+        }
+      ]
+    },
+    {
+      "name": "series_name",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE INDEX series_name ON series (source_id, name_norm, \"key\")"
         }
       ]
     },
@@ -2598,6 +2717,15 @@
         {
           "dialect": "sqlite",
           "sql": "CREATE UNIQUE INDEX epg_sources_url ON epg_sources (source_id, url)"
+        }
+      ]
+    },
+    {
+      "name": "channel_epg_map_guide",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE INDEX channel_epg_map_guide ON channel_epg_map (epg_source_id, xmltv_id)"
         }
       ]
     },

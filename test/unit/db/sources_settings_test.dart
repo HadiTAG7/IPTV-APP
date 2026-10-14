@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/secure/secret_store.dart';
@@ -28,7 +29,7 @@ void main() {
           url: 'http://127.0.0.1:8080',
           name: 'B',
           username: 'demo',
-          password: 'ignored',
+          password: 'pw-b',
           userAgent: 'TestAgent/1.0',
           liveFormat: LiveFormat.m3u8,
           epgOffsetMin: 60,
@@ -46,6 +47,9 @@ void main() {
       expect(row.accountStatus, AccountStatus.unknown);
       expect(row.generation, 0);
       expect(row.hasCatalog, isFalse);
+      // The password is in the secret store, never in `sources`.
+      expect(await DbSecretStore(db).read(b, SecretNames.password), 'pw-b');
+      expect((await sources.configFor(b))!.password, 'pw-b');
 
       await sources.reorder([c, a, b]);
       expect((await sources.all()).map((s) => s.name), ['C', 'A', 'B']);
@@ -58,6 +62,8 @@ void main() {
       expect(updated.name, 'B2');
       expect(updated.referer, 'http://example.com/');
       expect(updated.username, 'demo');
+      // A null password keeps the saved one.
+      expect((await sources.configFor(b))!.password, 'pw-b');
       expect(await sources.byId(999), isNull);
     });
 
@@ -135,6 +141,132 @@ void main() {
     });
   });
 
+  group('credentials', () {
+    const tokenUrl =
+        'http://127.0.0.1:8080/get.php?username=demo&password=s3cret&type=m3u_plus';
+    const maskedUrl =
+        'http://127.0.0.1:8080/get.php?username=***&password=***&type=m3u_plus';
+
+    Future<String> rawUrl(int id) async =>
+        (await db
+                .customSelect(
+                  'SELECT url FROM sources WHERE id = ?',
+                  variables: [Variable.withInt(id)],
+                )
+                .getSingle())
+            .read<String>('url');
+
+    test('a tokenised playlist URL goes to the secret store', () async {
+      final sources = db.sourcesDao;
+      final id = await sources.create(
+        const SourceConfig(kind: SourceKind.m3uUrl, url: tokenUrl, name: 'T'),
+      );
+      expect(await rawUrl(id), maskedUrl);
+      expect((await sources.byId(id))!.url, maskedUrl);
+      expect((await sources.all()).single.url, maskedUrl);
+      expect(await DbSecretStore(db).read(id, SecretNames.url), tokenUrl);
+      final config = (await sources.configFor(id))!;
+      expect(config.url, tokenUrl);
+      expect(config.password, isNull);
+
+      // Nothing outside `secrets` holds the password.
+      final leaks = await db
+          .customSelect(
+            "SELECT COUNT(*) AS n FROM sources WHERE url LIKE '%s3cret%'",
+          )
+          .getSingle();
+      expect(leaks.read<int>('n'), 0);
+    });
+
+    test('configFor prefers the saved URL over the masked one', () async {
+      final secrets = DbSecretStore(db);
+      final id = await db.sourcesDao.create(
+        const SourceConfig(kind: SourceKind.m3uUrl, url: maskedUrl, name: 'T'),
+      );
+      await secrets.write(id, SecretNames.url, tokenUrl);
+      expect((await db.sourcesDao.configFor(id, secrets))!.url, tokenUrl);
+    });
+
+    test('update keeps, replaces or drops the saved URL', () async {
+      final sources = db.sourcesDao;
+      final secrets = DbSecretStore(db);
+      final id = await sources.create(
+        const SourceConfig(kind: SourceKind.m3uUrl, url: tokenUrl, name: 'T'),
+      );
+
+      // Saving the form with the masked URL untouched keeps the full URL.
+      final row = (await sources.byId(id))!;
+      await sources.updateConfig(id, row.toConfig().copyWith(name: 'T2'));
+      expect((await sources.byId(id))!.name, 'T2');
+      expect((await sources.configFor(id))!.url, tokenUrl);
+
+      // Saving the full URL from configFor is a no-op for the URL too.
+      await sources.updateConfig(id, (await sources.configFor(id))!);
+      expect(await rawUrl(id), maskedUrl);
+      expect((await sources.configFor(id))!.url, tokenUrl);
+
+      // A new tokenised URL replaces the saved one.
+      const other = 'http://127.0.0.1:8080/get.php?username=demo&password=n3w';
+      await sources.updateConfig(id, row.toConfig().copyWith(url: other));
+      expect(await rawUrl(id), contains('password=***'));
+      expect((await sources.configFor(id))!.url, other);
+
+      // A plain URL drops the stale secret.
+      const plain = 'http://127.0.0.1:8080/list.m3u';
+      await sources.updateConfig(id, row.toConfig().copyWith(url: plain));
+      expect(await rawUrl(id), plain);
+      expect(await secrets.read(id, SecretNames.url), isNull);
+      expect((await sources.configFor(id))!.url, plain);
+    });
+
+    test('a given store receives the credentials', () async {
+      final store = InMemorySecretStore();
+      final id = await db.sourcesDao.create(
+        const SourceConfig(
+          kind: SourceKind.xtream,
+          url: 'http://127.0.0.1:8080',
+          name: 'X',
+          username: 'demo',
+          password: 'pw',
+        ),
+        secrets: store,
+      );
+      expect(await countRows(db, 'secrets'), 0);
+      expect(await store.read(id, SecretNames.password), 'pw');
+      expect(await store.read(id, SecretNames.url), isNull);
+      final config = (await db.sourcesDao.configFor(id, store))!;
+      expect(config.url, 'http://127.0.0.1:8080');
+      expect(config.password, 'pw');
+
+      await db.sourcesDao.updateConfig(
+        id,
+        config.copyWith(password: 'pw2'),
+        secrets: store,
+      );
+      expect(await store.read(id, SecretNames.password), 'pw2');
+
+      await db.sourcesDao.deleteSource(id, secrets: store);
+      expect(await store.read(id, SecretNames.password), isNull);
+    });
+
+    test('updating an unknown source does nothing', () async {
+      await db.sourcesDao.updateConfig(
+        42,
+        const SourceConfig(kind: SourceKind.m3uUrl, url: tokenUrl),
+      );
+      expect(await countRows(db, 'secrets'), 0);
+      expect(await countRows(db, 'sources'), 0);
+    });
+
+    test('urlHasCredentials', () {
+      expect(urlHasCredentials(tokenUrl), isTrue);
+      expect(urlHasCredentials('http://u:p@127.0.0.1/list.m3u'), isTrue);
+      expect(urlHasCredentials('http://127.0.0.1/live/u/p/1.ts'), isTrue);
+      expect(urlHasCredentials('http://127.0.0.1:8080'), isFalse);
+      expect(urlHasCredentials('http://example.com/list.m3u?x=1'), isFalse);
+    });
+  });
+
   group('settings', () {
     test('typed round trips', () async {
       final s = db.settingsDao;
@@ -204,6 +336,11 @@ void main() {
         await store.read(a, SecretNames.url),
         'http://127.0.0.1/get.php?x=1',
       );
+      await store.delete(a, SecretNames.url);
+      await store.delete(a, 'missing');
+      expect(await store.read(a, SecretNames.url), isNull);
+      expect(await store.read(a, SecretNames.password), 'two');
+      await store.write(a, SecretNames.url, 'http://127.0.0.1/get.php?x=2');
       await store.deleteAll(a);
       expect(await store.read(a, SecretNames.password), isNull);
       expect(await store.read(a, SecretNames.url), isNull);

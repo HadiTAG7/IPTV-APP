@@ -143,6 +143,23 @@ class Sources extends Table with TableInfo {
     $customConstraints: 'NOT NULL DEFAULT 0',
     defaultValue: const CustomExpression('0'),
   );
+  late final GeneratedColumn<int> openGeneration = GeneratedColumn<int>(
+    'open_generation',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    $customConstraints: 'NULL',
+  );
+  late final GeneratedColumn<int> lastGeneration = GeneratedColumn<int>(
+    'last_generation',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    $customConstraints: 'NOT NULL DEFAULT 0',
+    defaultValue: const CustomExpression('0'),
+  );
   late final GeneratedColumn<int> lastSyncAt = GeneratedColumn<int>(
     'last_sync_at',
     aliasedName,
@@ -186,6 +203,8 @@ class Sources extends Table with TableInfo {
     maxConnections,
     allowedFormatsJson,
     generation,
+    openGeneration,
+    lastGeneration,
     lastSyncAt,
     lastEpgAt,
     sortIndex,
@@ -1975,11 +1994,19 @@ class DatabaseAtV1 extends GeneratedDatabase {
   );
   late final Index channelsNum = Index(
     'channels_num',
-    'CREATE INDEX channels_num ON channels (source_id, num, name_norm)',
+    'CREATE INDEX channels_num ON channels (source_id, num, name_norm, "key")',
   );
   late final Index channelsTvgId = Index(
     'channels_tvg_id',
     'CREATE INDEX channels_tvg_id ON channels (tvg_id)',
+  );
+  late final Index moviesName = Index(
+    'movies_name',
+    'CREATE INDEX movies_name ON movies (source_id, name_norm, "key")',
+  );
+  late final Index seriesName = Index(
+    'series_name',
+    'CREATE INDEX series_name ON series (source_id, name_norm, "key")',
   );
   late final Index episodesSeries = Index(
     'episodes_series',
@@ -1988,6 +2015,10 @@ class DatabaseAtV1 extends GeneratedDatabase {
   late final Index epgSourcesUrl = Index(
     'epg_sources_url',
     'CREATE UNIQUE INDEX epg_sources_url ON epg_sources (source_id, url)',
+  );
+  late final Index channelEpgMapGuide = Index(
+    'channel_epg_map_guide',
+    'CREATE INDEX channel_epg_map_guide ON channel_epg_map (epg_source_id, xmltv_id)',
   );
   late final Index watchProgressUpdated = Index(
     'watch_progress_updated',
@@ -2023,8 +2054,11 @@ class DatabaseAtV1 extends GeneratedDatabase {
     categoryItemsItem,
     channelsNum,
     channelsTvgId,
+    moviesName,
+    seriesName,
     episodesSeries,
     epgSourcesUrl,
+    channelEpgMapGuide,
     watchProgressUpdated,
     recentChannelsTime,
   ];

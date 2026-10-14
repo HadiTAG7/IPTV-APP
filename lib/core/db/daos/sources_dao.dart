@@ -4,12 +4,16 @@ import 'package:drift/drift.dart';
 
 import '../../../player/engine/player_engine.dart';
 import '../../../sources/models.dart';
+import '../../net/redact.dart';
 import '../../secure/secret_store.dart';
 import '../app_db.dart';
 
 /// Saved sources, their account state and the active-source setting.
 ///
-/// Passwords are not stored here; use a `SecretStore`.
+/// Credentials never land in `sources`: the password and a URL that embeds
+/// credentials go to a [SecretStore] (by default the `secrets` table of this
+/// database, written in the same transaction), and `sources.url` keeps a
+/// masked copy for display. [configFor] puts them back together.
 class SourcesDao extends DatabaseAccessor<AppDatabase> {
   SourcesDao(super.attachedDatabase);
 
@@ -19,49 +23,83 @@ class SourcesDao extends DatabaseAccessor<AppDatabase> {
         (s) => OrderingTerm.asc(s.id),
       ]);
 
-  /// Adds a source at the end of the list and returns its id.
-  /// [SourceConfig.password] is ignored.
-  Future<int> create(SourceConfig config) => transaction(() async {
-    final max = db.sources.sortIndex.max();
-    final last = await (selectOnly(
-      db.sources,
-    )..addColumns([max])).map((r) => r.read(max)).getSingle();
-    return into(db.sources).insert(
-      SourcesCompanion.insert(
-        name: config.name,
-        kind: config.kind,
-        url: config.url,
-        username: Value(config.username),
-        userAgent: Value(config.userAgent),
-        referer: Value(config.referer),
-        liveFormat: Value(config.liveFormat),
-        epgOffsetMin: Value(config.epgOffsetMin),
-        sortIndex: Value((last ?? -1) + 1),
-      ),
-    );
-  });
+  /// Adds a source at the end of the list and returns its id. The password
+  /// and a credential-bearing URL are saved in [secrets].
+  Future<int> create(SourceConfig config, {SecretStore? secrets}) {
+    final store = secrets ?? DbSecretStore(db);
+    return transaction(() async {
+      final max = db.sources.sortIndex.max();
+      final last = await (selectOnly(
+        db.sources,
+      )..addColumns([max])).map((r) => r.read(max)).getSingle();
+      final id = await into(db.sources).insert(
+        SourcesCompanion.insert(
+          name: config.name,
+          kind: config.kind,
+          url: redact(config.url),
+          username: Value(config.username),
+          userAgent: Value(config.userAgent),
+          referer: Value(config.referer),
+          liveFormat: Value(config.liveFormat),
+          epgOffsetMin: Value(config.epgOffsetMin),
+          sortIndex: Value((last ?? -1) + 1),
+        ),
+      );
+      await _saveUrl(id, config.url, store);
+      if (config.password case final password?) {
+        await store.write(id, SecretNames.password, password);
+      }
+      return id;
+    });
+  }
 
-  /// Writes the editable fields of [config] ([SourceConfig.password] is
-  /// ignored).
-  Future<void> updateConfig(int id, SourceConfig config) => _write(
-    id,
-    SourcesCompanion(
-      name: Value(config.name),
-      kind: Value(config.kind),
-      url: Value(config.url),
-      username: Value(config.username),
-      userAgent: Value(config.userAgent),
-      referer: Value(config.referer),
-      liveFormat: Value(config.liveFormat),
-      epgOffsetMin: Value(config.epgOffsetMin),
-    ),
-  );
+  /// Writes the editable fields of [config], keeping credentials in
+  /// [secrets] as [create] does.
+  ///
+  /// A null password keeps the saved one. Pass the full URL (from
+  /// [configFor]); the masked [SourceRow.url] unchanged keeps the saved URL.
+  Future<void> updateConfig(
+    int id,
+    SourceConfig config, {
+    SecretStore? secrets,
+  }) {
+    final store = secrets ?? DbSecretStore(db);
+    return transaction(() async {
+      final current = await byId(id);
+      if (current == null) return;
+      final urlChanged = config.url != current.url;
+      await _write(
+        id,
+        SourcesCompanion(
+          name: Value(config.name),
+          kind: Value(config.kind),
+          url: urlChanged ? Value(redact(config.url)) : const Value.absent(),
+          username: Value(config.username),
+          userAgent: Value(config.userAgent),
+          referer: Value(config.referer),
+          liveFormat: Value(config.liveFormat),
+          epgOffsetMin: Value(config.epgOffsetMin),
+        ),
+      );
+      if (urlChanged) await _saveUrl(id, config.url, store);
+      if (config.password case final password?) {
+        await store.write(id, SecretNames.password, password);
+      }
+    });
+  }
+
+  Future<void> _saveUrl(int id, String url, SecretStore store) =>
+      urlHasCredentials(url)
+      ? store.write(id, SecretNames.url, url)
+      : store.delete(id, SecretNames.url);
 
   /// Deletes the source with its catalog, guide, secrets and user data.
-  Future<void> deleteSource(int id) => transaction(() async {
-    await (delete(db.sources)..where((s) => s.id.equals(id))).go();
-    if (await activeSourceId() == id) await setActive(null);
-  });
+  Future<void> deleteSource(int id, {SecretStore? secrets}) =>
+      transaction(() async {
+        await (delete(db.sources)..where((s) => s.id.equals(id))).go();
+        await (secrets ?? DbSecretStore(db)).deleteAll(id);
+        if (await activeSourceId() == id) await setActive(null);
+      });
 
   Future<SourceRow?> byId(int id) async => (await (select(
     db.sources,
@@ -144,11 +182,16 @@ class SourcesDao extends DatabaseAccessor<AppDatabase> {
     SourcesCompanion(lastEpgAt: Value(toEpochSec(at ?? db.clock.now()))),
   );
 
-  /// Full adapter configuration including the password from [secrets].
-  Future<SourceConfig?> configFor(int id, SecretStore secrets) async {
+  /// Full adapter configuration: the password and the unmasked URL come
+  /// from [secrets] (default: this database).
+  Future<SourceConfig?> configFor(int id, [SecretStore? secrets]) async {
+    final store = secrets ?? DbSecretStore(db);
     final row = await byId(id);
     if (row == null) return null;
-    return row.toConfig(password: await secrets.read(id, SecretNames.password));
+    return row.toConfig(
+      password: await store.read(id, SecretNames.password),
+      url: await store.read(id, SecretNames.url),
+    );
   }
 
   Future<void> _write(int id, SourcesCompanion values) =>

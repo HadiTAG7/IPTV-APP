@@ -74,6 +74,8 @@ class SourceRow {
   final int id;
   final String name;
   final SourceKind kind;
+
+  /// Credentials masked; `SourcesDao.configFor` has the full URL.
   final String url;
   final String? username;
   final String? userAgent;
@@ -95,12 +97,13 @@ class SourceRow {
 
   bool get hasCatalog => generation > 0;
 
-  /// Adapter configuration; the password comes from the secret store.
-  SourceConfig toConfig({String? password}) => SourceConfig(
+  /// Adapter configuration; the password and the unmasked [url] come from
+  /// the secret store.
+  SourceConfig toConfig({String? password, String? url}) => SourceConfig(
     id: id,
     name: name,
     kind: kind,
-    url: url,
+    url: url ?? this.url,
     username: username,
     password: password,
     userAgent: userAgent,
@@ -372,6 +375,8 @@ class EpgSourceRow {
 
   final int id;
   final int sourceId;
+
+  /// Credentials masked; `EpgDao.epgSourceUrl` has the full URL.
   final String url;
   final EpgOrigin origin;
   final bool enabled;

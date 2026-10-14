@@ -277,9 +277,10 @@ void main() {
           .get();
       expect(gens.map((r) => r.read<int>('generation')), [1]);
 
-      // The next sync reuses the generation number and works normally.
+      // The next sync gets a fresh number and works normally.
+      expect(await catalog.openGenerationOf(src), isNull);
       final next = await catalog.beginGeneration(src);
-      expect(next, 2);
+      expect(next, 3);
       await catalog.upsertChannels(src, next, [channel('b')]);
       await catalog.commitGeneration(src, next);
       expect(await keysIn('news'), ['b']);
@@ -299,10 +300,26 @@ void main() {
 
       // A fresh DAO (e.g. after an app restart) starts over.
       final restarted = CatalogDao(db);
+      expect(await restarted.openGenerationOf(src), gen);
       final again = await restarted.beginGeneration(src);
-      expect(again, gen);
+      expect(again, gen + 1);
       expect(await catalog.channelByKey(src, 'zombie'), isNull);
       expect(await membership(db, src, ContentKind.live, 'news'), hasLength(1));
+      // The interrupted run cannot write into the new generation.
+      await expectLater(
+        catalog.upsertChannels(src, gen, [channel('late')]),
+        throwsStateError,
+      );
+      await restarted.upsertChannels(src, again, [channel('a')]);
+      await restarted.commitGeneration(src, again);
+      expect(await keysIn('news'), ['a']);
+    });
+
+    test('a deleted source makes abort a no-op', () async {
+      final gen = await catalog.beginGeneration(src);
+      await db.sourcesDao.deleteSource(src);
+      await catalog.abortGeneration(src, gen);
+      expect(await countRows(db, 'sources'), 0);
     });
   });
 
@@ -324,6 +341,125 @@ void main() {
       await catalog.upsertCategories(src, gen, const []);
       await catalog.commitGeneration(src, gen);
       expect(await catalog.committedGeneration(src), 1);
+    });
+  });
+
+  group('stale writers', () {
+    Future<void> commitTen() => syncCatalog(
+      db,
+      src,
+      categories: [category(ContentKind.live, 'news')],
+      channels: [for (var i = 0; i < 10; i++) channel('c$i')],
+    );
+    final ten = [for (var i = 0; i < 10; i++) 'c$i'];
+
+    test('a superseded run can neither write, commit nor abort', () async {
+      await commitTen();
+      // Run A starts and writes half the catalog.
+      final genA = await catalog.beginGeneration(src);
+      await catalog.upsertChannels(src, genA, [
+        for (var i = 0; i < 5; i++) channel('c$i'),
+      ]);
+      // Run B (a second refresh) starts.
+      final genB = await catalog.beginGeneration(src);
+      expect(genB, isNot(genA));
+      expect(await catalog.openGenerationOf(src), genB);
+
+      // Run A carries on: everything is rejected.
+      await expectLater(
+        catalog.upsertChannels(src, genA, [
+          for (var i = 5; i < 10; i++) channel('c$i'),
+        ]),
+        throwsStateError,
+      );
+      await expectLater(
+        catalog.upsertCategories(src, genA, [
+          category(ContentKind.live, 'news'),
+        ]),
+        throwsStateError,
+      );
+      await expectLater(
+        catalog.upsertEpisodes(src, genA, [episode('s', 'e')]),
+        throwsStateError,
+      );
+      await expectLater(catalog.commitGeneration(src, genA), throwsStateError);
+      expect(await keysIn('news'), ten);
+      expect(await catalog.totalCount(src, ContentKind.live), 10);
+
+      // Run B writes one batch, then A's cancel path aborts: B is untouched.
+      await catalog.upsertChannels(src, genB, [channel('c0'), channel('new')]);
+      await catalog.abortGeneration(src, genA);
+      expect(await catalog.openGenerationOf(src), genB);
+      await catalog.upsertChannels(src, genB, [
+        for (var i = 1; i < 10; i++) channel('c$i'),
+      ]);
+      await catalog.commitGeneration(src, genB);
+      expect(await keysIn('news'), ['c0', 'new', ...ten.skip(1)]);
+      expect(await catalog.totalCount(src, ContentKind.live), 11);
+      expect(await catalog.committedGeneration(src), genB);
+      expect(await catalog.openGenerationOf(src), isNull);
+    });
+
+    test('a late batch after an abort is rejected', () async {
+      await commitTen();
+      final gen = await catalog.beginGeneration(src);
+      await catalog.upsertChannels(src, gen, [
+        for (var i = 0; i < 5; i++) channel('c$i'),
+      ]);
+      await catalog.abortGeneration(src, gen);
+      expect(await catalog.openGenerationOf(src), isNull);
+      // An in-flight batch lands after the cancel and the pipeline commits.
+      await expectLater(
+        catalog.upsertChannels(src, gen, [
+          for (var i = 5; i < 10; i++) channel('c$i'),
+        ]),
+        throwsStateError,
+      );
+      await expectLater(catalog.commitGeneration(src, gen), throwsStateError);
+      expect(await keysIn('news'), ten);
+      expect(await catalog.committedGeneration(src), 1);
+      expect(await countRows(db, 'category_items'), 10);
+    });
+
+    test('generation numbers are never reused', () async {
+      final first = await catalog.beginGeneration(src);
+      await catalog.abortGeneration(src, first);
+      final second = await catalog.beginGeneration(src);
+      await catalog.beginGeneration(src); // supersedes second
+      final fourth = await catalog.beginGeneration(src);
+      expect([first, second, fourth], [1, 2, 4]);
+      await catalog.upsertChannels(src, fourth, [channel('a')]);
+      await catalog.commitGeneration(src, fourth);
+      expect(await catalog.committedGeneration(src), 4);
+      expect(await keysIn('news'), ['a']);
+
+      // A stale number below the committed one stays rejected.
+      await expectLater(
+        catalog.upsertChannels(src, second, [channel('b')]),
+        throwsStateError,
+      );
+      expect(await catalog.beginGeneration(src), 5);
+    });
+
+    test('a position clash between two writers fails loudly', () async {
+      final gen = await catalog.beginGeneration(src);
+      await catalog.upsertChannels(src, gen, [channel('a'), channel('b')]);
+      // A second DAO on the same open generation (against the rules).
+      final other = CatalogDao(db);
+      await other.upsertChannels(src, gen, [channel('c')]);
+      // The first DAO's cached counter now points at c's position.
+      await expectLater(
+        catalog.upsertChannels(src, gen, [channel('d')]),
+        throwsA(isA<Exception>()),
+      );
+      expect(
+        [
+          for (final i in await membership(db, src, ContentKind.live, 'news'))
+            (i.position, i.itemKey),
+        ],
+        [(0, 'a'), (1, 'b'), (2, 'c')],
+      );
+      expect(await catalog.channelByKey(src, 'd'), isNull);
     });
   });
 
@@ -367,6 +503,60 @@ void main() {
         (await membership(db, src, ContentKind.movie, 'mixed')).single.position,
         0,
       );
+    });
+
+    test('a repeated item keeps one membership per category', () async {
+      final xt = await addSource(
+        db,
+        kind: SourceKind.xtream,
+        url: 'http://127.0.0.1:8080',
+      );
+      final gen = await catalog.beginGeneration(xt);
+      await catalog.upsertCategories(xt, gen, [
+        category(ContentKind.live, '1'),
+        category(ContentKind.live, '2'),
+        category(ContentKind.live, '3'),
+      ]);
+      // Per-category fetches: stream 7 (categories 1 and 2) is in both
+      // responses, and once twice in the same batch.
+      await catalog.upsertChannels(xt, gen, [
+        channel('7', categories: ['1', '2']),
+        channel('8', categories: ['1']),
+      ]);
+      await catalog.upsertChannels(xt, gen, [
+        channel('7', categories: ['1', '2']),
+        channel('9', categories: ['2']),
+        channel('9', categories: ['2', '3']),
+      ]);
+      await catalog.upsertChannels(xt, gen, [
+        channel('7', categories: ['3']),
+      ]);
+      await catalog.upsertMovies(xt, gen, [
+        movie('7', categories: ['1']),
+      ]);
+      await catalog.commitGeneration(xt, gen);
+
+      expect(await catalog.channelKeysInCategory(xt, '1'), ['7', '8']);
+      expect(await catalog.channelKeysInCategory(xt, '2'), ['7', '9']);
+      expect(await catalog.channelKeysInCategory(xt, '3'), ['9', '7']);
+      final counts = {
+        for (final c in await catalog.categories(xt, ContentKind.live))
+          c.key: c.itemCount,
+      };
+      expect(counts, {'1': 2, '2': 2, '3': 2});
+      for (final cat in ['1', '2', '3']) {
+        expect(
+          [
+            for (final i in await membership(db, xt, ContentKind.live, cat))
+              i.position,
+          ],
+          [0, 1],
+          reason: cat,
+        );
+      }
+      // Another kind with the same key is a separate item.
+      expect(await membership(db, xt, ContentKind.movie, '1'), hasLength(1));
+      expect(await catalog.totalCount(xt, ContentKind.live), 3);
     });
 
     test('a failed batch does not leave gaps', () async {

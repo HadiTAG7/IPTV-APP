@@ -20,7 +20,8 @@ class Sources extends Table {
   TextColumn get name => text()();
   TextColumn get kind => textEnum<SourceKind>()();
 
-  /// Playlist URL, app-private file path or Xtream base URL.
+  /// Playlist URL, app-private file path or Xtream base URL, with any
+  /// credentials masked (the full URL is then in [Secrets]).
   TextColumn get url => text()();
   TextColumn get username => text().nullable()();
   TextColumn get userAgent => text().nullable()();
@@ -38,6 +39,13 @@ class Sources extends Table {
 
   /// Last committed catalog generation (0 = never synced).
   IntColumn get generation => integer().withDefault(const Constant(0))();
+
+  /// Generation a sync is writing, or null. Only this one accepts writes.
+  IntColumn get openGeneration => integer().nullable()();
+
+  /// Highest generation ever handed out; numbers are never reused, so a
+  /// stale or aborted writer can never match a later sync.
+  IntColumn get lastGeneration => integer().withDefault(const Constant(0))();
   IntColumn get lastSyncAt => integer().nullable()();
   IntColumn get lastEpgAt => integer().nullable()();
   IntColumn get sortIndex => integer().withDefault(const Constant(0))();
@@ -111,7 +119,7 @@ class CategoryItems extends Table {
 }
 
 @DataClassName('ChannelRecord')
-@TableIndex(name: 'channels_num', columns: {#sourceId, #num, #nameNorm})
+@TableIndex(name: 'channels_num', columns: {#sourceId, #num, #nameNorm, #key})
 @TableIndex(name: 'channels_tvg_id', columns: {#tvgId})
 class Channels extends Table {
   IntColumn get sourceId =>
@@ -140,6 +148,7 @@ class Channels extends Table {
 }
 
 @DataClassName('MovieRecord')
+@TableIndex(name: 'movies_name', columns: {#sourceId, #nameNorm, #key})
 class Movies extends Table {
   IntColumn get sourceId =>
       integer().references(Sources, #id, onDelete: KeyAction.cascade)();
@@ -161,6 +170,7 @@ class Movies extends Table {
 }
 
 @DataClassName('SeriesRecord')
+@TableIndex(name: 'series_name', columns: {#sourceId, #nameNorm, #key})
 class Series extends Table {
   IntColumn get sourceId =>
       integer().references(Sources, #id, onDelete: KeyAction.cascade)();
@@ -230,6 +240,8 @@ class EpgSources extends Table {
   IntColumn get id => integer().autoIncrement()();
   IntColumn get sourceId =>
       integer().references(Sources, #id, onDelete: KeyAction.cascade)();
+
+  /// Guide URL with credentials masked (the full URL is then in [Secrets]).
   TextColumn get url => text()();
   TextColumn get origin => textEnum<EpgOrigin>()();
   BoolColumn get enabled => boolean().withDefault(const Constant(true))();
@@ -262,6 +274,10 @@ class EpgChannels extends Table {
 }
 
 /// Guide entries. The key also drops SD/HD duplicates sharing an id.
+///
+/// Times are as published (plus the source's user offset). A playlist
+/// channel's `tvg-shift` is applied when reading, so a "+1" channel can share
+/// a guide id with its original.
 @DataClassName('ProgrammeRecord')
 class Programmes extends Table {
   IntColumn get epgSourceId =>
@@ -283,6 +299,7 @@ class Programmes extends Table {
 }
 
 @DataClassName('ChannelEpgMapRecord')
+@TableIndex(name: 'channel_epg_map_guide', columns: {#epgSourceId, #xmltvId})
 class ChannelEpgMap extends Table {
   IntColumn get sourceId =>
       integer().references(Sources, #id, onDelete: KeyAction.cascade)();

@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/core/db/app_db.dart';
+import 'package:iptv_player/core/secure/secret_store.dart';
 import 'package:iptv_player/core/time/clock.dart';
 import 'package:iptv_player/epg/epg_models.dart';
 import 'package:iptv_player/sources/models.dart';
@@ -181,6 +182,57 @@ void main() {
       expect(map.containsKey('d'), isFalse);
     });
 
+    test('a channel tvg-shift moves its programmes when read', () async {
+      // Playlist channels sharing guide id x.a: the original, a "+1" and a
+      // channel 30 minutes early. Guide rows are stored unshifted.
+      await syncCatalog(
+        db,
+        src,
+        channels: const [
+          ChannelData(key: 'a', name: 'News'),
+          ChannelData(key: 'p1', name: 'News +1', tvgShiftMin: 60),
+          ChannelData(key: 'm30', name: 'News early', tvgShiftMin: -30),
+        ],
+      );
+      await epg.replaceChannelMap(src, {
+        'a': link('x.a'),
+        'p1': link('x.a', EpgMatchKind.tvgName),
+        'm30': link('x.a', EpgMatchKind.name),
+      });
+
+      counter.selects = 0;
+      final nn = await epg.nowNext(src, ['a', 'p1', 'm30'], at(12, 30));
+      expect(counter.selects, 1);
+      expect(nn['a']!.now, isNull);
+      expect(nn['a']!.next?.start, at(13));
+      expect(nn['p1']!.now?.title, 'Noon');
+      expect(nn['p1']!.now?.start, at(12));
+      expect(nn['p1']!.now?.stop, at(13));
+      expect(nn['p1']!.next?.title, 'Afternoon');
+      expect(nn['p1']!.next?.start, at(14));
+      expect(nn['m30']!.now?.title, 'Afternoon');
+      expect(nn['m30']!.now?.start, at(12, 30));
+      expect(nn['m30']!.now?.stop, at(13, 30));
+      expect(nn['m30']!.next, isNull);
+      expect(nn['m30']!.now?.isOnAt(at(12, 30)), isTrue);
+
+      final map = await epg.programmesForChannels(
+        src,
+        ['a', 'p1', 'm30'],
+        at(12),
+        at(14),
+      );
+      List<(String, DateTime, DateTime)> t(String key) => [
+        for (final p in map[key]!) (p.title, p.start, p.stop),
+      ];
+      expect(t('a'), [('Afternoon', at(13), at(14))]);
+      expect(t('p1'), [('Noon', at(12), at(13))]);
+      expect(t('m30'), [('Afternoon', at(12, 30), at(13, 30))]);
+      // Stored rows are unchanged.
+      expect(await epg.programmeCount(guide), 7);
+      expect((await titles(at(11)))['a'], ('Noon', 'Afternoon'));
+    });
+
     test('same channel and start replaces; prune drops ended rows', () async {
       await epg.insertProgrammes(guide, [
         prog('x.a', at(10), at(11), 'Morning v2'),
@@ -247,6 +299,53 @@ void main() {
       expect((await epg.epgSources(src, enabledOnly: true)).map((r) => r.id), [
         guide,
       ]);
+    });
+
+    test('a guide URL with credentials is stored masked', () async {
+      const xmltv =
+          'http://127.0.0.1:8080/xmltv.php?username=demo&password=s3cret';
+      final id = await epg.addEpgSource(src, xmltv, EpgOrigin.xtream);
+      final row = (await epg.epgSourceById(id))!;
+      expect(
+        row.url,
+        'http://127.0.0.1:8080/xmltv.php?username=***&password=***',
+      );
+      expect(await epg.epgSourceUrl(id), xmltv);
+      expect(await epg.epgSourceUrl(guide), 'http://127.0.0.1:8080/xmltv.xml');
+      expect(await epg.epgSourceUrl(999), isNull);
+      final leaks = await db
+          .customSelect(
+            "SELECT COUNT(*) AS n FROM epg_sources WHERE url LIKE '%s3cret%'",
+          )
+          .getSingle();
+      expect(leaks.read<int>('n'), 0);
+
+      // A changed password updates the same entry.
+      const changed =
+          'http://127.0.0.1:8080/xmltv.php?username=demo&password=n3w';
+      expect(await epg.addEpgSource(src, changed, EpgOrigin.xtream), id);
+      expect(await epg.epgSourceUrl(id), changed);
+      expect(await countRows(db, 'secrets'), 1);
+
+      await epg.deleteEpgSource(id);
+      expect(await countRows(db, 'secrets'), 0);
+      expect(await epg.epgSourceUrl(id), isNull);
+    });
+
+    test('a given store receives guide credentials', () async {
+      final store = InMemorySecretStore();
+      const xmltv = 'http://127.0.0.1:8080/xmltv.php?username=u&password=p';
+      final id = await epg.addEpgSource(
+        src,
+        xmltv,
+        EpgOrigin.xtream,
+        secrets: store,
+      );
+      expect(await countRows(db, 'secrets'), 0);
+      expect(await store.read(src, SecretNames.epgUrl(id)), xmltv);
+      expect(await epg.epgSourceUrl(id, store), xmltv);
+      await epg.deleteEpgSource(id, secrets: store);
+      expect(await store.read(src, SecretNames.epgUrl(id)), isNull);
     });
 
     test('recordFetch updates only what is given', () async {

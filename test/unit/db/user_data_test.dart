@@ -230,6 +230,122 @@ void main() {
       },
     );
 
+    test('series without a saved series key still appear once', () async {
+      await syncCatalog(
+        db,
+        src,
+        movies: [movie('m1')],
+        seriesList: [series('s1', name: 'Show One')],
+        episodes: [
+          episode('s1', 'e1', number: 1),
+          episode('s1', 'e2', number: 2),
+        ],
+      );
+      await progress.saveProgress(
+        src,
+        PlayableKind.movie,
+        'm1',
+        60000,
+        3600000,
+      );
+      clock.advance(const Duration(minutes: 1));
+      await progress.saveProgress(
+        src,
+        PlayableKind.episode,
+        'e1',
+        60000,
+        3600000,
+      );
+      clock.advance(const Duration(minutes: 1));
+      await progress.saveProgress(
+        src,
+        PlayableKind.episode,
+        'e2',
+        60000,
+        3600000,
+      );
+
+      final items = await progress.continueWatching(src);
+      expect(items.map((i) => i.key), ['e2', 'm1']);
+      expect(items.first.seriesName, 'Show One');
+      // The key was taken from the catalog.
+      expect(
+        (await progress.progressFor(
+          src,
+          PlayableKind.episode,
+          'e1',
+        ))!.seriesKey,
+        's1',
+      );
+      expect((await progress.progressForSeries(src, 's1')).keys, {'e1', 'e2'});
+      expect((await progress.lastWatchedEpisode(src, 's1'))?.key, 'e2');
+    });
+
+    test(
+      'progress saved before its episodes were fetched groups by series',
+      () async {
+        final xt = await addSource(
+          db,
+          kind: SourceKind.xtream,
+          url: 'http://127.0.0.1:8080',
+        );
+        await syncCatalog(db, xt, seriesList: [series('s1', name: 'Lazy')]);
+        // Episode rows do not exist yet, so no series key can be found.
+        await progress.saveProgress(
+          xt,
+          PlayableKind.episode,
+          '101',
+          60000,
+          3600000,
+        );
+        clock.advance(const Duration(minutes: 1));
+        await progress.saveProgress(
+          xt,
+          PlayableKind.episode,
+          '102',
+          60000,
+          3600000,
+        );
+        expect(
+          (await progress.progressFor(
+            xt,
+            PlayableKind.episode,
+            '101',
+          ))!.seriesKey,
+          isNull,
+        );
+        expect(await progress.continueWatching(xt), isEmpty);
+
+        await db.catalogDao.saveFetchedEpisodes(xt, 's1', [
+          episode('s1', '101', number: 1),
+          episode('s1', '102', number: 2),
+        ]);
+        final items = await progress.continueWatching(xt);
+        expect(items.map((i) => i.key), ['102']);
+        expect(items.single.seriesName, 'Lazy');
+
+        // Finishing the latest episode hides the series.
+        clock.advance(const Duration(minutes: 1));
+        await progress.saveProgress(
+          xt,
+          PlayableKind.episode,
+          '102',
+          3599000,
+          3600000,
+        );
+        expect(await progress.continueWatching(xt), isEmpty);
+        // A later save keeps the key found in the catalog.
+        expect(
+          (await progress.progressFor(
+            xt,
+            PlayableKind.episode,
+            '102',
+          ))!.seriesKey,
+          's1',
+        );
+      },
+    );
+
     test('watchContinueWatching emits updates', () async {
       await syncCatalog(db, src, movies: [movie('m1')]);
       final seen = <int>[];
