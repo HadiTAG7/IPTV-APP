@@ -1,0 +1,55 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE tv SYSTEM "xmltv.dtd">
+<!-- Synthetic guide for tests. Every name and URL here is made up. -->
+<tv generator-info-name="synthetic-test" source-info-url="http://example.com/">
+  <channel id="news.example">
+    <display-name lang="ar">قناة الأخبار</display-name>
+    <display-name lang="en">Example News HD</display-name>
+    <display-name>Example News HD</display-name>
+    <icon src="http://example.com/logos/news.png"/>
+    <url>http://example.com/news</url>
+  </channel>
+  <channel id="Sport.Example">
+    <display-name lang="en">Example Sport</display-name>
+    <icon src="http://example.com/logos/sport.png" width="100" height="100"></icon>
+  </channel>
+  <channel id="kids.example">
+    <display-name lang="en"><![CDATA[Kids & Family]]></display-name>
+  </channel>
+  <channel id="">
+    <display-name>No id</display-name>
+  </channel>
+
+  <programme start="20261014180000 +0300" stop="20261014190000 +0300" channel="news.example">
+    <title lang="en">Evening Bulletin</title>
+    <title lang="ar">نشرة المساء</title>
+    <sub-title lang="en">Headlines</sub-title>
+    <desc lang="en">Top stories &amp; weather.</desc>
+    <desc lang="ar">أهم الأخبار والطقس.</desc>
+    <credits><director>Jane Doe</director><actor role="Host">John Roe</actor></credits>
+    <category lang="en">News</category>
+    <category lang="ar">أخبار</category>
+    <icon src="http://example.com/img/bulletin.jpg"/>
+    <episode-num system="xmltv_ns">0.11.0/1</episode-num>
+    <rating system="example"><value>G</value><icon src="http://example.com/rating/g.png"/></rating>
+  </programme>
+  <programme start="20261014190000 +0300" stop="20261014193000 +0300" channel="news.example">
+    <title lang="ar"><![CDATA[حوار <خاص> & مباشر]]></title>
+    <!-- An unknown element nested inside a field keeps its text. -->
+    <desc lang="ar">جزء <b>أول</b> فقط</desc>
+  </programme>
+  <!-- No stop: ends where the next sport.example programme starts. -->
+  <programme start="20261014160000 +0000" channel="sport.example">
+    <title lang="en">Match Day</title>
+  </programme>
+  <programme start="20261014173000 +0000" stop="20261014190000 +0000" channel="sport.example">
+    <title lang="en">Post-match &#x26; Analysis &#1575;</title>
+  </programme>
+  <!-- No stop and no later programme: one hour. -->
+  <programme start="20261014080000 -0500" channel="kids.example">
+    <title>Cartoons</title>
+  </programme>
+  <programme start="bad" stop="20261014090000 +0000" channel="kids.example"><title>Broken start</title></programme>
+  <programme start="20261014090000 +0000" stop="20261014100000 +0000"><title>No channel</title></programme>
+  <programme start="20261015000000 +05:30" stop="20261015010000 +05:30" channel="unknown.example"/>
+</tv>
