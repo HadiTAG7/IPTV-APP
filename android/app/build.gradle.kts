@@ -9,11 +9,12 @@ plugins {
 // Release signing: CI (or a local release build) writes android/key.properties with
 // storeFile (relative to android/app), storePassword, keyAlias and keyPassword.
 // Without it, release builds fall back to the debug key so they still install for testing.
+// Read as UTF-8: Properties.load(InputStream) decodes ISO-8859-1 and garbles non-ASCII passwords.
 val keystorePropertiesFile = rootProject.file("key.properties")
 val keystoreProperties =
     Properties().apply {
         if (keystorePropertiesFile.exists()) {
-            keystorePropertiesFile.inputStream().use { load(it) }
+            keystorePropertiesFile.reader(Charsets.UTF_8).use { load(it) }
         }
     }
 val hasReleaseKey = keystorePropertiesFile.exists()
@@ -38,6 +39,12 @@ val targetAbis =
         .orEmpty()
 val filterTargetAbis =
     targetAbis.isNotEmpty() && !booleanProperty("split-per-abi") && !booleanProperty("disable-abi-filtering")
+
+// Escape hatch for boxes whose GPU drivers misrender under Impeller: `-PimpellerOff=true`
+// merges src/impellerOff/AndroidManifest.xml (EnableImpeller=false) into release builds,
+// which CI ships as the optional -compat APK. Default builds carry no flag and keep the
+// engine's own renderer choice.
+val impellerOff = booleanProperty("impellerOff")
 
 android {
     namespace = "io.github.haditag7.iptv_player"
@@ -79,6 +86,10 @@ android {
                 keyPassword = keystoreValue("keyPassword")
             }
         }
+    }
+
+    if (impellerOff) {
+        sourceSets.getByName("release").manifest.srcFile("src/impellerOff/AndroidManifest.xml")
     }
 
     buildTypes {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Static checks for a built APK, used by CI and locally:
-# TV launcher entries, banner, ABIs, SDK levels, permissions, signature and size.
+# Static checks for a built APK, used by CI and locally: TV launcher entries,
+# banner, renderer flag, ABIs, SDK levels, permissions, signature and size.
 #
 # Usage: tool/check_apk.sh <apk> <max-size-MB> [expected ABIs]
 #   expected ABIs: optional space-separated list that must match exactly,
@@ -10,6 +10,8 @@
 #   BUILD_TOOLS_VERSION                  default 36.0.0
 #   EXPECTED_CERT_SHA256                 optional signer SHA-256 (hex, colons allowed)
 #   REQUIRE_RELEASE_SIGNED=1             fail if signed with the Android debug key
+#   EXPECT_IMPELLER_OFF=1                require EnableImpeller=false (the -compat APK);
+#                                        otherwise the APK must not override Impeller
 set -euo pipefail
 
 usage() {
@@ -75,6 +77,14 @@ reject "no fixed screenOrientation" "screenOrientation" "$manifest"
 expect "cleartext traffic allowed" "usesCleartextTraffic\([^)]*\)=(true|0xffffffff)" "$manifest"
 expect "backup disabled" "allowBackup\([^)]*\)=(false|0x0)" "$manifest"
 expect "predictive back enabled" "enableOnBackInvokedCallback\([^)]*\)=(true|0xffffffff)" "$manifest"
+
+echo "Renderer:"
+impeller=$(grep -A1 -F '"io.flutter.embedding.android.EnableImpeller"' <<<"$manifest" || true)
+if [[ "${EXPECT_IMPELLER_OFF:-0}" == "1" ]]; then
+  expect "Impeller off (EnableImpeller=false)" "android:value\([^)]*\)=(false|0x0)$" "$impeller"
+else
+  reject "no EnableImpeller override" "EnableImpeller" "$impeller"
+fi
 
 echo "SDK levels:"
 expect "minSdk 24" "^(min)?[sS]dkVersion:'24'$" "$badging"

@@ -7,6 +7,7 @@ import 'package:xml/xml.dart';
 const _androidNs = 'http://schemas.android.com/apk/res/android';
 const _main = 'android/app/src/main';
 const _res = '$_main/res';
+const _impellerKey = 'io.flutter.embedding.android.EnableImpeller';
 
 const _densities = {
   'mdpi': 1.0,
@@ -168,6 +169,35 @@ void main() {
         (e) => _attr(e, 'screenOrientation') != null,
       );
       expect(locked, isEmpty);
+    });
+
+    test('default builds keep the engine renderer choice', () {
+      expect(
+        manifest.descendantElements.map((e) => _attr(e, 'name')),
+        isNot(contains(_impellerKey)),
+      );
+    });
+  });
+
+  group('Impeller-off overlay (-PimpellerOff=true)', () {
+    test('only adds EnableImpeller=false to the application', () {
+      final overlay = _root('android/app/src/impellerOff/AndroidManifest.xml');
+      expect(overlay.childElements.map((e) => e.localName), ['application']);
+      final application = overlay.getElement('application')!;
+      expect(application.attributes, isEmpty);
+      final metaData = application.childElements.toList();
+      expect(metaData, hasLength(1));
+      expect(metaData.single.localName, 'meta-data');
+      expect(_attr(metaData.single, 'name'), _impellerKey);
+      expect(_attr(metaData.single, 'value'), 'false');
+    });
+
+    test('the release source set has no manifest of its own to replace', () {
+      // build.gradle.kts swaps in the overlay with manifest.srcFile().
+      expect(
+        File('android/app/src/release/AndroidManifest.xml').existsSync(),
+        isFalse,
+      );
     });
   });
 

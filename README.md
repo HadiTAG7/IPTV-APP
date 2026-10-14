@@ -44,7 +44,7 @@ Requires Android 7.0 (API 24) or newer. Fire TV devices running Vega OS cannot i
 
 ## Build
 
-Toolchain: Flutter **3.47.7** stable (Dart 3.13.5), JDK 17+, Android SDK 36, build-tools 36.0.0, NDK 28.2.13676358. On Linux, `bash tool/setup_container.sh` installs all of it idempotently.
+Toolchain: Flutter **3.47.7** stable (Dart 3.13.5), JDK 17+, Android SDK 36, build-tools 36.0.0, NDK 28.2.13676358. On Linux, `bash tool/setup_container.sh` installs all of it idempotently (it installs `openjdk-17-jdk-headless` only when no Java 17+ is on `PATH`).
 
 ```bash
 flutter pub get
@@ -63,9 +63,11 @@ bash tool/check_apk.sh build/app/outputs/flutter-apk/app-arm64-v8a-release.apk 9
 flutter build windows --release
 ```
 
-**Signing.** Release builds use `android/key.properties` when present (`storeFile`, relative to `android/app`, plus `storePassword`, `keyAlias`, `keyPassword`); otherwise they fall back to the debug key. Never commit keystores or `key.properties`.
+**Signing.** Release builds use `android/key.properties` when present (`storeFile`, relative to `android/app`, plus `storePassword`, `keyAlias`, `keyPassword`; read as UTF-8 with `java.util.Properties` escaping, so write a leading space as `\ ` and a backslash as `\\`); otherwise they fall back to the debug key. Never commit keystores or `key.properties`.
 
-**CI.** [`.github/workflows/build.yml`](.github/workflows/build.yml) is the only workflow that produces installables (versionCode = its run number, so never rename it). It runs tests, builds and checks the APKs on every push and PR, builds the Windows zip on tags and manual runs, and publishes a GitHub Release for `v*` tags. Release signing comes from the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`; without them, branch builds are debug-signed (artifact suffix `-debug-signed`, do not install) and tag builds fail.
+**Impeller escape hatch.** `-P impellerOff=true` merges `android/app/src/impellerOff/AndroidManifest.xml` (`io.flutter.embedding.android.EnableImpeller=false`) into a release build, for boxes whose GPU drivers misrender under Impeller. Normal builds never carry the flag. CI builds it as `iptv-player-universal-compat.apk` when a manual run ticks `impeller_off`, or on every run (releases included) when the repository variable `IMPELLER_COMPAT_APK` is `true`.
+
+**CI.** [`.github/workflows/build.yml`](.github/workflows/build.yml) is the only workflow that produces installables (versionCode = its run number, so never rename it). It runs tests, builds and checks the APKs on every push and PR, builds the Windows zip on tags and manual runs, and publishes a GitHub Release for `v*` tags. Release signing comes from the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`; without them, branch builds are debug-signed (artifact suffix `-debug-signed`, do not install) and tag builds fail. Tag builds also require `.github/release-cert.sha256`, the release certificate's SHA-256 fingerprint (from `keytool -list -v -keystore release.jks`; colons allowed), and fail if the APKs are signed by any other certificate, so a replaced keystore can never ship an update that installed copies reject.
 
 ## Project structure
 

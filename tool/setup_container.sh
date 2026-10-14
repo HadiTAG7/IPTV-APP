@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Prepares a Linux x64 machine (dev container or CI-like VM) to build, test and
-# package the app: Flutter 3.47.7, the Android SDK (platform-tools, android-36,
-# build-tools 36.0.0, NDK 28.2.13676358) and the Linux desktop/integration deps.
+# package the app: Flutter 3.47.7, a JDK 17+ (Gradle and apksigner), the Android
+# SDK (platform-tools, android-36, build-tools 36.0.0, NDK 28.2.13676358) and the
+# Linux desktop/integration deps.
 # Safe to re-run: every step skips what is already installed. Peak disk use is
 # about 13-16 GB.
 #
 # Usage: bash tool/setup_container.sh
 # Env:
 #   SDK_DIR=~/sdk          where flutter/ and android/ are installed
-#   SKIP_APT=1             skip apt packages (no root, or installed another way)
+#   SKIP_APT=1             skip apt packages (no root, or installed another way);
+#                          a JDK 17+ must then already be on PATH
 #   USE_CENTRAL_MIRROR=1   make Gradle use Google's Maven Central mirror
 #                          (see "Maven Central 429" below)
 #
@@ -42,6 +44,9 @@ APT_PACKAGES=(
   clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev
   libmpv-dev mpv ffmpeg xvfb
 )
+# Gradle 9 / AGP 9 and apksigner need Java 17+; installed only if PATH has no such java.
+MIN_JAVA=17
+JDK_APT_PACKAGE=openjdk-17-jdk-headless
 CENTRAL_MIRROR=https://maven-central.storage-download.googleapis.com/maven2/
 
 SDK_DIR=${SDK_DIR:-$HOME/sdk}
@@ -85,6 +90,54 @@ install_apt_packages() {
   if ((${#available[@]} > 0)); then
     as_root env DEBIAN_FRONTEND=noninteractive \
       apt-get install -y -q --no-install-recommends "${available[@]}"
+  fi
+}
+
+# java_major <java>: feature version (8 for 1.8.0_x, 17 for 17.0.2), or nothing.
+java_major() {
+  local v
+  v=$("$1" -XshowSettings:properties -version 2>&1 |
+    sed -nE 's/^ *java\.specification\.version = ([0-9.]+).*/\1/p' | head -n1) || true
+  v=${v#1.}
+  printf '%s' "${v%%.*}"
+}
+
+# java_home <java>: the JDK directory a java binary belongs to.
+java_home() {
+  "$1" -XshowSettings:properties -version 2>&1 |
+    sed -nE 's/^ *java\.home = (.+)$/\1/p' | head -n1 || true
+}
+
+# java_ok <java>: true if it is an executable java of at least MIN_JAVA.
+java_ok() {
+  local major
+  [[ -n "$1" && -x "$1" ]] || return 1
+  major=$(java_major "$1")
+  [[ -n "$major" ]] && ((major >= MIN_JAVA))
+}
+
+ensure_jdk() {
+  if ! java_ok "$(command -v java || true)"; then
+    if [[ "${SKIP_APT:-0}" != 1 ]] && command -v apt-get >/dev/null; then
+      log "Installing $JDK_APT_PACKAGE (Gradle and apksigner need Java $MIN_JAVA+)"
+      as_root apt-get update -q
+      as_root env DEBIAN_FRONTEND=noninteractive \
+        apt-get install -y -q --no-install-recommends "$JDK_APT_PACKAGE"
+      hash -r
+    fi
+    if ! java_ok "$(command -v java || true)"; then
+      echo "error: no Java $MIN_JAVA+ on PATH. Install a JDK (e.g. apt-get install $JDK_APT_PACKAGE), put its bin/ on PATH and re-run." >&2
+      exit 1
+    fi
+  fi
+  local java
+  java=$(command -v java)
+  log "Using Java $(java_major "$java") from $(java_home "$java")"
+  # Flutter runs Gradle with JAVA_HOME when it is set; if that JDK is too old, pin
+  # Flutter to the PATH one instead.
+  if [[ -n "${JAVA_HOME:-}" ]] && ! java_ok "$JAVA_HOME/bin/java"; then
+    log "JAVA_HOME=$JAVA_HOME is older than Java $MIN_JAVA; running flutter config --jdk-dir"
+    flutter config --jdk-dir "$(java_home "$java")" >/dev/null
   fi
 }
 
@@ -176,6 +229,7 @@ EOF
 main() {
   install_apt_packages
   install_flutter
+  ensure_jdk
   install_android_sdk
   configure_central_mirror
   log "flutter doctor"
@@ -192,4 +246,7 @@ Then, in the repo:
 EOF
 }
 
-main "$@"
+# Run only when executed, so tests can source the helpers.
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
+  main "$@"
+fi
