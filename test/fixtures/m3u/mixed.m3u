@@ -1,0 +1,21 @@
+#EXTM3U x-tvg-url="http://epg.example.com/guide.xml.gz,http://epg.example.com/backup.xml" url-logo="http://img.example.com/logos/" tvg-shift="+1"
+#EXTINF:-1 tvg-id="news.one" tvg-name="News One" tvg-logo="news1.png" tvg-chno="101" group-title="News",News One HD
+http://stream.example.com/live/news1.m3u8
+#EXTINF:-1 tvg-id="sport.one" tvg-logo="http://cdn.example.com/sport1.png" group-title="Sports;News",Sport One
+http://stream.example.com/live/sport1.ts?token=abc
+#EXTINF:-1 tvg-id="radio.one" radio="true" group-title="Radio",Radio One
+http://radio.example.com/one.mp3
+#EXTINF:-1 group-title="Movies Action",Fake Movie (2021)
+http://vod.example.com/movie/1001.mkv
+#EXTINF:-1 group-title="Movies Drama",Another Film
+http://vod.example.com/files/another.mp4
+#EXTINF:-1 tvg-logo="show.png" group-title="Series A",Example Show S01E01
+http://vod.example.com/series/2001.mkv
+#EXTINF:-1 group-title="Series A",Example Show S01E02
+http://vod.example.com/series/2002.mkv
+#EXTINF:-1 group-title="Series A",Example Show S02 E01
+http://vod.example.com/series/2003.mkv
+#EXTINF:-1 group-title="Series B",Other.Show.s1e5
+http://vod.example.com/series/3001.mp4
+#EXTINF:-1 group-title="Series B",Special Without Marker
+http://vod.example.com/series/3999.mp4

@@ -1,0 +1,23 @@
+#EXTM3U url-tvg=http://epg.example.com/a.xml,http://epg.example.com/b.xml catchup="default" catchup-days="3"
+#EXTINF:-1 TVG-ID="Quoted.One" Tvg-Name='Single Quoted' tvg-logo=http://img.example.com/q1.png group-title="A, B and C",Title, with, commas
+http://127.0.0.1:8080/live/q1.ts
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=KodiUA%2F1.0&Referer=http%3A%2F%2Fkodi.example.com%2F
+#EXTINF:-1 tvg-id="hdr.one" http-user-agent="AttrUA/1.0" group-title="Headers",Header Chain
+#EXTVLCOPT:http-user-agent=VlcUA/2.0
+#EXTVLCOPT:http-referrer=http://vlc.example.com/
+#EXTVLCOPT:network-caching=1000
+#EXTHTTP:{"User-Agent":"HttpUA/3.0","cookie":"session=synthetic"}
+http://127.0.0.1:8080/live/hdr1.m3u8|!user-agent=PipeUA%2F4.0&X-Custom=yes
+#EXTGRP:Sticky Group
+#EXTINF:-1 tvg-id="sticky.one",Sticky One
+http://127.0.0.1:8080/live/s1.ts
+#EXTINF:-1 tvg-id="sticky.two" group-title="",Sticky Two
+http://127.0.0.1:8080/live/s2.ts
+#EXTINF:-1 tvg-id="own.group" group-title="Own",Own Group
+http://127.0.0.1:8080/live/s3.ts
+#EXTINF:-1 tvg-id="sticky.three" tvg-shift="-2.5" catchup-days="7" tvg-chno="7",Sticky Three
+http://127.0.0.1:8080/live/s4.ts
+#EXTGRP:Next Group
+#EXTINF:-1 tvg-name="Named By Tvg" ch-number="12",
+http://127.0.0.1:8080/live/s5.ts
+http://127.0.0.1:8080/live/Bare%20Url%20Channel.ts
