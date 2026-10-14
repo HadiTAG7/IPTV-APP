@@ -60,6 +60,35 @@ String episode(int s, int e, {String show = 'Show', String group = 'S'}) =>
     '#EXTINF:-1 group-title="$group",$show S${s}E$e\n'
     'http://127.0.0.1/series/$show-$s-$e.mp4';
 
+/// Batches emitted before the stream ended, and the error it ended with.
+Future<(List<SyncBatch>, Object?)> collect(Stream<SyncBatch> stream) async {
+  final got = <SyncBatch>[];
+  try {
+    await for (final b in stream) {
+      got.add(b);
+    }
+  } catch (e) {
+    return (got, e);
+  }
+  return (got, null);
+}
+
+Matcher parseFailure(String message) =>
+    isA<ParseFailure>().having((f) => f.message, 'message', message);
+
+String describeEpisode(EpisodeData e) => [
+  e.seriesKey,
+  e.key,
+  e.season,
+  e.number,
+  e.title,
+  e.ext,
+  e.url,
+  e.headers,
+  e.durationSec,
+  e.still,
+].join(' | ');
+
 /// Asserts every item references categories announced earlier.
 void expectCategoriesFirst(List<SyncBatch> batches) {
   final seen = <ContentKind, Set<String>>{
@@ -254,6 +283,187 @@ void main() {
       '1x3',
       '2x1',
     ]);
+  });
+
+  group('fetchCatalog rejects bodies that are not playlists', () {
+    for (final (label, body) in [
+      ('empty', ''),
+      ('blank lines', '\n  \r\n\n'),
+      ('JSON', '{"user_info":{"auth":0}}'),
+      (
+        'HTML',
+        '<!DOCTYPE html>\n<html><body>\nAccount expired\n</body></html>\n',
+      ),
+      ('plain URLs', 'http://127.0.0.1/a.ts\nhttp://127.0.0.1/b.ts\n'),
+    ]) {
+      test(label, () async {
+        final (batches, error) = await collect(adapterFor(body).fetchCatalog());
+        expect(batches, isEmpty);
+        expect(error, parseFailure('not an M3U playlist'));
+      });
+    }
+
+    test('a long HTML page fails before any item batch', () async {
+      final body = [
+        '<!DOCTYPE html>',
+        for (var i = 0; i < 5000; i++) '<p>Account expired $i</p>',
+      ].join('\n');
+      final (batches, error) = await collect(
+        adapterFor(body, chunkSize: 4096).fetchCatalog(),
+      );
+      expect(batches, isEmpty);
+      expect(error, parseFailure('not an M3U playlist'));
+    });
+
+    test('a header without entries is an empty playlist', () async {
+      final (batches, error) = await collect(
+        adapterFor('#EXTM3U\n').fetchCatalog(),
+      );
+      expect(batches, isEmpty);
+      expect(error, parseFailure('playlist has no entries'));
+
+      final (hinted, error2) = await collect(
+        adapterFor('#EXTM3U url-tvg="http://epg.example.com/g.xml"\n')
+            .fetchCatalog(),
+      );
+      expect(hinted.map((b) => b.runtimeType), [EpgHintBatch]);
+      expect(error2, parseFailure('playlist has no entries'));
+    });
+
+    test('no PhaseDone after a rejected body', () async {
+      final (batches, _) = await collect(
+        adapterFor('<html>\n</html>').fetchCatalog(),
+      );
+      expect(batches.whereType<PhaseDoneBatch>(), isEmpty);
+    });
+  });
+
+  test('non-finite numeric attributes do not abort the sync', () async {
+    final adapter = adapterFor(
+      '#EXTM3U catchup-days="NaN" tvg-shift="1e308"\n'
+      '#EXTINF:-1 tvg-chno="NaN" catchup-days="Infinity",A\n'
+      'http://127.0.0.1/live/a.ts\n'
+      '#EXTINF:-1 tvg-chno="1e999" tvg-shift="-Infinity",B\n'
+      'http://127.0.0.1/live/b.ts\n'
+      '#EXTINF:${'9' * 400},Show S01E01\nhttp://127.0.0.1/series/1.mp4\n'
+      '#EXTINF:1e308,Show S01E02\nhttp://127.0.0.1/series/2.mp4\n',
+    );
+    final batches = await adapter.fetchCatalog().toList();
+    final channels = batches.whereType<ChannelsBatch>().single.items;
+    expect(channels.map((c) => c.num), [null, null]);
+    expect(channels.map((c) => c.catchupDays), [0, 0]);
+    expect(channels.map((c) => c.tvgShiftMin), [0, 0]);
+    final eps = batches.whereType<EpisodesBatch>().single.items;
+    expect(eps.map((e) => e.number), [1, 2]);
+    expect(eps.first.durationSec, isNull);
+    expect(batches.whereType<PhaseDoneBatch>(), hasLength(3));
+  });
+
+  group('seriesDetail cache', () {
+    test('episodes match the synced ones field by field', () async {
+      final adapter = adapterFor(
+        playlist([
+          '#EXTINF:2700 tvg-logo="http://img.example.com/s.jpg" '
+              'group-title="S",Show S01E01\n'
+              '#EXTVLCOPT:http-user-agent=EpUA\n'
+              'http://127.0.0.1/series/1.mkv?t=1',
+          '#EXTINF:-1 tvg-logo="http://img.example.com/s.jpg",Show S01E01 again\n'
+              'http://127.0.0.1/series/1.mkv?t=2',
+          '#EXTINF:1800.6,\u0645\u0633\u0644\u0633\u0644 S02E03\n'
+              'http://127.0.0.1/series/3.mp4',
+          episode(1, 2),
+        ]),
+      );
+      final batches = await adapter.fetchCatalog().toList();
+      final synced = batches.whereType<EpisodesBatch>().expand((b) => b.items);
+      final cached = [
+        for (final key in synced.map((e) => e.seriesKey).toSet())
+          ...(await adapter.seriesDetail(key)).episodes,
+      ];
+      expect(
+        cached.map(describeEpisode).toSet(),
+        synced.map(describeEpisode).toSet(),
+      );
+      expect(cached, hasLength(4));
+      final first = cached.firstWhere((e) => e.key.endsWith('1.mkv'));
+      expect(first.headers, {'User-Agent': 'EpUA'});
+      expect(first.durationSec, 2700);
+      expect(cached.where((e) => e.key.endsWith('#2')), hasLength(1));
+    });
+
+    test('a failed series fetch releases the previous episodes', () async {
+      final bodies = [
+        playlist([episode(1, 1)]),
+        '{"user_info":{"auth":0}}',
+      ];
+      var opens = 0;
+      final adapter = M3uAdapter(
+        _config,
+        dio: Dio(),
+        byteSource: FakeByteSource(
+          () => Stream.value(utf8.encode(bodies[opens++])),
+        ),
+      );
+      await adapter.fetchCatalog().drain<void>();
+      expect(
+        (await adapter.seriesDetail('series:show')).episodes,
+        hasLength(1),
+      );
+      final (_, error) = await collect(adapter.fetchCatalog());
+      expect(error, parseFailure('not an M3U playlist'));
+      await expectLater(
+        adapter.seriesDetail('series:show'),
+        throwsA(isA<ParseFailure>()),
+      );
+    });
+
+    test('the previous copy is gone while a new series fetch runs', () async {
+      final gate = Completer<void>();
+      var opens = 0;
+      final adapter = M3uAdapter(
+        _config,
+        dio: Dio(),
+        byteSource: FakeByteSource(() async* {
+          if (opens++ > 0) await gate.future;
+          yield utf8.encode(playlist([episode(1, 1)]));
+        }),
+      );
+      await adapter.fetchCatalog().drain<void>();
+      final second = adapter.fetchCatalog().drain<void>();
+      await Future<void>.delayed(Duration.zero);
+      await expectLater(
+        adapter.seriesDetail('series:show'),
+        throwsA(isA<ParseFailure>()),
+      );
+      gate.complete();
+      await second;
+      expect(
+        (await adapter.seriesDetail('series:show')).episodes,
+        hasLength(1),
+      );
+    });
+
+    test('a fetch without series keeps the earlier episodes', () async {
+      final adapter = adapterFor(playlist([live(1), episode(1, 1)]));
+      await adapter.fetchCatalog().drain<void>();
+      await adapter
+          .fetchCatalog(const SyncScope(movies: false, series: false))
+          .drain<void>();
+      expect(
+        (await adapter.seriesDetail('series:show')).episodes,
+        hasLength(1),
+      );
+    });
+
+    test('close() releases the episodes', () async {
+      final adapter = adapterFor(playlist([episode(1, 1)]));
+      await adapter.fetchCatalog().drain<void>();
+      adapter.close();
+      await expectLater(
+        adapter.seriesDetail('series:show'),
+        throwsA(isA<ParseFailure>()),
+      );
+    });
   });
 
   test('playlist without header still parses and has no guide hints', () async {
@@ -616,6 +826,23 @@ void main() {
         config: _config.copyWith(userAgent: '  ', referer: ''),
       );
       expect(adapter.resolve(ref).headers, {'User-Agent': kDefaultUserAgent});
+    });
+
+    test('blank entry headers do not mask the source or default', () {
+      final withSource = adapterFor(
+        '',
+        config: _config.copyWith(userAgent: 'SourceUA'),
+      );
+      const blank = PlayableRef(
+        kind: PlayableKind.live,
+        key: 'k',
+        url: 'http://127.0.0.1/live/1.ts|User-Agent=',
+        headers: {'User-Agent': '', 'Referer': '  '},
+      );
+      expect(withSource.resolve(blank).headers, {'User-Agent': 'SourceUA'});
+      expect(adapterFor('').resolve(blank).headers, {
+        'User-Agent': kDefaultUserAgent,
+      });
     });
 
     test('a pipe suffix on the stored URL is honoured', () {

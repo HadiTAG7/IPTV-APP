@@ -174,7 +174,8 @@ ExtInf parseExtInf(String body) {
   while (i < body.length && _isNumChar(body.codeUnitAt(i))) {
     i++;
   }
-  final duration = i > start ? double.tryParse(body.substring(start, i)) : null;
+  final parsed = i > start ? double.tryParse(body.substring(start, i)) : null;
+  final duration = parsed != null && parsed.isFinite ? parsed : null;
   final attrs = <String, String>{};
   final comma = _scanAttributes(body, i, attrs, stopAtComma: true);
   final title = comma < body.length ? body.substring(comma + 1).trim() : '';
@@ -211,9 +212,9 @@ int _scanAttributes(
       continue;
     }
     if (c == _dq || c == _sq) {
-      // Stray quoted text outside a value: skip it (or just the quote).
-      final close = s.indexOf(String.fromCharCode(c), i + 1);
-      i = close < 0 ? i + 1 : close + 1;
+      // A stray quote (inch mark, apostrophe) outside a value: skip only the
+      // quote so the following attributes and the title survive.
+      i++;
       continue;
     }
     final keyStart = i;
@@ -232,7 +233,9 @@ int _scanAttributes(
     String value;
     final q = j < n ? s.codeUnitAt(j) : 0;
     if (q == _dq || q == _sq) {
-      final close = s.indexOf(String.fromCharCode(q), j + 1);
+      final close = q == _dq
+          ? s.indexOf('"', j + 1)
+          : _closingSingleQuote(s, j);
       if (close >= 0) {
         value = s.substring(j + 1, close);
         i = close + 1;
@@ -256,6 +259,21 @@ int _scanAttributes(
     if (key.isNotEmpty) out[key] = value.trim();
   }
   return n;
+}
+
+/// Index of the `'` closing a single-quoted value opened at [open]: the first
+/// one followed by whitespace, a comma or the end, so apostrophes inside the
+/// value (`'Bob's Show'`) are kept. -1 when unterminated.
+int _closingSingleQuote(String s, int open) {
+  var i = s.indexOf("'", open + 1);
+  while (i >= 0) {
+    final next = i + 1;
+    if (next >= s.length) return i;
+    final c = s.codeUnitAt(next);
+    if (_isWs(c) || c == _comma) return i;
+    i = s.indexOf("'", next);
+  }
+  return -1;
 }
 
 /// True when [line] starts with [tag] (upper-case, starting with `#`),
@@ -284,10 +302,18 @@ String? _nonEmpty(String? v) {
   return t.isEmpty ? null : t;
 }
 
+/// Largest magnitude accepted for integer attributes (channel numbers,
+/// catch-up days); anything beyond is treated as garbage.
+const _maxAttrInt = 0x7FFFFFFF;
+
 int? _parseInt(String? v) {
   final t = _nonEmpty(v);
   if (t == null) return null;
-  return int.tryParse(t) ?? double.tryParse(t)?.round();
+  final n = int.tryParse(t);
+  if (n != null) return n >= -_maxAttrInt && n <= _maxAttrInt ? n : null;
+  final d = double.tryParse(t);
+  if (d == null || !(d >= -_maxAttrInt && d <= _maxAttrInt)) return null;
+  return d.round();
 }
 
 bool _isTrue(String? v) {
@@ -317,6 +343,7 @@ class M3uParser {
   M3uHeader _header = const M3uHeader();
 
   ExtInf? _extinf;
+  bool _sawMarker = false;
   List<String> _stickyGroups = const [];
   Map<String, String>? _vlcHeaders;
   Map<String, String>? _httpHeaders;
@@ -325,6 +352,10 @@ class M3uParser {
 
   /// Header attributes merged from every `#EXTM3U` line seen so far.
   M3uHeader get header => _header;
+
+  /// True once an `#EXTM3U` or `#EXTINF` line was read. Without one the input
+  /// is not a playlist (an HTML or JSON error page, an empty body).
+  bool get sawMarker => _sawMarker;
 
   /// Consumes one line; returns a record when the line completes one.
   M3uRecord? addLine(String raw) {
@@ -337,8 +368,10 @@ class M3uParser {
     if (line.codeUnitAt(0) != _hash) return _entry(line);
 
     if (_hasTag(line, '#EXTINF')) {
+      _sawMarker = true;
       _extinf = parseExtInf(_tagBody(line, 7));
     } else if (_hasTag(line, '#EXTM3U')) {
+      _sawMarker = true;
       return _mergeHeader(parseM3uAttributes(_tagBody(line, 7)));
     } else if (_hasTag(line, '#EXTGRP')) {
       _stickyGroups = _splitGroups(_tagBody(line, 7));
@@ -443,8 +476,14 @@ Stream<M3uRecord> parseM3uStream(Stream<List<int>> bytes) =>
 /// Parses an M3U byte stream, emitting the records completed by each input
 /// chunk as one list. Lines are decoded and parsed synchronously per chunk,
 /// which avoids one stream event per line on large playlists.
-Stream<List<M3uRecord>> parseM3uChunks(Stream<List<int>> bytes) async* {
-  final parser = M3uParser();
+///
+/// Pass [parser] to inspect its state (e.g. [M3uParser.sawMarker]) while or
+/// after the stream runs.
+Stream<List<M3uRecord>> parseM3uChunks(
+  Stream<List<int>> bytes, {
+  M3uParser? parser,
+}) async* {
+  final p = parser ?? M3uParser();
   final lines = <String>[];
   final input = const Utf8Decoder(allowMalformed: true).startChunkedConversion(
     const LineSplitter().startChunkedConversion(_LineSink(lines)),
@@ -453,7 +492,7 @@ Stream<List<M3uRecord>> parseM3uChunks(Stream<List<int>> bytes) async* {
   List<M3uRecord> drain() {
     final out = <M3uRecord>[];
     for (final line in lines) {
-      final record = parser.addLine(line);
+      final record = p.addLine(line);
       if (record != null) out.add(record);
     }
     lines.clear();

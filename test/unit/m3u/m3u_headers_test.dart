@@ -17,6 +17,12 @@ void main() {
     expect(h, {'User-Agent': 'B', 'Origin': 'http://o.example.com'});
   });
 
+  test('mergeHeaders ignores blank values', () {
+    final h = {'User-Agent': 'A', 'Referer': 'http://r/'};
+    mergeHeaders(h, {'user-agent': '', 'Referer': '  ', 'X-Token': 't'});
+    expect(h, {'User-Agent': 'A', 'Referer': 'http://r/', 'X-Token': 't'});
+  });
+
   group('splitPipeHeaders', () {
     test('no suffix', () {
       final r = splitPipeHeaders('http://h/a.ts');
@@ -36,6 +42,15 @@ void main() {
       final r = splitPipeHeaders('http://h/a|user-agent=A%ZZ|referrer=R');
       expect(r.headers, {'User-Agent': 'A%ZZ', 'Referer': 'R'});
     });
+
+    test('blank values are dropped', () {
+      final r = splitPipeHeaders(
+        'http://h/a.ts|User-Agent=&Referer=%20&X-Token=t',
+      );
+      expect(r.url, 'http://h/a.ts');
+      expect(r.headers, {'X-Token': 't'});
+      expect(parseHeaderPairs('User-Agent=  |Referer='), isEmpty);
+    });
   });
 
   test('parseVlcOpt', () {
@@ -46,6 +61,7 @@ void main() {
     expect(parseVlcOpt('http-origin=http://o/')?.key, 'Origin');
     expect(parseVlcOpt('network-caching=1000'), isNull);
     expect(parseVlcOpt('http-user-agent='), isNull);
+    expect(parseVlcOpt('http-user-agent=" "'), isNull);
     expect(parseVlcOpt('garbage'), isNull);
   });
 
@@ -55,6 +71,9 @@ void main() {
       'X-Num': '5',
     });
     expect(parseExtHttp('[1,2]'), isEmpty);
+    expect(parseExtHttp('{"User-Agent":"","Referer":"  ","X-A":"a"}'), {
+      'X-A': 'a',
+    });
     expect(parseExtHttp('{oops'), isEmpty);
   });
 
@@ -71,6 +90,12 @@ void main() {
     );
     expect(parseKodiPropHeaders('inputstream.adaptive.manifest_type=hls'), {});
     expect(parseKodiPropHeaders('noequals'), isEmpty);
+    expect(
+      parseKodiPropHeaders(
+        'inputstream.adaptive.stream_headers=User-Agent=&Referer=',
+      ),
+      isEmpty,
+    );
   });
 
   test('splitUrlList', () {
@@ -85,5 +110,13 @@ void main() {
     expect(parseShiftMinutes('0.25'), 15);
     expect(parseShiftMinutes('x'), isNull);
     expect(parseShiftMinutes(null), isNull);
+  });
+
+  test('parseShiftMinutes rejects non-finite and absurd values', () {
+    expect(parseShiftMinutes('48'), 2880);
+    expect(parseShiftMinutes('-48'), -2880);
+    for (final v in ['NaN', 'Infinity', '-Infinity', '1e308', '1e999', '49']) {
+      expect(parseShiftMinutes(v), isNull, reason: v);
+    }
   });
 }

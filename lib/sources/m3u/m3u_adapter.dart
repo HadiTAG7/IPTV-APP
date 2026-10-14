@@ -9,6 +9,7 @@ import '../models.dart';
 import '../source_adapter.dart';
 import 'byte_source.dart';
 import 'm3u_classify.dart';
+import 'm3u_episode_store.dart';
 import 'm3u_headers.dart';
 import 'm3u_parser.dart';
 
@@ -18,11 +19,18 @@ const kM3uBatchSize = 2000;
 /// Bytes read by [M3uAdapter.verify] to sniff the playlist format.
 const kM3uSniffBytes = 64 * 1024;
 
+const _notM3u = ParseFailure('not an M3U playlist');
+const _noEntries = ParseFailure('playlist has no entries');
+
 /// [SourceAdapter] for M3U playlists from a URL or a local file.
 ///
 /// One streaming pass classifies entries into live channels, movies and
 /// series episodes. Memory stays bounded: only the pending batches, the seen
-/// key sets and (for [seriesDetail]) the episode lists are kept.
+/// key sets and (for [seriesDetail]) a compact [M3uEpisodeStore] are kept.
+///
+/// A body without `#EXTM3U`/`#EXTINF` (an HTML or JSON error page, an empty
+/// response) or without any entry fails with [ParseFailure] before any item
+/// batch or [PhaseDoneBatch], so a bad download never replaces the catalog.
 class M3uAdapter implements SourceAdapter {
   M3uAdapter(this.config, {required Dio dio, ByteSource? byteSource}) {
     _bytes =
@@ -33,8 +41,9 @@ class M3uAdapter implements SourceAdapter {
                 dio,
                 config.url,
                 headers: {
-                  if (_hasText(config.userAgent))
-                    'User-Agent': config.userAgent!,
+                  'User-Agent': _hasText(config.userAgent)
+                      ? config.userAgent!
+                      : kDefaultUserAgent,
                   if (_hasText(config.referer)) 'Referer': config.referer!,
                 },
                 cancelToken: _cancelToken,
@@ -47,7 +56,9 @@ class M3uAdapter implements SourceAdapter {
   late final ByteSource _bytes;
 
   List<String> _epgUrls = const [];
-  Map<String, List<EpisodeData>> _seriesEpisodes = const {};
+
+  /// Episodes from the last completed series fetch, for [seriesDetail].
+  M3uEpisodeStore? _episodes;
 
   List<String> get _secrets => [
     if (_hasText(config.username)) config.username!,
@@ -79,12 +90,22 @@ class M3uAdapter implements SourceAdapter {
     return const AccountInfo(status: AccountStatus.active);
   }
 
+  /// Streams the playlist. A fetch that includes series first releases the
+  /// previous episode copy (so two never coexist) and installs the new one
+  /// only when the fetch completes; until then [seriesDetail] has nothing.
   @override
   Stream<SyncBatch> fetchCatalog([SyncScope scope = SyncScope.all]) async* {
-    final builder = _CatalogBuilder(scope);
+    final store = scope.series ? M3uEpisodeStore() : null;
+    if (store != null) _episodes = null;
+    final builder = _CatalogBuilder(scope, store);
+    final parser = M3uParser();
     final epg = <String>[];
+    var entries = 0;
     try {
-      await for (final records in parseM3uChunks(_bytes.open())) {
+      await for (final records in parseM3uChunks(
+        _bytes.open(),
+        parser: parser,
+      )) {
         for (final record in records) {
           switch (record) {
             case M3uHeader(:final epgUrls):
@@ -98,7 +119,11 @@ class M3uAdapter implements SourceAdapter {
                 yield EpgHintBatch(fresh);
               }
             case M3uEntry():
-              for (final batch in builder.add(record)) {
+              entries++;
+              final batches = builder.add(record);
+              // Never emit lines of a non-playlist body as items.
+              if (batches.isNotEmpty && !parser.sawMarker) throw _notM3u;
+              for (final batch in batches) {
                 yield batch;
               }
           }
@@ -107,9 +132,11 @@ class M3uAdapter implements SourceAdapter {
     } catch (e) {
       throw _failure(e);
     }
+    if (!parser.sawMarker) throw _notM3u;
+    if (entries == 0) throw _noEntries;
     final tail = builder.finish();
     _epgUrls = List.unmodifiable(epg);
-    if (scope.series) _seriesEpisodes = builder.seriesEpisodes;
+    if (store != null) _episodes = store;
     for (final batch in tail) {
       yield batch;
     }
@@ -117,9 +144,9 @@ class M3uAdapter implements SourceAdapter {
 
   @override
   Future<SeriesDetail> seriesDetail(String seriesKey) async {
-    final episodes = _seriesEpisodes[seriesKey];
+    final episodes = _episodes?.episodesOf(seriesKey);
     if (episodes == null) throw const ParseFailure('unknown series');
-    final sorted = [...episodes]
+    final sorted = episodes
       ..sort((a, b) {
         final bySeason = a.season.compareTo(b.season);
         return bySeason != 0 ? bySeason : a.number.compareTo(b.number);
@@ -163,10 +190,13 @@ class M3uAdapter implements SourceAdapter {
       EpgSourceSpec(url: url, origin: EpgOrigin.m3uHeader),
   ];
 
+  /// Cancels in-flight reads and releases the episode copy. The adapter is
+  /// not reusable afterwards.
   @override
   void close() {
     if (!_cancelToken.isCancelled) _cancelToken.cancel();
     _bytes.cancel();
+    _episodes = null;
   }
 
   SourceFailure _failure(Object e) {
@@ -177,6 +207,12 @@ class M3uAdapter implements SourceAdapter {
 }
 
 bool _hasText(String? s) => s != null && s.trim().isNotEmpty;
+
+/// Whole seconds for a positive, finite `#EXTINF` duration, else null.
+int? _durationSec(double? d) {
+  if (d == null || !d.isFinite || d <= 0 || d > 0x7FFFFFFF) return null;
+  return d.round();
+}
 
 /// Per-kind bookkeeping: pending categories, category names seen and the
 /// stable keys handed out so far.
@@ -225,9 +261,12 @@ class _Lane {
 
 /// Turns parsed entries into bounded [SyncBatch]es.
 class _CatalogBuilder {
-  _CatalogBuilder(this.scope);
+  _CatalogBuilder(this.scope, this.episodeStore);
 
   final SyncScope scope;
+
+  /// Receives every episode for [M3uAdapter.seriesDetail].
+  final M3uEpisodeStore? episodeStore;
   final _live = _Lane(ContentKind.live);
   final _movie = _Lane(ContentKind.movie);
   final _series = _Lane(ContentKind.series);
@@ -237,9 +276,6 @@ class _CatalogBuilder {
   var _movies = <MovieData>[];
   var _seriesItems = <SeriesData>[];
   var _episodes = <EpisodeData>[];
-
-  /// Episodes per series key, kept for [M3uAdapter.seriesDetail].
-  final seriesEpisodes = <String, List<EpisodeData>>{};
 
   List<SyncBatch> add(M3uEntry e) {
     switch (classifyM3uUrl(e.url, isRadio: e.isRadio)) {
@@ -321,7 +357,6 @@ class _CatalogBuilder {
         ),
       );
     }
-    final duration = e.duration;
     final episode = EpisodeData(
       seriesKey: seriesKey,
       key: _series.uniqueKey(_baseKey(e)),
@@ -331,11 +366,11 @@ class _CatalogBuilder {
       ext: urlExtension(e.url),
       url: e.url,
       headers: e.headers,
-      durationSec: duration != null && duration > 0 ? duration.round() : null,
+      durationSec: _durationSec(e.duration),
       still: e.logo,
     );
     _episodes.add(episode);
-    (seriesEpisodes[seriesKey] ??= []).add(episode);
+    episodeStore?.add(episode);
     if (_episodes.length >= kM3uBatchSize ||
         _seriesItems.length >= kM3uBatchSize ||
         _series.pendingCategories.length >= kM3uBatchSize) {

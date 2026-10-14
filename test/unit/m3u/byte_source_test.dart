@@ -30,6 +30,12 @@ void main() {
             res.headers.contentType = ContentType('audio', 'x-mpegurl');
             res.add(playlist);
             await res.close();
+          case '/expired':
+            // Panels often answer 200 with an HTML page for dead accounts.
+            res.headers.contentType = ContentType.html;
+            res.write('<!DOCTYPE html>\n<html><body>\nAccount expired\n');
+            res.write('</body></html>\n');
+            await res.close();
           case '/forbidden':
             res.statusCode = HttpStatus.forbidden;
             await res.close();
@@ -77,6 +83,60 @@ void main() {
       final bytes = await source.open().expand((c) => c).toList();
       expect(bytes, playlist);
       expect(requests.single.headers.value('user-agent'), kDefaultUserAgent);
+    });
+
+    test(
+      'the adapter sends the app User-Agent even with a plain Dio',
+      () async {
+        final adapter = M3uAdapter(
+          SourceConfig(kind: SourceKind.m3uUrl, url: '$base/list.m3u'),
+          dio: Dio(),
+        );
+        await adapter.fetchCatalog().drain<void>();
+        expect(requests.single.headers.value('user-agent'), kDefaultUserAgent);
+        expect(requests.single.headers.value('referer'), isNull);
+        adapter.close();
+      },
+    );
+
+    test('a blank source User-Agent falls back to the app one', () async {
+      final adapter = M3uAdapter(
+        SourceConfig(
+          kind: SourceKind.m3uUrl,
+          url: '$base/list.m3u',
+          userAgent: '  ',
+        ),
+        dio: Dio(),
+      );
+      await adapter.verify();
+      expect(requests.single.headers.value('user-agent'), kDefaultUserAgent);
+      adapter.close();
+    });
+
+    test('an HTML page served with 200 fails the fetch', () async {
+      final adapter = M3uAdapter(
+        SourceConfig(kind: SourceKind.m3uUrl, url: '$base/expired'),
+        dio: createDio(),
+      );
+      final got = <SyncBatch>[];
+      Object? error;
+      try {
+        await for (final b in adapter.fetchCatalog()) {
+          got.add(b);
+        }
+      } catch (e) {
+        error = e;
+      }
+      expect(got, isEmpty);
+      expect(
+        error,
+        isA<ParseFailure>().having(
+          (f) => f.message,
+          'message',
+          'not an M3U playlist',
+        ),
+      );
+      adapter.close();
     });
 
     test('HTTP errors map to SourceFailures without credentials', () async {

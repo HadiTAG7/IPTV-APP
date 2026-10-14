@@ -27,11 +27,12 @@ String canonicalHeaderName(String name) {
   return parts.join('-');
 }
 
-/// Copies [from] into [into] with canonical names; later values win.
+/// Copies [from] into [into] with canonical names; later values win. Blank
+/// values are ignored so they never mask an earlier User-Agent or Referer.
 void mergeHeaders(Map<String, String> into, Map<String, String> from) {
   from.forEach((k, v) {
     final name = canonicalHeaderName(k);
-    if (name.isNotEmpty) into[name] = v;
+    if (name.isNotEmpty && v.trim().isNotEmpty) into[name] = v;
   });
 }
 
@@ -51,6 +52,7 @@ void mergeHeaders(Map<String, String> into, Map<String, String> from) {
 final _pairSeparator = RegExp('[&|]');
 
 /// Parses `Name=value&Name2=value2` (also `|`-separated) into headers.
+/// Pairs with a blank value are dropped.
 Map<String, String> parseHeaderPairs(String input) {
   final out = <String, String>{};
   for (final part in input.split(_pairSeparator)) {
@@ -60,8 +62,9 @@ Map<String, String> parseHeaderPairs(String input) {
     while (name.startsWith('!')) {
       name = name.substring(1);
     }
-    if (name.isEmpty) continue;
-    out[canonicalHeaderName(name)] = _decode(part.substring(eq + 1).trim());
+    final value = _decode(part.substring(eq + 1).trim()).trim();
+    if (name.isEmpty || value.isEmpty) continue;
+    out[canonicalHeaderName(name)] = value;
   }
   return out;
 }
@@ -108,12 +111,12 @@ MapEntry<String, String>? parseVlcOpt(String body) {
   if (eq <= 0) return null;
   final name = headerForOption(body.substring(0, eq));
   if (name == null) return null;
-  final value = _unquote(body.substring(eq + 1));
+  final value = _unquote(body.substring(eq + 1)).trim();
   return value.isEmpty ? null : MapEntry(name, value);
 }
 
 /// Parses the body of `#EXTHTTP:{"User-Agent":"..",...}`. Invalid JSON yields
-/// an empty map.
+/// an empty map; blank values are dropped.
 Map<String, String> parseExtHttp(String body) {
   final out = <String, String>{};
   try {
@@ -121,7 +124,9 @@ Map<String, String> parseExtHttp(String body) {
     if (decoded is Map) {
       decoded.forEach((k, v) {
         if (k is String && (v is String || v is num || v is bool)) {
-          out[canonicalHeaderName(k)] = '$v';
+          final value = '$v'.trim();
+          final name = canonicalHeaderName(k);
+          if (name.isNotEmpty && value.isNotEmpty) out[name] = value;
         }
       });
     }
@@ -156,10 +161,16 @@ List<String> splitUrlList(String? value) {
   ];
 }
 
+/// Largest `tvg-shift` accepted, in hours; larger values are garbage.
+const kMaxTvgShiftHours = 48;
+
 /// `tvg-shift` in hours (may be fractional, `+2`, `-3.5`, `5,5`) to minutes.
+/// Null when missing, malformed, non-finite or beyond [kMaxTvgShiftHours].
 int? parseShiftMinutes(String? value) {
   if (value == null) return null;
   final hours = double.tryParse(value.trim().replaceAll(',', '.'));
-  if (hours == null || !hours.isFinite) return null;
+  if (hours == null || !hours.isFinite || hours.abs() > kMaxTvgShiftHours) {
+    return null;
+  }
   return (hours * 60).round();
 }

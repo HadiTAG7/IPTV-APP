@@ -77,8 +77,60 @@ void main() {
 
     test('stray quote does not swallow the title', () {
       final inf = parseExtInf("-1 tvg-name='O'Brien' tvg-id=\"x\",Title");
+      expect(inf.attrs['tvg-name'], "O'Brien");
       expect(inf.attrs['tvg-id'], 'x');
       expect(inf.title, 'Title');
+    });
+
+    test('apostrophes inside single-quoted values', () {
+      final inf = parseExtInf(
+        "-1 tvg-name='Bob's Show' group-title=\"Kids\",Bob's Show",
+      );
+      expect(inf.attrs, {'tvg-name': "Bob's Show", 'group-title': 'Kids'});
+      expect(inf.title, "Bob's Show");
+      expect(
+        parseExtInf("-1 tvg-name='Rock'n'Roll' group-title='Music',T").attrs,
+        {'tvg-name': "Rock'n'Roll", 'group-title': 'Music'},
+      );
+    });
+
+    test('unterminated single quote with an apostrophe keeps the title', () {
+      final inf = parseExtInf("-1 tvg-name='Bob's Show,Bob's Show");
+      expect(inf.attrs['tvg-name'], "Bob's Show");
+      expect(inf.title, "Bob's Show");
+    });
+
+    test('inch mark after a double-quoted value keeps later attributes', () {
+      final inf = parseExtInf(
+        '-1 tvg-name="Kids 12" Screen" group-title="Kids",Kids 12in',
+      );
+      expect(inf.attrs['tvg-name'], 'Kids 12');
+      expect(inf.attrs['group-title'], 'Kids');
+      expect(inf.title, 'Kids 12in');
+    });
+
+    test('stray apostrophe in a bare word does not jump into the title', () {
+      final inf = parseExtInf('-1 Bob\'s group-title="K",Bob\'s Show');
+      expect(inf.attrs['group-title'], 'K');
+      expect(inf.title, "Bob's Show");
+    });
+
+    test('stray quote before the comma keeps the title', () {
+      final inf = parseExtInf('-1 tvg-id="a" " group-title="G",Title');
+      expect(inf.attrs['tvg-id'], 'a');
+      expect(inf.attrs['group-title'], 'G');
+      expect(inf.title, 'Title');
+    });
+
+    test('attributes without separating spaces', () {
+      final inf = parseExtInf('-1 tvg-id="a"group-title="B",T');
+      expect(inf.attrs, {'tvg-id': 'a', 'group-title': 'B'});
+      expect(inf.title, 'T');
+    });
+
+    test('non-finite or overflowing durations are dropped', () {
+      expect(parseExtInf('${'9' * 400},T').duration, isNull);
+      expect(parseExtInf('-1,T').duration, -1);
     });
   });
 
@@ -371,6 +423,25 @@ void main() {
       expect(entries[1].kodiProps, isEmpty);
     });
 
+    test('blank values never override earlier ones', () {
+      final e = entriesOf(
+        '#EXTINF:-1 http-user-agent="AttrUA",A\n'
+        '#EXTVLCOPT:http-referrer=http://r.example.com/\n'
+        '#EXTHTTP:{"User-Agent":"","Referer":" "}\n'
+        'http://example.com/a|User-Agent=&Referer=\n',
+      ).single;
+      expect(e.headers, {
+        'User-Agent': 'AttrUA',
+        'Referer': 'http://r.example.com/',
+      });
+      final blank = entriesOf(
+        '#EXTINF:-1,A\n#EXTHTTP:{"User-Agent":""}\n'
+        '#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=\n'
+        'http://example.com/a|User-Agent=\n',
+      ).single;
+      expect(blank.headers, isEmpty);
+    });
+
     test('malformed #EXTHTTP JSON is ignored', () {
       final e = entriesOf(
         '#EXTINF:-1,A\n#EXTHTTP:{not json\nhttp://example.com/a\n',
@@ -380,6 +451,26 @@ void main() {
   });
 
   group('item keys', () {
+    test('non-finite and overflowing numbers become null or defaults', () {
+      final records = parseM3uString(
+        '#EXTM3U catchup-days="NaN" tvg-shift="1e308"\n'
+        '#EXTINF:-1 tvg-chno="NaN" catchup-days="Infinity",A\nhttp://h/a\n'
+        '#EXTINF:-1 tvg-chno="1e999" tvg-shift="Infinity",B\nhttp://h/b\n'
+        '#EXTINF:-1 tvg-chno="-Infinity" tvg-rec="1e400",C\nhttp://h/c\n'
+        '#EXTINF:-1 tvg-chno="99999999999999999999999",D\nhttp://h/d\n'
+        '#EXTINF:-1 tvg-chno="4294967296" catchup-days="3.6",E\nhttp://h/e\n'
+        '#EXTINF:-1 tvg-chno="1e3" tvg-shift="-1e300",F\nhttp://h/f\n'
+        '#EXTINF:-1 tvg-chno="-9223372036854775808",G\nhttp://h/g\n',
+      ).toList();
+      final header = records.whereType<M3uHeader>().single;
+      expect(header.catchupDays, 0);
+      expect(header.tvgShiftMin, 0);
+      final e = records.whereType<M3uEntry>().toList();
+      expect(e.map((x) => x.chno), [null, null, null, null, null, 1000, null]);
+      expect(e.map((x) => x.catchupDays), [0, 0, 0, 0, 4, 0, 0]);
+      expect(e.map((x) => x.tvgShiftMin).toSet(), {0});
+    });
+
     test('chno, radio, ids', () {
       final entries = entriesOf(
         '#EXTINF:-1 tvg-id="id1" tvg-chno="5" radio="true",A\nhttp://example.com/a\n'
@@ -467,6 +558,41 @@ void main() {
       ),
       'P',
     );
+  });
+
+  group('sawMarker', () {
+    bool marker(String text) {
+      final parser = M3uParser();
+      for (final line in const LineSplitter().convert(text)) {
+        parser.addLine(line);
+      }
+      return parser.sawMarker;
+    }
+
+    test('set by #EXTM3U or #EXTINF', () {
+      expect(marker('#EXTM3U\n'), isTrue);
+      expect(marker('\uFEFF#extm3u'), isTrue);
+      expect(marker('http://h/a\n#EXTINF:-1,A\nhttp://h/b\n'), isTrue);
+    });
+
+    test('not set by HTML, JSON, plain URLs or other tags', () {
+      expect(marker(''), isFalse);
+      expect(
+        marker('<!DOCTYPE html>\n<html><body>Expired</body></html>'),
+        isFalse,
+      );
+      expect(marker('{"user_info":{"auth":0}}'), isFalse);
+      expect(marker('http://h/a.ts\n#EXTVLCOPT:x=1\n#EXTINFO\n'), isFalse);
+    });
+
+    test('parseM3uChunks reports it through the given parser', () async {
+      final parser = M3uParser();
+      await parseM3uChunks(
+        Stream.value(utf8.encode('#EXTINF:-1,A\nhttp://h/a\n')),
+        parser: parser,
+      ).drain<void>();
+      expect(parser.sawMarker, isTrue);
+    });
   });
 
   group('looksLikeM3u', () {
