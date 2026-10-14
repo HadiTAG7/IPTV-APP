@@ -24,7 +24,8 @@ class MatchCandidate {
 class EpgMatch {
   const EpgMatch(this.xmltvId, this.kind);
 
-  /// XMLTV `channel@id`, as written in the guide.
+  /// XMLTV `channel@id`, spelled as in [EpgChannel.id]. The XMLTV parser
+  /// uses the same spelling for [EpgProgramme.channelId].
   final String xmltvId;
   final MatchKind kind;
 

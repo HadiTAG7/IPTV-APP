@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/epg/gzip_sniff.dart';
@@ -49,6 +50,28 @@ void main() {
     test('skips empty chunks before deciding', () async {
       final parts = [<int>[], <int>[], ...split(gz)];
       expect(await collect(maybeGunzip(chunks(parts))), text);
+    });
+
+    test('forwards plain chunks as they are, without copying', () async {
+      final big = Uint8List(1 << 20)..fillRange(0, 1 << 20, 0x41);
+      final tail = Uint8List.fromList([0x42, 0x43]);
+      final out = await maybeGunzip(chunks([big, tail])).toList();
+      expect(out, hasLength(2));
+      expect(identical(out[0], big), isTrue);
+      expect(identical(out[1], tail), isTrue);
+    });
+
+    test('after a one-byte first chunk the next chunk is not copied', () async {
+      final big = Uint8List(1 << 20)..fillRange(0, 1 << 20, 0x41);
+      final out = await maybeGunzip(
+        chunks([
+          [0x3c],
+          big,
+        ]),
+      ).toList();
+      expect(out, hasLength(2));
+      expect(out[0], [0x3c]);
+      expect(identical(out[1], big), isTrue);
     });
 
     test('plain data starting with 0x1f is not gzip', () async {

@@ -20,13 +20,17 @@ class XmltvBatch {
 ///
 /// Bytes go through [maybeGunzip], a lenient UTF-8 decoder and package:xml's
 /// event parser into a small state machine; no DOM is built. Memory stays
-/// flat: besides the current batch it keeps at most one held-back programme
-/// and one cached shift per guide channel.
+/// flat: besides the current batch it keeps at most one held-back programme,
+/// one cached shift and one id spelling per guide channel.
 class XmltvParser {
   const XmltvParser();
 
   /// Parses an XMLTV document (plain or gzip) into batches.
   ///
+  /// - Channel ids compare case-insensitively. Each id is reported with the
+  ///   first spelling seen in the document (normally its `<channel id>`), in
+  ///   [EpgChannel.id], [EpgProgramme.channelId] and the [shiftMinutesFor]
+  ///   argument alike, so ids from `matchChannels` find their programmes.
   /// - Every `<channel>` is emitted. [wantedChannelIds] (case-insensitive)
   ///   filters programmes only, because matching and manual assignment need
   ///   the full guide channel list. `null` keeps all; an empty set keeps none.
@@ -95,34 +99,56 @@ class XmltvParser {
 const _strayLt = '\uFFFF';
 
 /// Longest incomplete markup carried between chunks before it is treated as
-/// malformed. Real XMLTV elements are far smaller.
-const _maxCarry = 1 << 20;
+/// malformed. Real XMLTV tags, comments and CDATA sections are far smaller;
+/// the cap also bounds the cost of re-parsing the carry for each new chunk.
+const _maxCarry = 1 << 16;
 
 const _rawEntities = XmlNullEntityMapping();
 const _entities = XmlDefaultEntityMapping.html5();
 
 /// Feeds text chunks through package:xml's event parser.
 ///
-/// This is the parser behind `toXmlEvents()`, driven per chunk so that markup
-/// which never completes (a stray `<` in text) is emitted as text instead of
-/// growing the carry-over buffer without bound. Entities are left encoded
-/// here because an entity can be split across chunks; the state machine
-/// decodes them once a field's text is complete.
+/// This is the parser behind `toXmlEvents()`, driven per chunk. Markup cut
+/// off by the end of a chunk is carried into the next one. Markup that can
+/// never complete (a stray `<` in text such as `<A&E>`) is emitted as text,
+/// at once when more input cannot help, else once the carry exceeds
+/// [_maxCarry]. Entities are left encoded here because an entity can be
+/// split across chunks; the state machine decodes them once a field's text
+/// is complete.
 class _EventLexer {
   _EventLexer(this._onEvent);
 
   final void Function(XmlEvent event) _onEvent;
   String _carry = '';
 
+  /// Terminator the carried comment, CDATA or processing instruction needs
+  /// before parsing it again can succeed; `null` to retry on every chunk.
+  String? _closer;
+
   void add(String chunk) {
     if (chunk.isEmpty) return;
+    final closer = _closer;
+    if (closer != null &&
+        _carry.length + chunk.length <= _maxCarry &&
+        !_arrives(closer, chunk)) {
+      _carry += chunk;
+      return;
+    }
     _run(_escapeStrayLt(_carry.isEmpty ? chunk : _carry + chunk), last: false);
   }
 
   void close() {
-    if (_carry.isNotEmpty) _run(_carry, last: true);
+    if (_carry.isNotEmpty) _run(_escapeStrayLt(_carry), last: true);
     _carry = '';
+    _closer = null;
   }
+
+  /// Whether [closer] ends in [chunk]; it may start at the end of the carry,
+  /// which is longer than any closer.
+  bool _arrives(String closer, String chunk) =>
+      (_carry.substring(_carry.length - closer.length + 1) + chunk).contains(
+        closer,
+      );
 
   void _run(String input, {required bool last}) {
     var buffer = input;
@@ -138,13 +164,15 @@ class _EventLexer {
           pos = event.stop!;
         }
         _carry = '';
+        _closer = null;
         return;
       } on XmlParserException {
         // Markup at `pos` is incomplete or malformed.
       }
       final rest = buffer.substring(pos);
-      if (!last && rest.length <= _maxCarry) {
+      if (!last && rest.length <= _maxCarry && !_hopeless(rest)) {
         _carry = rest;
+        _closer = _closerOf(rest);
         return;
       }
       // It will never complete: its `<` is text, parsing resumes after it.
@@ -154,10 +182,42 @@ class _EventLexer {
   }
 }
 
+/// Whether the markup at the start of [rest], which failed to parse, stays
+/// unparsable however much input follows.
+bool _hopeless(String rest) {
+  if (rest.length < 2) return false;
+  switch (rest.codeUnitAt(1)) {
+    case 0x21: // `<!`
+      return !_mayStartWith(rest, '<!--') &&
+          !_mayStartWith(rest, '<![CDATA[') &&
+          !_mayStartWith(rest, '<!DOCTYPE');
+    case 0x3f: // `<?` (with a name, see [_escapeStrayLt]) ends at `?>`.
+      return rest.contains('?>', 2);
+    default:
+      // A tag cannot contain `<`, so it has ended (malformed) before the
+      // next one.
+      return rest.contains('<', 1);
+  }
+}
+
+/// The terminator of the comment, CDATA section or processing instruction
+/// at the start of [rest], once its opening is complete.
+String? _closerOf(String rest) {
+  if (rest.startsWith('<!--')) return '-->';
+  if (rest.startsWith('<![CDATA[')) return ']]>';
+  if (rest.length > 2 && rest.startsWith('<?')) return '?>';
+  return null;
+}
+
+/// Whether [s] starts with [prefix] or is cut off inside it.
+bool _mayStartWith(String s, String prefix) =>
+    s.length >= prefix.length ? s.startsWith(prefix) : prefix.startsWith(s);
+
 /// Replaces each `<` that cannot be markup with [_strayLt]: one not followed
-/// by a name, `/`, `!` or `?` (`a < b`), and a tag-like one with no `>`
-/// before the next `<` (`x<y and z</desc>`). A `<` that cannot be decided
-/// yet, at the end of [s], is left for the lexer to carry.
+/// by a name, `/`, `!` or `?` (`a < b`), `<?` not followed by a name (`<? `),
+/// and a tag-like one with no `>` before the next `<` (`x<y and z</desc>`).
+/// A `<` that cannot be decided yet, at the end of [s], is left for the
+/// lexer to carry.
 String _escapeStrayLt(String s) {
   var i = s.indexOf('<');
   if (i < 0) return s;
@@ -169,7 +229,10 @@ String _escapeStrayLt(String s) {
     final next = s.indexOf('<', i + 1);
     final c = s.codeUnitAt(i + 1);
     var stray = !_canStartMarkup(c);
-    if (!stray && next >= 0 && c != 0x21 && c != 0x3f) {
+    if (c == 0x3f) {
+      // A processing instruction needs a target name.
+      stray = i + 2 < s.length && !_isNameStart(s.codeUnitAt(i + 2));
+    } else if (!stray && next >= 0 && c != 0x21) {
       // Tags cannot contain `<`, so a tag must close before the next one.
       if (gt <= i) {
         gt = s.indexOf('>', i + 1);
@@ -190,11 +253,15 @@ String _escapeStrayLt(String s) {
 }
 
 bool _canStartMarkup(int c) =>
-    (c >= 0x61 && c <= 0x7a) || // a-z
-    (c >= 0x41 && c <= 0x5a) || // A-Z
+    _isNameStart(c) ||
     c == 0x2f || // /
     c == 0x21 || // !
-    c == 0x3f || // ?
+    c == 0x3f; // ?
+
+/// ASCII name start characters; non-ASCII names do not occur in XMLTV.
+bool _isNameStart(int c) =>
+    (c >= 0x61 && c <= 0x7a) || // a-z
+    (c >= 0x41 && c <= 0x5a) || // A-Z
     c == 0x5f || // _
     c == 0x3a; // :
 
@@ -247,6 +314,8 @@ class _XmltvMachine {
   var _programmes = <EpgProgramme>[];
   var _ready = <XmltvBatch>[];
 
+  /// First spelling of each channel id, by lower-cased id.
+  final _ids = <String, String>{};
   final _rules = <String, _ChannelRule>{};
 
   /// Programmes without a stop, by channel, waiting for the next start.
@@ -459,7 +528,7 @@ class _XmltvMachine {
 
   void _beginChannel(XmlStartElementEvent e) {
     _enterContext(_Context.channel, 'channel');
-    _channelId = _attr(e, 'id')?.trim() ?? '';
+    _channelId = _canonical(_attr(e, 'id')?.trim() ?? '');
     _displayNames = [];
   }
 
@@ -481,6 +550,7 @@ class _XmltvMachine {
       }
     }
     if (channel == null || channel.isEmpty || startText == null) return;
+    channel = _canonical(channel);
     final rule = _ruleFor(channel);
     if (!rule.wanted) return;
     var start = parseXmltvTime(startText);
@@ -546,6 +616,10 @@ class _XmltvMachine {
       }
     }
   }
+
+  /// The spelling of [id] used for output: the first one seen, ignoring case.
+  String _canonical(String id) =>
+      id.isEmpty ? id : _ids.putIfAbsent(id.toLowerCase(), () => id);
 
   _ChannelRule _ruleFor(String channel) =>
       _rules[channel] ??= _makeRule(channel);

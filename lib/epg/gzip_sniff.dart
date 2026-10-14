@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:io' show gzip;
+import 'dart:typed_data';
 
 /// Gunzips [bytes] when they start with the gzip magic `1f 8b`, otherwise
 /// passes them through unchanged.
 ///
 /// Detection looks at the bytes themselves (servers often mislabel `.xml.gz`
-/// as `text/xml` or vice versa), buffering until two bytes have arrived so a
-/// one-byte first chunk is handled. Decompression is streaming.
+/// as `text/xml` or vice versa). Chunks are forwarded as they are, never
+/// copied; only a one-byte first chunk is held until the next byte arrives.
+/// Decompression is streaming.
 Stream<List<int>> maybeGunzip(Stream<List<int>> bytes) =>
     Stream<List<int>>.eventTransformed(bytes, _SniffSink.new);
 
@@ -15,8 +17,8 @@ class _SniffSink implements EventSink<List<int>> {
 
   final EventSink<List<int>> _out;
 
-  /// Bytes seen before the format is known; `null` once decided.
-  List<int>? _head = <int>[];
+  /// The first byte, while it is the only one seen.
+  int? _first;
 
   /// Passthrough or gzip input, chosen after the first two bytes.
   Sink<List<int>>? _target;
@@ -31,10 +33,20 @@ class _SniffSink implements EventSink<List<int>> {
         target.add(chunk);
         return;
       }
-      final head = _head!..addAll(chunk);
-      if (head.length < 2) return;
-      _head = null;
-      _decide(head).add(head);
+      if (chunk.isEmpty) return;
+      final first = _first;
+      if (first == null) {
+        if (chunk.length == 1) {
+          _first = chunk[0];
+          return;
+        }
+        _decide(chunk[0], chunk[1]).add(chunk);
+        return;
+      }
+      _first = null;
+      _decide(first, chunk[0])
+        ..add(_byte(first))
+        ..add(chunk);
     } catch (e, s) {
       _fail(e, s);
     }
@@ -51,23 +63,24 @@ class _SniffSink implements EventSink<List<int>> {
       return;
     }
     try {
-      final head = _head;
-      if (head != null) {
+      final target = _target;
+      if (target == null) {
         // Fewer than two bytes in total: cannot be gzip.
-        if (head.isNotEmpty) _out.add(head);
+        final first = _first;
+        if (first != null) _out.add(_byte(first));
         _out.close();
         return;
       }
-      _target!.close();
+      target.close();
     } catch (e, s) {
       _fail(e, s);
       _out.close();
     }
   }
 
-  Sink<List<int>> _decide(List<int> head) {
+  Sink<List<int>> _decide(int b0, int b1) {
     final out = _ForwardSink(_out);
-    final isGzip = head[0] == 0x1f && head[1] == 0x8b;
+    final isGzip = b0 == 0x1f && b1 == 0x8b;
     return _target = isGzip ? gzip.decoder.startChunkedConversion(out) : out;
   }
 
@@ -76,6 +89,8 @@ class _SniffSink implements EventSink<List<int>> {
     _out.addError(error, stackTrace);
   }
 }
+
+Uint8List _byte(int b) => Uint8List(1)..[0] = b;
 
 class _ForwardSink implements Sink<List<int>> {
   _ForwardSink(this._out);

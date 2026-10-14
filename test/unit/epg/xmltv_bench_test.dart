@@ -1,5 +1,6 @@
-/// Large-guide benchmark. Excluded from default runs:
-/// `flutter test --exclude-tags bench`; run with `flutter test --tags bench`.
+/// Large-guide benchmark, skipped unless `RUN_BENCH` is set:
+/// `RUN_BENCH=1 flutter test --tags bench test/unit/epg`. The tag also lets
+/// `--exclude-tags bench` leave the file out entirely.
 @Tags(['bench'])
 library;
 
@@ -69,7 +70,16 @@ Future<int> _generate(File file) async {
   return i;
 }
 
+/// Skips the group, and so its 200 MB setUpAll, in default runs.
+final Object _skip = Platform.environment['RUN_BENCH'] == null
+    ? 'set RUN_BENCH=1 to run (writes a ~200 MB temp file)'
+    : false;
+
 void main() {
+  group('XMLTV bench', _bench, skip: _skip);
+}
+
+void _bench() {
   late Directory dir;
   late File plain;
   late int total;

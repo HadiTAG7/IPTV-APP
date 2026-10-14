@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/epg/epg_matcher.dart';
 import 'package:iptv_player/epg/epg_models.dart';
 import 'package:iptv_player/epg/xmltv_parser.dart';
 
@@ -140,7 +142,8 @@ void main() {
       expect(talk.icon, isNull);
 
       final matchDay = r.programmes[2];
-      expect(matchDay.channelId, 'sport.example');
+      // Written `sport.example`, reported with the `<channel id>` spelling.
+      expect(matchDay.channelId, 'Sport.Example');
       expect(matchDay.start, utc(14, 16));
       expect(matchDay.stop, utc(14, 17, 30), reason: 'next start');
 
@@ -471,12 +474,12 @@ void main() {
     });
 
     test('markup that never completes recovers after a long carry', () async {
-      // The unterminated quote makes `<icon ...` unparsable; once the carried
-      // input exceeds its limit the `<` is treated as text and parsing
-      // resumes, ending the programme at its own end tag.
+      // An unterminated comment could still end in a later chunk, so it is
+      // carried; once the carry exceeds its limit the `<` is treated as text
+      // and parsing resumes, ending the programme at its own end tag.
       final body = StringBuffer(
         '<programme start="20261014000000" stop="20261014003000" channel="c">'
-        '<title>a <b c</title><icon src="broken.png/></programme>',
+        '<title>a <!-- b</title></programme>',
       );
       for (var i = 0; i < 6000; i++) {
         final start = utc(14, 1).add(Duration(minutes: i));
@@ -507,10 +510,9 @@ void main() {
         if (!inputDone) beforeEnd += b.programmes.length;
       }
       // Recovery happened mid-stream, not only when the input ended.
-      expect(beforeEnd, greaterThan(1000));
+      expect(beforeEnd, greaterThan(5000));
       expect(programmes, hasLength(6001));
-      expect(programmes.first.title, 'a <b c');
-      expect(programmes.first.icon, isNull);
+      expect(programmes.first.title, 'a <!-- b');
       expect(programmes[1].title, 'Show 0');
       expect(programmes.last.title, 'Show 5999');
     });
@@ -655,7 +657,7 @@ void main() {
       expect(r.channels, hasLength(3));
       expect(r.programmes.map((p) => p.channelId).toSet(), {
         'news.example',
-        'sport.example',
+        'Sport.Example',
       });
       expect(r.programmes, hasLength(4));
     });
@@ -722,6 +724,199 @@ void main() {
         },
       );
       expect(calls, ['B']);
+    });
+  });
+
+  group('channel id spelling', () {
+    test('matched ids find their programmes and shifts (fixture)', () async {
+      // The fixture declares `Sport.Example` but its programmes say
+      // `sport.example`.
+      final shifted = await parseBytes(
+        fixture,
+        shift: (id) => id == 'Sport.Example' ? 60 : 0,
+      );
+      final match = matchChannels([
+        const MatchCandidate(key: 'k', name: 'x', tvgId: 'sport.example'),
+      ], shifted.channels)['k']!;
+      expect(match, const EpgMatch('Sport.Example', MatchKind.tvgId));
+
+      final mine = shifted.programmes.where(
+        (p) => p.channelId == match.xmltvId,
+      );
+      expect(mine.map((p) => (p.title, p.start, p.stop)), [
+        ('Match Day', utc(14, 17), utc(14, 18, 30)),
+        ('Post-match & Analysis ا', utc(14, 18, 30), utc(14, 20)),
+      ]);
+    });
+
+    test('first spelling wins, also for programmes before channels', () async {
+      final calls = <String>[];
+      final r = await parse(
+        tv(
+          '${prog('NEWS', '20261014120000')}'
+          '<channel id="News"><display-name>N</display-name></channel>'
+          '<channel id="sport"/>'
+          '${prog('news', '20261014130000', '20261014140000')}'
+          '${prog('Sport', '20261014120000', '20261014130000')}'
+          '${prog('SPORT', '20261014130000', '20261014140000')}',
+        ),
+        shift: (id) {
+          calls.add(id);
+          return 0;
+        },
+      );
+      expect(r.channels.map((c) => c.id), ['NEWS', 'sport']);
+      expect(r.programmes.map((p) => (p.channelId, p.start, p.stop)), [
+        // The missing stop resolves across spellings.
+        ('NEWS', utc(14, 12), utc(14, 13)),
+        ('NEWS', utc(14, 13), utc(14, 14)),
+        ('sport', utc(14, 12), utc(14, 13)),
+        ('sport', utc(14, 13), utc(14, 14)),
+      ]);
+      expect(calls, ['NEWS', 'sport'], reason: 'one call per channel');
+    });
+  });
+
+  group('malformed markup in text', () {
+    /// Feeds [parts] one by one and records the programme titles emitted
+    /// after each, so held-back output shows up.
+    Future<List<List<String>>> titlesAfterEach(List<String> parts) async {
+      final input = StreamController<List<int>>();
+      final titles = <String>[];
+      final done = const XmltvParser()
+          .parse(input.stream, batchSize: 1)
+          .forEach((b) => titles.addAll(b.programmes.map((p) => p.title)));
+      final seen = <List<String>>[];
+      for (final part in parts) {
+        input.add(utf8.encode(part));
+        await pumpEventQueue();
+        seen.add([...titles]);
+      }
+      await input.close();
+      await done;
+      seen.add(titles);
+      return seen;
+    }
+
+    String show(String title, String desc) =>
+        '<programme start="20261014120000" stop="20261014130000" channel="c">'
+        '<title>$title</title><desc>$desc</desc></programme>';
+
+    for (final bad in [
+      'Movie <A&E> tonight',
+      "<Director's Cut>",
+      'wow<!> and <!important>',
+      'what<?> now <? x',
+      'x <1st> </ desc> <a b="c" d<e>',
+      'unterminated <icon src="x.png/>',
+    ]) {
+      test('does not hold back later output: $bad', () async {
+        final seen = await titlesAfterEach([
+          '<tv>${show('A', bad)}',
+          show('B', 'fine'),
+          '</tv>',
+        ]);
+        expect(seen, [
+          ['A'],
+          ['A', 'B'],
+          ['A', 'B'],
+          ['A', 'B'],
+        ]);
+      });
+    }
+
+    test('text is kept as written', () async {
+      final r = await parse(
+        tv(show('T', "Movie <A&E> tonight, <Director's Cut>, wow<!> <?> <? x")),
+        chunk: 7,
+      );
+      expect(
+        r.programmes.single.desc,
+        "Movie <A&E> tonight, <Director's Cut>, wow<!> <?> <? x",
+      );
+    });
+
+    test('`<?` without a target name is text however it is chunked', () async {
+      final xml = tv(
+        '${show('A', '<?قناة x')}${show('B', 'what <? now')}'
+        '${show('C', 'ends ?> here')}',
+      );
+      for (final chunk in [1, 2, 3, 1 << 16]) {
+        final r = await parse(xml, chunk: chunk);
+        expect(r.programmes.map((p) => p.desc), [
+          '<?قناة x',
+          'what <? now',
+          'ends ?> here',
+        ], reason: 'chunk $chunk');
+      }
+    });
+
+    test('random malformed text parses the same in any chunking', () async {
+      const pieces = [
+        // Entities, stray and valid markup, and openers without closers.
+        'plain', ' ', '&amp;', '&#1575;', '<', '< ', 'a<b', '<3', '<!',
+        '<?', '<?a', '<x>', '</x>', '<y/>', '<![CDATA[c<d]]>', '<!-- c -->',
+        '&', '>', '"', "'", 'قناة', '😀', '<b c', '<A&E>', ']]>', '\n',
+        '<!-- ', ' -->', '<![CDATA[', '<?php ', '?>', '<!x>', '</ d>',
+        "<Director's Cut>", '<!DOC', '<!-', '-->',
+      ];
+      String describeAll(Parsed r) => [
+        ...r.channels.map(describeChannel),
+        ...r.programmes.map(describe),
+      ].join('\n');
+
+      for (var seed = 0; seed < 150; seed++) {
+        final rnd = Random(seed);
+        String text() => [
+          for (var i = rnd.nextInt(6); i > 0; i--)
+            pieces[rnd.nextInt(pieces.length)],
+        ].join();
+        final body = StringBuffer();
+        for (var i = 0; i < 5; i++) {
+          if (rnd.nextBool()) {
+            body.write(
+              '<channel id="ch$i"><display-name>${text()}</display-name>'
+              '</channel>',
+            );
+          }
+          final stop = rnd.nextBool() ? ' stop="2026101413${i}000"' : '';
+          body.write(
+            '<programme start="2026101412${i}000"$stop '
+            'channel="${rnd.nextBool() ? 'CH' : 'ch'}${i % 3}">'
+            '<title>${text()}</title><desc>${text()}</desc></programme>\n',
+          );
+        }
+        final bytes = utf8.encode(tv(body.toString()));
+        final whole = describeAll(await parseBytes(bytes, chunk: bytes.length));
+        for (final chunk in [1, 2, 5, 17]) {
+          expect(
+            describeAll(await parseBytes(bytes, chunk: chunk)),
+            whole,
+            reason: 'seed $seed, chunk $chunk',
+          );
+        }
+      }
+    });
+
+    test('markup cut at a chunk boundary is still carried', () async {
+      final long = 'a <b> -- ] ]] ? > ' * 20;
+      final xml = tv(
+        '<!DOCTYPE tv SYSTEM "xmltv.dtd">'
+        '<?xml-stylesheet href="x.xsl"?>'
+        '<?pi $long?>'
+        '${show('A', '<![CDATA[x <y> z]]> <!-- c --> <b>bold</b>')}'
+        '<!-- $long -->'
+        '${show('B', '<![CDATA[$long]]>')}'
+        '${show('C', 'c')}',
+      );
+      for (final chunk in [1, 2, 3, 5, 8, 13, 64]) {
+        final r = await parse(xml, chunk: chunk);
+        expect(r.programmes.map((p) => (p.title, p.desc)), [
+          ('A', 'x <y> z  bold'),
+          ('B', long.trim()),
+          ('C', 'c'),
+        ], reason: 'chunk $chunk');
+      }
     });
   });
 
