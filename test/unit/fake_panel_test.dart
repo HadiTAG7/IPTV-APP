@@ -27,8 +27,24 @@ void main() {
       final exp = int.parse(user['exp_date']! as String);
       expect(exp * 1000, greaterThan(DateTime.now().millisecondsSinceEpoch));
       final server = json['server_info'] as Map<String, Object?>;
+      expect(server['url'], '127.0.0.1');
       expect(server['port'], '${panel.port}');
       expect(server['timestamp_now'], isA<int>());
+      expect(panel.address, InternetAddress.loopbackIPv4);
+    });
+
+    test('server_info url and port both follow the Host header', () async {
+      Future<Map<String, Object?>> serverInfo(String host) async =>
+          ((await _get(panel.playerApiUrl(), headers: {'host': host})).json!
+                  as Map<String, Object?>)['server_info']
+              as Map<String, Object?>;
+
+      var server = await serverInfo('10.0.2.2:5555');
+      expect(server['url'], '10.0.2.2');
+      expect(server['port'], '5555');
+      server = await serverInfo('panel.example');
+      expect(server['url'], 'panel.example');
+      expect(server['port'], '80');
     });
 
     test('expired, banned and disabled accounts', () async {
@@ -428,6 +444,121 @@ void main() {
       addTearDown(() => panel.auth = FakeAuthMode.good);
       expect((await _get(panel.m3uUrl())).status, 403);
     });
+
+    test('names the download after the user', () async {
+      final res = await _get(panel.m3uUrl());
+      expect(
+        res.headers.value('content-disposition'),
+        'attachment; filename="tv_channels_user_plus.m3u"',
+      );
+    });
+  });
+
+  test('non-ASCII usernames work for get.php and streams', () async {
+    const user = 'مستخدم';
+    final encoded = Uri.encodeComponent(user);
+    final panel = await FakePanel.start(
+      mediaDir: null,
+      username: user,
+      liveCount: 2,
+      liveBytesPerSecond: 18800,
+    );
+    addTearDown(panel.close);
+    final res = await _get(panel.m3uUrl());
+    expect(res.status, 200);
+    expect(
+      res.headers.value('content-disposition'),
+      'attachment; filename="tv_channels_${encoded}_plus.m3u"',
+    );
+    expect(res.text, contains('/live/$encoded/pass/1001.ts\n'));
+    final user0 =
+        (await _json(panel.playerApiUrl()))['user_info']
+            as Map<String, Object?>;
+    expect(user0['username'], user);
+    final s = await _Stream.open(panel.liveUrl(1001));
+    addTearDown(s.close);
+    expect(s.status, 200);
+    await s.waitFor(188);
+  });
+
+  test('large catalogs stream M3U and XMLTV without stalling', () async {
+    final panel = await FakePanel.start(
+      mediaDir: null,
+      liveCount: 3000,
+      maxConnections: 0,
+      liveBytesPerSecond: 18800,
+    );
+    addTearDown(panel.close);
+    // Timers and other sockets keep running while the guide is generated.
+    var last = DateTime.now();
+    var maxGap = Duration.zero;
+    final ticker = Timer.periodic(const Duration(milliseconds: 5), (_) {
+      final now = DateTime.now();
+      final gap = now.difference(last);
+      if (gap > maxGap) maxGap = gap;
+      last = now;
+    });
+    addTearDown(ticker.cancel);
+    final live = await _Stream.open(panel.liveUrl(1001));
+    addTearDown(live.close);
+    await live.waitFor(188);
+
+    final res = await _get(panel.xmltvUrl);
+    ticker.cancel();
+    expect(maxGap, lessThan(const Duration(milliseconds: 250)));
+    expect(res.headers.contentType?.mimeType, 'application/gzip');
+    final xml = utf8.decode(gzip.decode(res.body));
+    expect('<channel '.allMatches(xml), hasLength(3000));
+    // Odd channels: 24 one-hour slots; even channels: 48 half-hour slots
+    // (one more of each when the clock is not on a slot boundary).
+    expect(
+      '<programme '.allMatches(xml).length,
+      inInclusiveRange(1500 * 72, 1500 * 74),
+    );
+    expect(xml, endsWith('</tv>\n'));
+    expect(live.done.isCompleted, isFalse);
+
+    final m3u = await _get(panel.m3uUrl());
+    final lines = const LineSplitter().convert(m3u.text);
+    expect(
+      lines.where((l) => l.startsWith('#EXTINF')),
+      hasLength(3000 + 30 + 60),
+    );
+    expect(lines.last, startsWith('${panel.baseUrl}/series/'));
+  });
+
+  test('an aborted guide download leaves the panel serving', () async {
+    final panel = await FakePanel.start(mediaDir: null, liveCount: 3000);
+    addTearDown(panel.close);
+    final client = HttpClient();
+    final res = await (await client.getUrl(Uri.parse(panel.xmltvUrl))).close();
+    final first = Completer<void>();
+    final sub = res.listen((_) {
+      if (!first.isCompleted) first.complete();
+    }, onError: (Object _) {});
+    await first.future;
+    await sub.cancel();
+    client.close(force: true);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect((await _get(panel.playerApiUrl())).status, 200);
+    expect((await _get(panel.plainEpgUrl)).status, 200);
+  });
+
+  test('epgSpan limits how far ahead the guide reaches', () async {
+    final now = DateTime.utc(2026, 1, 1, 12);
+    final panel = await FakePanel.start(
+      mediaDir: null,
+      liveCount: 4,
+      epgSpan: const Duration(hours: 2),
+      now: () => now,
+    );
+    addTearDown(panel.close);
+    final xml = XmlDocument.parse((await _get(panel.plainEpgUrl)).text);
+    // 2 one-hour slots on odd channels, 4 half-hour slots on even ones.
+    expect(xml.findAllElements('programme'), hasLength(2 * 2 + 2 * 4));
+    expect(panel.programmes(panel.catalog.live.first), hasLength(2));
+    await _get('${panel.baseUrl}/__config?epgHours=1');
+    expect(panel.epgSpan, const Duration(hours: 1));
   });
 
   group('XMLTV', () {
@@ -583,11 +714,26 @@ void main() {
         );
         expect(stats.activeConnections, 1);
         expect(stats.maxConcurrentSeen, 1);
+        // The refused requests show the client tried to hold two at once.
+        expect(stats.maxConcurrentAttempted, 2);
         expect(stats.maxOpenStreamsSeen, 2);
         expect(stats.rejectedStreams, 2);
         expect(stats.acceptedStreams, 3);
       },
     );
+
+    test('sequential zaps keep maxConcurrentAttempted at 1', () async {
+      for (final id in [1001, 1002, 1003]) {
+        final s = await _Stream.open(panel.liveUrl(id));
+        expect(s.status, 200);
+        await s.waitFor(188);
+        await s.close();
+        await panel.waitForStats((st) => st.activeConnections == 0);
+      }
+      final stats = panel.stats;
+      expect(stats.maxConcurrentAttempted, 1);
+      expect(stats.rejectedStreams, 0);
+    });
 
     test('maxConnections 2 admits two channels; 0 is unlimited', () async {
       panel.maxConnections = 2;
@@ -610,16 +756,86 @@ void main() {
   group('HLS', () {
     late FakePanel panel;
     var now = DateTime.utc(2026, 1, 1);
+    const session = Duration(seconds: 1);
     setUp(() async {
       now = DateTime.utc(2026, 1, 1);
       panel = await FakePanel.start(
         mediaDir: null,
         liveBytesPerSecond: 18800,
         hlsWindowSize: 3,
+        hlsSessionTimeout: session,
         now: () => now,
       );
     });
     tearDown(() => panel.close());
+
+    test('an HLS viewer holds its connection between requests', () async {
+      final base = panel.baseUrl;
+      expect((await _get(panel.liveUrl(1001, ext: 'm3u8'))).status, 200);
+      var stats = panel.stats;
+      expect(stats.activeConnections, 1);
+      expect(stats.openStreams, 0);
+      expect(
+        (await _json(panel.playerApiUrl()))['user_info'],
+        containsPair('active_cons', '1'),
+      );
+
+      // Idle between requests, as a player is: still one connection.
+      await Future<void>.delayed(session * 0.6);
+      expect(panel.stats.activeConnections, 1);
+      expect((await _get(panel.liveUrl(1002))).status, 403);
+      expect((await _get('$base/hls/1001/0.ts')).status, 200);
+      // The segment extended the session past the playlist's expiry.
+      await Future<void>.delayed(session * 0.6);
+      expect(panel.stats.activeConnections, 1);
+
+      // The player stopped: the panel releases it after the timeout.
+      await panel.waitForStats((s) => s.activeConnections == 0);
+      final s = await _Stream.open(panel.liveUrl(1002));
+      addTearDown(s.close);
+      expect(s.status, 200);
+      await s.waitFor(188);
+      stats = panel.stats;
+      expect(stats.maxConcurrentSeen, 1);
+      expect(stats.maxConcurrentAttempted, 2);
+      expect(stats.rejectedStreams, 1);
+    });
+
+    test('chaos drop, panel.close and a zero timeout end sessions', () async {
+      expect((await _get(panel.liveUrl(1001, ext: 'm3u8'))).status, 200);
+      expect(panel.stats.activeConnections, 1);
+      panel.setChaos(FakeChaosMode.drop);
+      expect(panel.stats.activeConnections, 0);
+      expect((await _get(panel.liveUrl(1002, ext: 'm3u8'))).status, 200);
+
+      panel.hlsSessionTimeout = Duration.zero;
+      panel.setChaos(FakeChaosMode.drop);
+      expect((await _get(panel.liveUrl(1001, ext: 'm3u8'))).status, 200);
+      expect((await _get('${panel.baseUrl}/hls/1001/0.ts')).status, 200);
+      expect(panel.stats.activeConnections, 0);
+
+      panel.hlsSessionTimeout = const Duration(minutes: 1);
+      expect((await _get(panel.liveUrl(1001, ext: 'm3u8'))).status, 200);
+      expect(panel.stats.activeConnections, 1);
+      await panel.close();
+      expect(panel.stats.activeConnections, 0);
+    });
+
+    test('blocked accounts get 403 for segments too', () async {
+      final seg = '${panel.baseUrl}/hls/1001/0.ts';
+      for (final mode in [
+        FakeAuthMode.banned,
+        FakeAuthMode.expired,
+        FakeAuthMode.disabled,
+      ]) {
+        panel.auth = mode;
+        expect((await _get(seg)).status, 403, reason: mode.name);
+        expect((await _get(seg, method: 'HEAD')).status, 403);
+        expect((await _get(panel.liveUrl(1001, ext: 'm3u8'))).status, 403);
+      }
+      panel.auth = FakeAuthMode.good;
+      expect((await _get(seg)).status, 200);
+    });
 
     test('playlist slides with the clock', () async {
       final url = panel.liveUrl(1001, ext: 'm3u8');
@@ -895,6 +1111,7 @@ void main() {
       expect(after.requestsByPath, isEmpty);
       expect(after.activeConnections, 1);
       expect(after.maxConcurrentSeen, 1);
+      expect(after.maxConcurrentAttempted, 1);
     });
 
     test('waitForStats times out', () async {
@@ -924,6 +1141,7 @@ void main() {
       syntheticVodBytes: 100,
     );
     addTearDown(panel.close);
+    expect(panel.address, InternetAddress.anyIPv4);
     expect(panel.liveUrl(1001), contains('/live/a%20b/p%40ss%2F1/1001.ts'));
     final user =
         (await _json(panel.playerApiUrl()))['user_info']
@@ -932,6 +1150,25 @@ void main() {
     expect((await _get(panel.movieUrl(2001))).status, 200);
     final m3u = await _get(panel.m3uUrl());
     expect(m3u.text, contains('/live/a%20b/p%40ss%2F1/1001.ts'));
+
+    // Reachable through a non-loopback interface, when the host has one.
+    final interfaces = await NetworkInterface.list(
+      type: InternetAddressType.IPv4,
+    );
+    final external = interfaces
+        .expand((i) => i.addresses)
+        .where((a) => !a.isLoopback)
+        .firstOrNull;
+    if (external != null) {
+      final url = panel.playerApiUrl().replaceFirst(
+        '127.0.0.1',
+        external.address,
+      );
+      final res = await _get(url);
+      expect(res.status, 200);
+      final server = (res.json! as Map<String, Object?>)['server_info'];
+      expect(server, containsPair('url', external.address));
+    }
   });
 
   group('TsLoop', () {
@@ -1049,6 +1286,7 @@ void main() {
       final panel = await FakePanel.start(
         mediaDir: dir.path,
         hlsSegmentDuration: const Duration(milliseconds: 100),
+        hlsSessionTimeout: const Duration(milliseconds: 500),
         now: () => DateTime.utc(2026),
       );
       addTearDown(panel.close);
@@ -1072,6 +1310,9 @@ void main() {
       expect(text, contains('#EXTINF:0.080,\n/hls/1001/1.ts\n'));
       final seg = await _get('${panel.baseUrl}/hls/1001/1.ts');
       expect(seg.body, hasLength(5 * 188));
+      // The HLS viewer holds the only connection until its session ends.
+      expect((await _get(panel.movieUrl(2002))).status, 403);
+      await panel.waitForStats((st) => st.activeConnections == 0);
 
       final vod = await _get(
         panel.movieUrl(2002),
@@ -1080,6 +1321,53 @@ void main() {
       expect(vod.headers.value('content-range'), 'bytes 100-103/3000');
       expect(vod.body, [for (var i = 100; i < 104; i++) (i * 7) & 0xFF]);
     });
+
+    test('VOD is read from disk per request, not cached whole', () async {
+      final panel = await FakePanel.start(mediaDir: dir.path);
+      addTearDown(panel.close);
+      final file = File('${dir.path}/vod_2audio_ara_eng_srt.mkv');
+      var res = await _get(panel.movieUrl(2001));
+      expect(res.body, hasLength(3000));
+      expect(res.body.sublist(0, 3), [0, 7, 14]);
+      // Same length, new bytes: the next request serves them.
+      file.writeAsBytesSync(List.filled(3000, 0xAB));
+      res = await _get(panel.movieUrl(2001), headers: {'range': 'bytes=2990-'});
+      expect(res.status, 206);
+      expect(res.body, List.filled(10, 0xAB));
+    });
+
+    test(
+      'large VOD files are served without loading them',
+      skip: Platform.isWindows ? 'needs sparse files' : false,
+      () async {
+        const size = 3 << 30; // 3 GiB, sparse.
+        final file = File('${dir.path}/vod_2audio_ara_eng_srt.mkv');
+        final raf = file.openSync(mode: FileMode.write)
+          ..truncateSync(size)
+          ..setPositionSync(size - 4)
+          ..writeFromSync([1, 2, 3, 4]);
+        raf.closeSync();
+        final panel = await FakePanel.start(mediaDir: dir.path);
+        addTearDown(panel.close);
+        final rss = ProcessInfo.currentRss;
+
+        var res = await _get(panel.movieUrl(2001), method: 'HEAD');
+        expect(res.headers.contentLength, size);
+        res = await _get(panel.movieUrl(2001), headers: {'range': 'bytes=-6'});
+        expect(res.status, 206);
+        expect(
+          res.headers.value('content-range'),
+          'bytes ${size - 6}-${size - 1}/$size',
+        );
+        expect(res.body, [0, 0, 1, 2, 3, 4]);
+        res = await _get(
+          panel.movieUrl(2001),
+          headers: {'range': 'bytes=${1 << 31}-${(1 << 31) + 99}'},
+        );
+        expect(res.body, List.filled(100, 0));
+        expect(ProcessInfo.currentRss - rss, lessThan(256 << 20));
+      },
+    );
   });
 }
 
@@ -1101,7 +1389,7 @@ Future<_Res> _get(
   Map<String, String> headers = const {},
   String method = 'GET',
 }) async {
-  final client = HttpClient();
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
   try {
     final req = await client.openUrl(method, Uri.parse(url));
     headers.forEach(req.headers.set);

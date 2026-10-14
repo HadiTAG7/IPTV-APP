@@ -6,6 +6,7 @@
 ///   [--auth good|expired|banned|disabled|auth0WithHttp200|emptyArray]
 ///   [--media-dir test/media] [--no-media] [--bytes-per-second N]
 ///   [--full-list-delay-ms N] [--hls-segment-seconds 2]
+///   [--hls-session-ms N] [--epg-hours 24]
 /// ```
 ///
 /// `--public` binds all interfaces so an Android emulator can reach the panel
@@ -31,6 +32,9 @@ Usage: dart run tool/fake_panel.dart [options]
   --bytes-per-second N     Live TS rate (default: media bitrate)
   --full-list-delay-ms N   Delay full catalog lists (per-category stays fast)
   --hls-segment-seconds N  HLS segment length (default 2)
+  --hls-session-ms N       Idle time before an HLS viewer's connection is
+                           released (default 2 segments; 0 = per request)
+  --epg-hours N            How far ahead xmltv.php lists programmes (default 24)
   --help                   Show this help''';
 
 Future<void> main(List<String> args) async {
@@ -80,6 +84,8 @@ Future<void> main(List<String> args) async {
     final series = intOpt('series', 10);
     final delayMs = intOpt('full-list-delay-ms', 0);
     final hlsSeconds = intOpt('hls-segment-seconds', 2);
+    final hlsSessionMs = intOpt('hls-session-ms', -1);
+    final epgHours = intOpt('epg-hours', 24);
     if (opts.isNotEmpty) {
       throw FormatException('Unknown option --${opts.keys.first}');
     }
@@ -96,6 +102,10 @@ Future<void> main(List<String> args) async {
       fullListDelay: Duration(milliseconds: delayMs),
       liveBytesPerSecond: bps > 0 ? bps : null,
       hlsSegmentDuration: Duration(seconds: hlsSeconds < 1 ? 1 : hlsSeconds),
+      hlsSessionTimeout: hlsSessionMs < 0
+          ? null
+          : Duration(milliseconds: hlsSessionMs),
+      epgSpan: Duration(hours: epgHours),
       mediaDir: flags.contains('no-media') ? null : mediaDir,
     );
   } on FormatException catch (e) {

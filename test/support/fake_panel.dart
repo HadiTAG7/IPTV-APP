@@ -354,6 +354,7 @@ class FakePanelStats {
   const FakePanelStats({
     required this.activeConnections,
     required this.maxConcurrentSeen,
+    required this.maxConcurrentAttempted,
     required this.openStreams,
     required this.maxOpenStreamsSeen,
     required this.acceptedStreams,
@@ -374,6 +375,7 @@ class FakePanelStats {
     return FakePanelStats(
       activeConnections: i('activeConnections'),
       maxConcurrentSeen: i('maxConcurrentSeen'),
+      maxConcurrentAttempted: i('maxConcurrentAttempted'),
       openStreams: i('openStreams'),
       maxOpenStreamsSeen: i('maxOpenStreamsSeen'),
       acceptedStreams: i('acceptedStreams'),
@@ -387,9 +389,18 @@ class FakePanelStats {
   }
 
   /// Connections as the panel counts them: concurrent requests for the same
-  /// stream from the same client address count once.
+  /// stream from the same client address count once, and an HLS viewer
+  /// holds its connection until `hlsSessionTimeout` after its last request.
   final int activeConnections;
+
+  /// Peak of [activeConnections]; never above `maxConnections`, because
+  /// refused requests are not admitted.
   final int maxConcurrentSeen;
+
+  /// Peak number of connections a client tried to hold at once, counting
+  /// refused (403) requests. Use this, not [maxConcurrentSeen], to catch a
+  /// client that opens a stream before releasing the previous one.
+  final int maxConcurrentAttempted;
 
   /// Raw open stream responses (sockets), without grouping.
   final int openStreams;
@@ -420,6 +431,7 @@ class FakePanelStats {
   Map<String, Object?> toJson() => {
     'activeConnections': activeConnections,
     'maxConcurrentSeen': maxConcurrentSeen,
+    'maxConcurrentAttempted': maxConcurrentAttempted,
     'openStreams': openStreams,
     'maxOpenStreamsSeen': maxOpenStreamsSeen,
     'acceptedStreams': acceptedStreams,
@@ -452,6 +464,8 @@ class FakePanel {
     required this.liveBurst,
     required this.hlsSegmentDuration,
     required this.hlsWindowSize,
+    required this.hlsSessionTimeout,
+    required this.epgSpan,
     required this.mediaDir,
     required this.liveMediaFile,
     required this.liveMediaOverrides,
@@ -483,6 +497,9 @@ class FakePanel {
   ///
   /// [maxConnections] of 0 or less means unlimited. [liveBytesPerSecond]
   /// defaults to the media file's own bitrate (128 KiB/s when synthetic).
+  /// An HLS viewer keeps its connection until [hlsSessionTimeout] (default
+  /// twice [hlsSegmentDuration]) after its last playlist or segment request.
+  /// [epgSpan] is how far ahead `xmltv.php` lists programmes.
   static Future<FakePanel> start({
     String username = 'user',
     String password = 'pass',
@@ -499,6 +516,8 @@ class FakePanel {
     Duration liveBurst = const Duration(seconds: 1),
     Duration hlsSegmentDuration = const Duration(seconds: 2),
     int hlsWindowSize = 4,
+    Duration? hlsSessionTimeout,
+    Duration epgSpan = const Duration(hours: 24),
     String? mediaDir = 'test/media',
     String liveMediaFile = 'h264_aac.ts',
     Map<int, String> liveMediaOverrides = defaultLiveMediaOverrides,
@@ -529,6 +548,8 @@ class FakePanel {
       liveBurst: liveBurst,
       hlsSegmentDuration: hlsSegmentDuration,
       hlsWindowSize: math.max(1, hlsWindowSize),
+      hlsSessionTimeout: hlsSessionTimeout ?? hlsSegmentDuration * 2,
+      epgSpan: epgSpan,
       mediaDir: mediaDir,
       liveMediaFile: liveMediaFile,
       liveMediaOverrides: liveMediaOverrides,
@@ -569,7 +590,15 @@ class FakePanel {
   Duration fullListDelay;
   int? liveBytesPerSecond;
 
+  /// Idle time after which an HLS viewer's connection is released; zero
+  /// counts HLS requests only while they are in flight.
+  Duration hlsSessionTimeout;
+  Duration epgSpan;
+
   final _leases = <_Lease>{};
+
+  /// Expiry timers of HLS viewers by connection key.
+  final _hlsSessions = <String, Timer>{};
   final _tsCache = <String, TsLoop>{};
   _VodBody? _vodBody;
   bool _closed = false;
@@ -578,6 +607,7 @@ class FakePanel {
   Timer? _chaosTimer;
 
   int _maxConcurrent = 0;
+  int _maxAttempted = 0;
   int _maxOpen = 0;
   int _accepted = 0;
   int _rejected = 0;
@@ -587,6 +617,9 @@ class FakePanel {
   final _referers = <String, String>{};
 
   int get port => _server.port;
+
+  /// Address the server is bound to (loopback, or `0.0.0.0` with anyIPv4).
+  InternetAddress get address => _server.address;
 
   /// Loopback URL of the panel, e.g. `http://127.0.0.1:41234`.
   String get baseUrl => 'http://127.0.0.1:${_server.port}';
@@ -625,21 +658,20 @@ class FakePanel {
       '$baseUrl/series/$_u/$_p/$episodeId.'
       '${ext ?? catalog.episodeById(episodeId)?.ext ?? 'mp4'}';
 
-  /// Guide for [channel] relative to the panel clock.
-  List<FakeProgramme> programmes(
-    FakeChannel channel, {
-    Duration span = const Duration(hours: 24),
-  }) => catalog.programmesFor(channel, _now(), span: span);
+  /// Guide for [channel] relative to the panel clock, [epgSpan] by default.
+  List<FakeProgramme> programmes(FakeChannel channel, {Duration? span}) =>
+      catalog.programmesFor(channel, _now(), span: span ?? epgSpan);
 
   /// Whether live stream [streamId] is backed by a real media file.
   bool liveUsesMediaFile(int streamId) => !_liveSource(streamId).isSynthetic;
 
   /// Whether VOD is backed by a real media file.
-  bool get vodUsesMediaFile => _vod() is _BytesBody;
+  bool get vodUsesMediaFile => _vod() is _FileBody;
 
   FakePanelStats get stats => FakePanelStats(
     activeConnections: _activeKeys.length,
     maxConcurrentSeen: _maxConcurrent,
+    maxConcurrentAttempted: _maxAttempted,
     openStreams: _leases.where((l) => l.isStream).length,
     maxOpenStreamsSeen: _maxOpen,
     acceptedStreams: _accepted,
@@ -654,6 +686,7 @@ class FakePanel {
   /// Clears counters; open connections stay counted as active.
   void resetStats() {
     _maxConcurrent = _activeKeys.length;
+    _maxAttempted = _maxConcurrent;
     _maxOpen = _leases.where((l) => l.isStream).length;
     _accepted = 0;
     _rejected = 0;
@@ -682,7 +715,7 @@ class FakePanel {
   /// Injects a stream fault, replacing any previous one.
   ///
   /// - [FakeChaosMode.drop]: after [after], destroys every open stream socket
-  ///   once, then returns to [FakeChaosMode.off].
+  ///   and forgets HLS viewers once, then returns to [FakeChaosMode.off].
   /// - [FakeChaosMode.forbidden]: new stream requests get 403.
   /// - [FakeChaosMode.stall]: streams send no bytes (sockets stay open).
   ///
@@ -702,6 +735,7 @@ class FakePanel {
         void fire() {
           _chaosTimer = null;
           _chaos = FakeChaosMode.off;
+          _endHlsSessions();
           for (final l in _leases.where((l) => l.isStream).toList()) {
             l.close();
           }
@@ -726,6 +760,7 @@ class FakePanel {
     if (_closed) return;
     _closed = true;
     _chaosTimer?.cancel();
+    _endHlsSessions();
     for (final l in _leases.toList()) {
       l.close();
     }
@@ -916,8 +951,9 @@ class FakePanel {
         'allowed_output_formats': allowedOutputFormats,
       },
       'server_info': {
+        // Both follow the Host header, like every generated URL.
         'url': req.headers.host ?? '127.0.0.1',
-        'port': '$port',
+        'port': '${req.headers.port ?? port}',
         'https_port': '',
         'server_protocol': 'http',
         'rtmp_port': '',
@@ -1139,27 +1175,35 @@ class FakePanel {
     final output = q['output'] ?? 'ts';
     final liveExt = (output == 'm3u8' || output == 'hls') ? 'm3u8' : 'ts';
     final epg = '$origin/xmltv.php?$_creds';
-    final b = StringBuffer(
-      plus ? '#EXTM3U url-tvg="$epg" x-tvg-url="$epg"\n' : '#EXTM3U\n',
-    );
-    void entry(
+    // Header values must be ASCII; percent-encode non-ASCII usernames.
+    final file =
+        'tv_channels_${Uri.encodeComponent(username)}_'
+        '${plus ? 'plus' : 'm3u'}.m3u';
+    final res = req.response
+      ..headers.contentType = ContentType('application', 'octet-stream')
+      ..headers.set('content-disposition', 'attachment; filename="$file"');
+    final w = _SliceWriter(res)
+      ..writeln(plus ? '#EXTM3U url-tvg="$epg" x-tvg-url="$epg"' : '#EXTM3U');
+    Future<void> entry(
       String name,
       String url, {
       String id = '',
       String logo = '',
       String group = '',
-    }) {
-      b.writeln(
-        plus
-            ? '#EXTINF:-1 tvg-id="$id" tvg-name="$name" tvg-logo="$logo" '
-                  'group-title="$group",$name'
-            : '#EXTINF:-1,$name',
-      );
-      b.writeln(url);
+    }) async {
+      w
+        ..writeln(
+          plus
+              ? '#EXTINF:-1 tvg-id="$id" tvg-name="$name" tvg-logo="$logo" '
+                    'group-title="$group",$name'
+              : '#EXTINF:-1,$name',
+        )
+        ..writeln(url);
+      if (w.isFull) await w.flush();
     }
 
     for (final c in catalog.live) {
-      entry(
+      await entry(
         c.name,
         '$origin/live/$_u/$_p/${c.id}.$liveExt',
         id: c.epgId ?? '',
@@ -1168,7 +1212,7 @@ class FakePanel {
       );
     }
     for (final m in catalog.movies) {
-      entry(
+      await entry(
         m.name,
         '$origin/movie/$_u/$_p/${m.id}.${m.ext}',
         group: catalog.categoryName(m.categoryId),
@@ -1176,47 +1220,31 @@ class FakePanel {
     }
     for (final s in catalog.series) {
       for (final e in s.episodes) {
-        entry(
+        await entry(
           '${s.name} S${_two(e.season)} E${_two(e.number)}',
           '$origin/series/$_u/$_p/${e.id}.${e.ext}',
           group: catalog.categoryName(s.categoryId),
         );
       }
     }
-    final res = req.response
-      ..headers.contentType = ContentType('application', 'octet-stream')
-      ..headers.set(
-        'content-disposition',
-        'attachment; filename="tv_channels_${username}_${plus ? 'plus' : 'm3u'}.m3u"',
-      );
-    res.add(utf8.encode(b.toString()));
-    await res.close();
+    await w.close();
   }
 
+  /// Streams the guide in slices, so a large catalog neither blocks other
+  /// requests nor builds the whole document in memory.
   Future<void> _xmltv(HttpRequest req, {required bool gzipped}) async {
     if (gzipped) {
       final q = req.uri.queryParameters;
       final err = _accessError(q['username'], q['password']);
       if (err != null) return _text(req, err, 'Access denied');
     }
-    final bytes = utf8.encode(_buildXmltv(_origin(req)));
-    final res = req.response;
-    if (gzipped) {
-      res.headers.contentType = ContentType('application', 'gzip');
-      res.add(gzip.encode(bytes));
-    } else {
-      res.headers.contentType = ContentType(
-        'application',
-        'xml',
-        charset: 'utf-8',
-      );
-      res.add(bytes);
-    }
-    await res.close();
-  }
-
-  String _buildXmltv(String origin) {
-    final b = StringBuffer()
+    final origin = _origin(req);
+    final now = _now();
+    final res = req.response
+      ..headers.contentType = gzipped
+          ? ContentType('application', 'gzip')
+          : ContentType('application', 'xml', charset: 'utf-8');
+    final w = _SliceWriter(res, gzipped: gzipped)
       ..writeln('<?xml version="1.0" encoding="UTF-8"?>')
       ..writeln('<!DOCTYPE tv SYSTEM "xmltv.dtd">')
       ..writeln(
@@ -1224,17 +1252,18 @@ class FakePanel {
         'generator-info-url="${_xml(origin)}">',
       );
     for (final c in catalog.live) {
-      b.writeln(
+      w.writeln(
         '  <channel id="${_xml(c.xmltvId)}">'
         '<display-name>${_xml(c.name)}</display-name>'
         '<icon src="${_xml('$origin/logo/live${c.id}.png')}"/></channel>',
       );
+      if (w.isFull) await w.flush();
     }
     for (final c in catalog.live) {
       // Every third channel uses a +0300 local offset for the same instants.
       final offset = c.index % 3 == 0 ? 180 : 0;
-      for (final p in programmes(c)) {
-        b.writeln(
+      for (final p in catalog.programmesFor(c, now, span: epgSpan)) {
+        w.writeln(
           '  <programme start="${_xmltvTime(p.start, offset)}" '
           'stop="${_xmltvTime(p.stop, offset)}" channel="${_xml(c.xmltvId)}">'
           '<title lang="${p.lang}">${_xml(p.title)}</title>'
@@ -1243,23 +1272,29 @@ class FakePanel {
           '</category></programme>',
         );
       }
+      if (w.isFull) await w.flush();
     }
-    b.writeln('</tv>');
-    return b.toString();
+    w.writeln('</tv>');
+    await w.close();
   }
 
   // ---------------------------------------------------------------- streams
 
-  Set<String> get _activeKeys => {for (final l in _leases) l.key};
+  Set<String> get _activeKeys => {
+    for (final l in _leases) l.key,
+    ..._hlsSessions.keys,
+  };
 
   /// Admits a stream request or returns null after answering 403.
   Future<_Lease?> _acquire(HttpRequest req, String stream) async {
     final key = '${req.connectionInfo?.remoteAddress.address ?? '?'}|$stream';
     final active = _activeKeys;
+    final held = active.contains(key);
     final overLimit =
-        maxConnections > 0 &&
-        !active.contains(key) &&
-        active.length >= maxConnections;
+        maxConnections > 0 && !held && active.length >= maxConnections;
+    if (!_closed) {
+      _maxAttempted = math.max(_maxAttempted, active.length + (held ? 0 : 1));
+    }
     if (_chaos == FakeChaosMode.forbidden || overLimit || _closed) {
       _rejected++;
       await _text(
@@ -1358,9 +1393,29 @@ class FakePanel {
   int _hlsFirstSequence(TsLoop src) =>
       src.segmentAt(_now().difference(_startedAt), hlsSegmentDuration);
 
+  /// Starts or extends the HLS viewer session [key]. With [create] false,
+  /// only a session that still exists is extended (a chaos drop ends it).
+  void _touchHls(String key, {bool create = true}) {
+    final old = _hlsSessions.remove(key);
+    old?.cancel();
+    if (_closed || hlsSessionTimeout <= Duration.zero) return;
+    if (old == null && !create) return;
+    _hlsSessions[key] = Timer(hlsSessionTimeout, () {
+      _hlsSessions.remove(key);
+    });
+  }
+
+  void _endHlsSessions() {
+    for (final t in _hlsSessions.values) {
+      t.cancel();
+    }
+    _hlsSessions.clear();
+  }
+
   Future<void> _hlsPlaylist(HttpRequest req, FakeChannel ch) async {
     final lease = await _acquire(req, 'hls:${ch.id}');
     if (lease == null) return;
+    _touchHls(lease.key);
     try {
       final src = _liveSource(ch.id);
       final rate = _liveRate(src);
@@ -1390,10 +1445,12 @@ class FakePanel {
       await res.close();
     } finally {
       lease.close();
+      _touchHls(lease.key, create: false);
     }
   }
 
   Future<void> _hlsSegment(HttpRequest req) async {
+    if (_blocked) return _text(req, HttpStatus.forbidden, 'Access denied');
     final segs = req.uri.pathSegments;
     final ch = catalog.channelById(int.tryParse(segs[1]));
     final (seq, ext) = _idExt(segs[2]);
@@ -1416,20 +1473,25 @@ class FakePanel {
     }
     final lease = await _acquire(req, 'hls:${ch.id}');
     if (lease == null) return;
-    setHeaders(req.response);
-    final socket = await _detach(req.response, lease);
-    if (socket == null) return;
-    const chunk = 256;
-    for (var i = 0; i < seg.packetCount && !lease.closed;) {
-      if (_stalled) {
-        await Future<void>.delayed(const Duration(milliseconds: 25));
-        continue;
+    _touchHls(lease.key);
+    try {
+      setHeaders(req.response);
+      final socket = await _detach(req.response, lease);
+      if (socket == null) return;
+      const chunk = 256;
+      for (var i = 0; i < seg.packetCount && !lease.closed;) {
+        if (_stalled) {
+          await Future<void>.delayed(const Duration(milliseconds: 25));
+          continue;
+        }
+        final n = math.min(chunk, seg.packetCount - i);
+        if (!await lease.write(src.read(seg.firstPacket + i, n))) break;
+        i += n;
       }
-      final n = math.min(chunk, seg.packetCount - i);
-      if (!await lease.write(src.read(seg.firstPacket + i, n))) break;
-      i += n;
+      await lease.finish();
+    } finally {
+      _touchHls(lease.key, create: false);
     }
-    await lease.finish();
   }
 
   Future<void> _vodStream(HttpRequest req, List<String> segs) async {
@@ -1476,15 +1538,11 @@ class FakePanel {
     setHeaders(req.response);
     final socket = await _detach(req.response, lease);
     if (socket == null) return;
-    const chunk = 64 * 1024;
-    for (var pos = start; pos <= end && !lease.closed;) {
-      if (_stalled) {
+    await for (final bytes in body.range(start, end, 64 * 1024)) {
+      while (_stalled && !lease.closed) {
         await Future<void>.delayed(const Duration(milliseconds: 25));
-        continue;
       }
-      final n = math.min(chunk, end - pos + 1);
-      if (!await lease.write(body.read(pos, n))) break;
-      pos += n;
+      if (!await lease.write(bytes)) break;
     }
     await lease.finish();
   }
@@ -1531,7 +1589,7 @@ class FakePanel {
 
   _VodBody _vod() => _vodBody ??= () {
     final file = _mediaFile(vodMediaFile);
-    if (file != null) return _BytesBody(file.readAsBytesSync());
+    if (file != null) return _FileBody(file, file.lengthSync());
     return _SyntheticBody(syntheticVodBytes);
   }();
 
@@ -1585,11 +1643,19 @@ class FakePanel {
     if (int.tryParse(q['liveBytesPerSecond'] ?? '') case final n?) {
       liveBytesPerSecond = n > 0 ? n : null;
     }
+    if (int.tryParse(q['hlsSessionTimeoutMs'] ?? '') case final n?) {
+      hlsSessionTimeout = Duration(milliseconds: n);
+    }
+    if (int.tryParse(q['epgHours'] ?? '') case final n?) {
+      epgSpan = Duration(hours: n);
+    }
     return _json(req, {
       'auth': auth.name,
       'maxConnections': maxConnections,
       'fullListDelayMs': fullListDelay.inMilliseconds,
       'liveBytesPerSecond': liveBytesPerSecond,
+      'hlsSessionTimeoutMs': hlsSessionTimeout.inMilliseconds,
+      'epgHours': epgSpan.inHours,
     });
   }
 
@@ -1697,20 +1763,36 @@ class _Lease {
 
 sealed class _VodBody {
   int get length;
-  Uint8List read(int start, int count);
+
+  /// Bytes `start..end` (inclusive) in chunks of at most [chunk] bytes.
+  Stream<Uint8List> range(int start, int end, int chunk);
 }
 
-class _BytesBody extends _VodBody {
-  _BytesBody(this._bytes);
+/// A media file read from disk chunk by chunk, so large files cost neither
+/// memory nor a blocked event loop.
+class _FileBody extends _VodBody {
+  _FileBody(this._file, this.length);
 
-  final Uint8List _bytes;
+  final File _file;
 
   @override
-  int get length => _bytes.length;
+  final int length;
 
   @override
-  Uint8List read(int start, int count) =>
-      Uint8List.sublistView(_bytes, start, start + count);
+  Stream<Uint8List> range(int start, int end, int chunk) async* {
+    final raf = await _file.open();
+    try {
+      await raf.setPosition(start);
+      for (var pos = start; pos <= end;) {
+        final bytes = await raf.read(math.min(chunk, end - pos + 1));
+        if (bytes.isEmpty) break; // The file shrank.
+        yield bytes;
+        pos += bytes.length;
+      }
+    } finally {
+      await raf.close();
+    }
+  }
 }
 
 class _SyntheticBody extends _VodBody {
@@ -1720,13 +1802,73 @@ class _SyntheticBody extends _VodBody {
   final int length;
 
   @override
-  Uint8List read(int start, int count) {
-    final out = Uint8List(count);
-    for (var i = 0; i < count; i++) {
-      out[i] = FakePanel.syntheticVodByte(start + i);
+  Stream<Uint8List> range(int start, int end, int chunk) async* {
+    for (var pos = start; pos <= end; pos += chunk) {
+      final out = Uint8List(math.min(chunk, end - pos + 1));
+      for (var i = 0; i < out.length; i++) {
+        out[i] = FakePanel.syntheticVodByte(pos + i);
+      }
+      yield out;
     }
-    return out;
   }
+}
+
+/// Writes a large text body in slices, optionally gzipped, yielding to the
+/// event loop between slices.
+class _SliceWriter {
+  _SliceWriter(this._res, {bool gzipped = false})
+    : _gzip = gzipped
+          ? gzip.encoder.startChunkedConversion(_AddSink(_res))
+          : null;
+
+  static const _sliceChars = 64 * 1024;
+
+  final HttpResponse _res;
+  final ByteConversionSink? _gzip;
+  final _buf = StringBuffer();
+
+  /// Whether enough text is buffered for [flush].
+  bool get isFull => _buf.length >= _sliceChars;
+
+  void writeln(String line) => _buf.writeln(line);
+
+  /// Sends the buffer, waits for the socket, then lets other events run.
+  Future<void> flush() async {
+    _send();
+    await _res.flush();
+    // A drained flush completes as a microtask; yield to timers and I/O too.
+    await Future<void>.delayed(Duration.zero);
+  }
+
+  Future<void> close() async {
+    _send();
+    _gzip?.close();
+    await _res.close();
+  }
+
+  void _send() {
+    if (_buf.isEmpty) return;
+    final bytes = utf8.encode(_buf.toString());
+    _buf.clear();
+    final gz = _gzip;
+    if (gz != null) {
+      gz.add(bytes);
+    } else {
+      _res.add(bytes);
+    }
+  }
+}
+
+class _AddSink implements Sink<List<int>> {
+  _AddSink(this._target);
+
+  final IOSink _target;
+
+  @override
+  void add(List<int> data) => _target.add(data);
+
+  @override
+  void close() {}
 }
 
 /// One HLS segment of a [TsLoop]: packets in the endless stream.
