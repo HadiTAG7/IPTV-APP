@@ -910,6 +910,72 @@ void main() {
     expect(http.calls.last, 'get_short_epg?stream_id=101&limit=5');
   });
 
+  group('invalid server address', () {
+    for (final url in ['host:8O80', 'host:80,', 'http://host:8080:8080']) {
+      test("'$url' fails every call with a redacted ParseFailure", () async {
+        final http = fullPanel();
+        final adapter = makeAdapter(http, config: _config.copyWith(url: url));
+        final failures = [
+          await failureOf(adapter.verify()),
+          await failureOf(adapter.fetchCatalog().toList()),
+          await failureOf(adapter.seriesDetail('5001')),
+          await failureOf(adapter.movieDetail('1001')),
+          await failureOf(adapter.shortEpg('101')),
+        ];
+        for (final f in failures) {
+          expect(f, isA<ParseFailure>());
+          expect(f.message, startsWith('Invalid server address'));
+          for (final s in ['demo user', 'p@ss/w rd', _u, _p, 'p@ss']) {
+            expect(f.toString(), isNot(contains(s)));
+          }
+        }
+        expect(http.requests, isEmpty);
+      });
+    }
+  });
+
+  group('out-of-range timestamps', () {
+    test('a huge added date does not abort the sync', () async {
+      final http = FakeHttpAdapter({
+        'get_vod_categories': FakeReply.json([]),
+        'get_vod_streams': FakeReply.json([
+          {'stream_id': 1, 'name': 'Fine', 'added': '1700000000'},
+          {'stream_id': 2, 'name': 'Huge', 'added': '9999999999999999'},
+          {'stream_id': 3, 'name': 'Huger', 'added': '1e30'},
+        ]),
+      });
+      final batches = await makeAdapter(http)
+          .fetchCatalog(const SyncScope(live: false, series: false))
+          .toList();
+      final movies = itemsOf<MovieData>(batches);
+      expect(movies.map((m) => m.key), ['1', '2', '3']);
+      expect(movies.first.addedAt, DateTime.utc(2023, 11, 14, 22, 13, 20));
+      expect(movies[1].addedAt, isNull);
+      expect(movies[2].addedAt, isNull);
+      expect(describe(batches.last), 'done(movie)');
+    });
+
+    test('verify and shortEpg survive huge timestamps', () async {
+      final http = FakeHttpAdapter({
+        '': FakeReply.json({
+          'user_info': {'auth': 1, 'exp_date': '9999999999999999'},
+        }),
+        'get_short_epg': FakeReply.json({
+          'epg_listings': [
+            {
+              'title': 'VGVzdA==',
+              'start_timestamp': '9999999999999999',
+              'stop_timestamp': '99999999999999999',
+            },
+          ],
+        }),
+      });
+      final adapter = makeAdapter(http);
+      expect((await adapter.verify()).expiresAt, isNull);
+      expect(await adapter.shortEpg('1'), isEmpty);
+    });
+  });
+
   test('missing credentials do not crash', () {
     final adapter = makeAdapter(
       FakeHttpAdapter(),

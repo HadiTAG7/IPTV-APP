@@ -49,6 +49,15 @@ void main() {
         'Match: A vs B (Live)',
         '',
         '   ',
+        // Valid base64 of printable text by accident.
+        'Kids',
+        'Wild',
+        'UEFA',
+        'Infantil',
+        'TV',
+        'WWE',
+        'NFL',
+        'MTV',
       ]) {
         expect(decodeXtreamText(s), s, reason: s);
       }
@@ -134,6 +143,86 @@ void main() {
         ],
       });
       expect(list.map((p) => p.title), ['ok']);
+    });
+
+    group('base64 is decided per listing', () {
+      Map<String, Object?> entry(String title, [String? desc]) => {
+        'title': title,
+        'description': ?desc,
+        'start_timestamp': 1760443200,
+        'stop_timestamp': 1760446800,
+      };
+      String b64(String s) => base64.encode(utf8.encode(s));
+
+      test('plain words that happen to be base64 stay plain', () {
+        final list = parseShortEpg({
+          'epg_listings': [
+            entry('Kids', ''),
+            entry('Wild'),
+            entry('UEFA'),
+            entry('Infantil'),
+          ],
+        });
+        expect(list.map((p) => p.title), ['Kids', 'Wild', 'UEFA', 'Infantil']);
+      });
+
+      test('a plain description keeps plain words plain', () {
+        final list = parseShortEpg({
+          'epg_listings': [
+            entry('Kids', 'Cartoons for children.'),
+            entry('UEFA', 'Highlights'),
+          ],
+        });
+        expect(list.map((p) => p.title), ['Kids', 'UEFA']);
+        expect(list.first.desc, 'Cartoons for children.');
+        expect(list.last.desc, 'Highlights');
+      });
+
+      test('encodings that look like words decode in an encoded listing', () {
+        // 'ABC' encodes to 'QUJD' and 'TED' to 'VEVE'.
+        expect(b64('ABC'), 'QUJD');
+        final list = parseShortEpg({
+          'epg_listings': [entry('QUJD', b64('نشرة الأخبار')), entry('VEVE')],
+        });
+        expect(list.map((p) => p.title), ['ABC', 'TED']);
+        expect(list.first.desc, 'نشرة الأخبار');
+      });
+
+      test('one undecodable field does not stop the others', () {
+        final latin1 = base64.encode([0x50, 0x65, 0x6C, 0xED, 0x63, 0x75]);
+        final list = parseShortEpg({
+          'epg_listings': [
+            entry(b64('Evening Show'), latin1),
+            entry(latin1, b64('Late film')),
+          ],
+        });
+        expect(list.first.title, 'Evening Show');
+        expect(list.first.desc, latin1);
+        expect(list.last.title, latin1);
+        expect(list.last.desc, 'Late film');
+      });
+
+      test('words alone in an encoded-looking listing stay plain', () {
+        // Without any field that is clearly base64 nothing is decoded.
+        final list = parseShortEpg({
+          'epg_listings': [entry('QUJD')],
+        });
+        expect(list.single.title, 'QUJD');
+      });
+    });
+
+    test('huge timestamps are skipped, not thrown', () {
+      final list = parseShortEpg({
+        'epg_listings': [
+          {
+            'title': 'X',
+            'start_timestamp': '9999999999999999',
+            'stop_timestamp': '99999999999999999',
+          },
+          {'title': 'Y', 'start_timestamp': 100, 'stop_timestamp': '1e30'},
+        ],
+      });
+      expect(list, isEmpty);
     });
 
     test('garbage input gives an empty list', () {

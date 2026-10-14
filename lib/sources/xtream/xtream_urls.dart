@@ -5,7 +5,11 @@
 /// (the same encoding `redact` looks for).
 library;
 
+import '../../core/net/redact.dart';
+import '../models.dart';
+
 final _scheme = RegExp(r'^[a-zA-Z][a-zA-Z0-9+.\-]*://');
+final _trailingSlashes = RegExp(r'/+$');
 final _endpoint = RegExp(
   r'/(player_api|panel_api|get|xmltv)\.php$',
   caseSensitive: false,
@@ -20,6 +24,10 @@ class XtreamUrls {
   final String username;
   final String password;
 
+  /// [base] parsed, or null when it is not a usable `http(s)://host[:port]`
+  /// address (a typo such as `host:8O80` or `host:80,`).
+  late final Uri? baseUri = parseBase(base);
+
   String get _u => Uri.encodeComponent(username);
   String get _p => Uri.encodeComponent(password);
   String get _credQuery => 'username=$_u&password=$_p';
@@ -30,24 +38,52 @@ class XtreamUrls {
   static String normalizeBase(String input) {
     var s = input.trim();
     if (!_scheme.hasMatch(s)) s = 'http://$s';
-    final cut = s.indexOf(RegExp('[?#]'));
-    if (cut >= 0) s = s.substring(0, cut);
-    s = s.replaceFirst(RegExp(r'/+$'), '');
-    s = s.replaceFirst(_endpoint, '');
-    s = s.replaceFirst(RegExp(r'/+$'), '');
     final sep = s.indexOf('://');
-    return '${s.substring(0, sep).toLowerCase()}${s.substring(sep)}';
+    // Only the part after the scheme is trimmed, so `http://` stays intact.
+    var rest = s.substring(sep + 3);
+    final cut = rest.indexOf(RegExp('[?#]'));
+    if (cut >= 0) rest = rest.substring(0, cut);
+    rest = rest
+        .replaceFirst(_trailingSlashes, '')
+        .replaceFirst(_endpoint, '')
+        .replaceFirst(_trailingSlashes, '');
+    return '${s.substring(0, sep).toLowerCase()}://$rest';
+  }
+
+  /// Parses a [normalizeBase] result; null unless it is an `http`/`https`
+  /// URL with a plain host and, when given, a port in 1–65535.
+  static Uri? parseBase(String base) {
+    final uri = Uri.tryParse(base);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return null;
+    }
+    // Spaces and other characters that are invalid in a host come back
+    // percent-encoded.
+    if (uri.host.isEmpty || uri.host.contains('%')) return null;
+    if (uri.hasPort && (uri.port < 1 || uri.port > 65535)) return null;
+    return uri;
   }
 
   /// `player_api.php` with credentials, an optional [action] and extra
   /// [params].
+  ///
+  /// Throws a credential-free [ParseFailure] when [base] is invalid.
   Uri playerApi({String? action, Map<String, String> params = const {}}) {
     final q = StringBuffer(_credQuery);
     if (action != null) q.write('&action=${Uri.encodeComponent(action)}');
     params.forEach((k, v) {
       q.write('&${Uri.encodeComponent(k)}=${Uri.encodeComponent(v)}');
     });
-    return Uri.parse('$base/player_api.php?$q');
+    final uri = baseUri == null
+        ? null
+        : Uri.tryParse('$base/player_api.php?$q');
+    if (uri == null) {
+      throw ParseFailure(
+        'Invalid server address: '
+        '${redact(base, secrets: [username, password])}',
+      );
+    }
+    return uri;
   }
 
   /// Full XMLTV guide for this account.

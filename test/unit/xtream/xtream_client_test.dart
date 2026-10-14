@@ -400,6 +400,115 @@ void main() {
     });
   });
 
+  group('invalid server address', () {
+    late XtreamClient bad;
+    setUp(() {
+      bad = XtreamClient(
+        XtreamUrls('host:8O80', _user, _pass),
+        fakeDio(adapter),
+        clock: now,
+      );
+    });
+
+    Future<void> expectParseFailure(Future<Object?> f) async {
+      final e = await failureOf(f);
+      expect(e, isA<ParseFailure>());
+      expect(e.message, startsWith('Invalid server address'));
+      expectNoSecrets(e.toString());
+    }
+
+    test('every call fails with a redacted ParseFailure, no request', () async {
+      await expectParseFailure(bad.authenticate());
+      await expectParseFailure(bad.getLiveCategories());
+      await expectParseFailure(bad.getVodInfo('1'));
+      await expectParseFailure(bad.getSeriesInfo('1'));
+      await expectParseFailure(bad.getShortEpg('1', limit: 2));
+      await expectParseFailure(bad.getLiveStreams().toList());
+      await expectParseFailure(
+        bad
+            .getSeries(
+              categoryId: '7',
+              idleTimeout: const Duration(milliseconds: 50),
+            )
+            .toList(),
+      );
+      expect(adapter.requests, isEmpty);
+    });
+
+    test('close still applies afterwards', () async {
+      await expectParseFailure(bad.authenticate());
+      await expectParseFailure(bad.getVodStreams().toList());
+      bad.close();
+      expect(await failureOf(bad.authenticate()), isA<CancelledFailure>());
+    });
+  });
+
+  group('out-of-range timestamps', () {
+    test('a huge exp_date reads as never expiring', () async {
+      adapter.routes[''] = FakeReply.json({
+        'user_info': {'auth': 1, 'exp_date': '9999999999999999'},
+      });
+      final info = await client.authenticate();
+      expect(info.status, AccountStatus.active);
+      expect(info.expiresAt, isNull);
+    });
+
+    test('short EPG entries with huge timestamps are skipped', () async {
+      adapter.routes['get_short_epg'] = FakeReply.json({
+        'epg_listings': [
+          {
+            'title': 'VGVzdA==',
+            'start_timestamp': '9999999999999999',
+            'stop_timestamp': '99999999999999999',
+          },
+          {
+            'title': 'RXZlbmluZyBTaG93',
+            'start_timestamp': '1760443200',
+            'stop_timestamp': '1760446800',
+          },
+        ],
+      });
+      final list = await client.getShortEpg('1');
+      expect(list.map((p) => p.title), ['Evening Show']);
+    });
+  });
+
+  group('guardParse', () {
+    test('returns the result', () {
+      expect(guardParse('x', () => 3), 3);
+    });
+
+    test('unexpected errors become a ParseFailure', () {
+      expect(
+        () => guardParse<int>('get_vod_info', () => throw RangeError('9999')),
+        throwsA(
+          isA<ParseFailure>().having(
+            (e) => e.message,
+            'message',
+            'Unexpected get_vod_info response (RangeError)',
+          ),
+        ),
+      );
+      expect(
+        () => guardParse<int>('x', () => throw StateError(_pass)),
+        throwsA(
+          isA<ParseFailure>().having(
+            (e) => e.message,
+            'message',
+            isNot(contains(_pass)),
+          ),
+        ),
+      );
+    });
+
+    test('SourceFailures pass through', () {
+      expect(
+        () => guardParse<int>('login', () => throw const AuthFailure('no')),
+        throwsA(isA<AuthFailure>()),
+      );
+    });
+  });
+
   group('close', () {
     test('cancels in-flight requests and rejects new ones', () async {
       adapter.routes['get_live_streams'] = FakeReply.json(

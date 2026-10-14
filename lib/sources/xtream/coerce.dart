@@ -102,29 +102,38 @@ String? asStr(Object? v) {
   return s.isEmpty ? null : s;
 }
 
+/// Largest instant [DateTime] can represent, in milliseconds since the epoch.
+const _maxEpochMs = 8640000000000000;
+
 /// UTC time from epoch seconds. Empty, zero and negative values give null.
 ///
 /// Values large enough to be milliseconds are treated as such, and date
 /// strings such as `2024-05-01 20:00:00` (read as UTC) are accepted too.
+/// Values beyond the range of [DateTime] give null.
 DateTime? asEpoch(Object? v) {
   if (v is bool) return null;
   final n = asInt(v);
-  if (n == null) {
-    if (v is! String) return null;
-    final parsed = DateTime.tryParse(v.trim());
-    if (parsed == null) return null;
-    return parsed.isUtc
-        ? parsed
-        : DateTime.utc(
-            parsed.year,
-            parsed.month,
-            parsed.day,
-            parsed.hour,
-            parsed.minute,
-            parsed.second,
-          );
-  }
+  if (n == null) return v is String ? _utcDate(v.trim()) : null;
   if (n <= 0) return null;
   final ms = n > 100000000000 ? n : n * 1000;
+  if (ms > _maxEpochMs) return null;
   return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
+}
+
+DateTime? _utcDate(String s) {
+  final parsed = DateTime.tryParse(s);
+  if (parsed == null || parsed.isUtc) return parsed;
+  try {
+    return DateTime.utc(
+      parsed.year,
+      parsed.month,
+      parsed.day,
+      parsed.hour,
+      parsed.minute,
+      parsed.second,
+    );
+  } on ArgumentError {
+    // A local time at the edge of the range can fall outside it as UTC.
+    return null;
+  }
 }

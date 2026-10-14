@@ -197,5 +197,24 @@ void main() {
       expect(asEpoch('2024-05-01 20:00:00'), DateTime.utc(2024, 5, 1, 20));
       expect(asEpoch('2024-05-01T20:00:00Z'), DateTime.utc(2024, 5, 1, 20));
     });
+
+    test('values beyond the DateTime range are null, not a RangeError', () {
+      for (final v in <Object>[
+        '9999999999999999',
+        9999999999999999,
+        9e15,
+        '1e30',
+        1e30,
+        '8640000000000001',
+        '275760-09-13 01:00:00',
+      ]) {
+        expect(asEpoch(v), isNull, reason: '$v');
+      }
+    });
+
+    test('the largest representable instant is kept', () {
+      expect(asEpoch(8640000000000000), DateTime.utc(275760, 9, 13));
+      expect(asEpoch('8640000000000000'), DateTime.utc(275760, 9, 13));
+    });
   });
 }

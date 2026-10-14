@@ -36,8 +36,8 @@ class XtreamClient {
   ///
   /// Throws [AuthFailure] for `[]`, `{}`, an empty body, a missing
   /// `user_info` or `auth != 1`, even with HTTP 200.
-  Future<AccountInfo> authenticate() async =>
-      parseAccountInfo(await _getJson(urls.playerApi()), now: clock.now());
+  Future<AccountInfo> authenticate() =>
+      _get((json) => parseAccountInfo(json, now: clock.now()));
 
   Future<List<Map<String, Object?>>> getLiveCategories() =>
       _getList('get_live_categories');
@@ -69,32 +69,19 @@ class XtreamClient {
   }) => _stream('get_series', categoryId, idleTimeout);
 
   /// Raw `get_vod_info` (`info` + `movie_data`); `{}` when the panel has none.
-  Future<Map<String, Object?>> getVodInfo(String vodId) async => asMap(
-    await _getJson(
-      urls.playerApi(action: 'get_vod_info', params: {'vod_id': vodId}),
-    ),
-  );
+  Future<Map<String, Object?>> getVodInfo(String vodId) =>
+      _get(asMap, action: 'get_vod_info', params: {'vod_id': vodId});
 
   /// Raw `get_series_info` (`seasons`, `info`, `episodes`).
-  Future<Map<String, Object?>> getSeriesInfo(String seriesId) async => asMap(
-    await _getJson(
-      urls.playerApi(
-        action: 'get_series_info',
-        params: {'series_id': seriesId},
-      ),
-    ),
-  );
+  Future<Map<String, Object?>> getSeriesInfo(String seriesId) =>
+      _get(asMap, action: 'get_series_info', params: {'series_id': seriesId});
 
   /// Now/next style listings for one stream.
-  Future<List<EpgProgramme>> getShortEpg(String streamId, {int? limit}) async {
-    final json = await _getJson(
-      urls.playerApi(
-        action: 'get_short_epg',
-        params: {'stream_id': streamId, 'limit': ?limit?.toString()},
-      ),
-    );
-    return parseShortEpg(json);
-  }
+  Future<List<EpgProgramme>> getShortEpg(String streamId, {int? limit}) => _get(
+    parseShortEpg,
+    action: 'get_short_epg',
+    params: {'stream_id': streamId, 'limit': ?limit?.toString()},
+  );
 
   /// Cancels in-flight requests; later calls fail with [CancelledFailure].
   void close() {
@@ -160,30 +147,44 @@ class XtreamClient {
     return token;
   }
 
-  Future<List<Map<String, Object?>>> _getList(String action) async {
-    final json = await _getJson(urls.playerApi(action: action));
-    return [
+  Future<List<Map<String, Object?>>> _getList(String action) => _get(
+    (json) => [
       for (final e in asList(json))
         if (e is Map<String, Object?>) e,
-    ];
-  }
+    ],
+    action: action,
+  );
 
-  Future<Object?> _getJson(Uri uri) async {
+  /// GETs `player_api.php` and maps the decoded JSON with [parse].
+  Future<T> _get<T>(
+    T Function(Object? json) parse, {
+    String? action,
+    Map<String, String> params = const {},
+  }) async {
     final token = _newToken();
+    late final Uri uri;
+    final List<int> bytes;
     try {
+      // Built inside the try: an invalid base throws a ParseFailure here.
+      uri = urls.playerApi(action: action, params: params);
       final res = await dio.getUri<List<int>>(
         uri,
         options: Options(responseType: ResponseType.bytes),
         cancelToken: token,
       );
-      return _decode(res.data ?? const []);
-    } on FormatException {
-      throw ParseFailure('Invalid JSON from ${_safe(uri)}');
+      bytes = res.data ?? const [];
     } catch (e) {
       throw mapDioError(e, secrets: _secrets);
     } finally {
       _tokens.remove(token);
     }
+    final Object? json;
+    try {
+      json = _decode(bytes);
+    } on FormatException {
+      throw ParseFailure('Invalid JSON from ${_safe(uri)}');
+    }
+    return guardParse(action ?? 'login', () => parse(json));
   }
 
   static Object? _decode(List<int> bytes) {
@@ -211,11 +212,8 @@ class XtreamClient {
     String? categoryId,
     Duration? idleTimeout,
   ) async* {
-    final uri = urls.playerApi(
-      action: action,
-      params: {'category_id': ?categoryId},
-    );
     final token = _newToken();
+    late final Uri uri;
     TimeoutFailure timedOut() {
       _cancel(token);
       return TimeoutFailure('Timed out: ${_safe(uri)}');
@@ -223,6 +221,10 @@ class XtreamClient {
 
     var finished = false;
     try {
+      uri = urls.playerApi(
+        action: action,
+        params: {'category_id': ?categoryId},
+      );
       var pending = dio.getUri<ResponseBody>(
         uri,
         options: Options(responseType: ResponseType.stream),
@@ -259,5 +261,17 @@ class XtreamClient {
       if (!finished) _cancel(token);
       _tokens.remove(token);
     }
+  }
+}
+
+/// Runs [parse], turning any error other than a [SourceFailure] (a response
+/// shape the mapping did not expect) into a credential-free [ParseFailure].
+T guardParse<T>(String what, T Function() parse) {
+  try {
+    return parse();
+  } on SourceFailure {
+    rethrow;
+  } catch (e) {
+    throw ParseFailure('Unexpected $what response (${e.runtimeType})');
   }
 }

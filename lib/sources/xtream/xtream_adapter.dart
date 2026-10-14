@@ -19,8 +19,8 @@ typedef _Fetch = Stream<Map<String, Object?>> Function({
 /// Catalog lists are streamed and emitted in batches of at most [batchSize].
 /// When a full list stalls for [fullListTimeout], or in [lowMemory] mode, the
 /// list is fetched per `category_id` instead, skipping items already emitted
-/// (items without a category are then unreachable). Stream URLs are built at
-/// play time.
+/// (items without a category are then unreachable). Records the mappers cannot
+/// read are skipped. Stream URLs are built at play time.
 class XtreamAdapter implements SourceAdapter {
   XtreamAdapter(
     this.config, {
@@ -113,15 +113,22 @@ class XtreamAdapter implements SourceAdapter {
   }
 
   @override
-  Future<SeriesDetail> seriesDetail(String seriesKey) async =>
-      XtreamMappers.seriesDetail(
-        seriesKey,
-        await client.getSeriesInfo(seriesKey),
-      );
+  Future<SeriesDetail> seriesDetail(String seriesKey) async {
+    final json = await client.getSeriesInfo(seriesKey);
+    return guardParse(
+      'get_series_info',
+      () => XtreamMappers.seriesDetail(seriesKey, json),
+    );
+  }
 
   @override
-  Future<MovieDetail?> movieDetail(String movieKey) async =>
-      XtreamMappers.movieDetail(movieKey, await client.getVodInfo(movieKey));
+  Future<MovieDetail?> movieDetail(String movieKey) async {
+    final json = await client.getVodInfo(movieKey);
+    return guardParse(
+      'get_vod_info',
+      () => XtreamMappers.movieDetail(movieKey, json),
+    );
+  }
 
   /// Short EPG for one live stream (fallback when XMLTV has no data).
   Future<List<EpgProgramme>> shortEpg(String streamKey, {int limit = 2}) =>
@@ -216,6 +223,15 @@ class XtreamAdapter implements SourceAdapter {
     String Function(T item) keyOf,
     SyncBatch Function(List<T> items) wrap,
   ) async* {
+    // One malformed record is skipped rather than failing the whole sync.
+    T? mapOrSkip(Map<String, Object?> json, [String? categoryId]) {
+      try {
+        return map(json, categoryId: categoryId);
+      } catch (_) {
+        return null;
+      }
+    }
+
     final seen = <String>{};
     var batch = <T>[];
     // Without categories there is nothing to fall back to: use the full list
@@ -226,7 +242,7 @@ class XtreamAdapter implements SourceAdapter {
       try {
         final full = fetch(idleTimeout: canSplit ? fullListTimeout : null);
         await for (final json in full) {
-          final item = map(json);
+          final item = mapOrSkip(json);
           if (item == null || !seen.add(keyOf(item))) continue;
           batch.add(item);
           if (batch.length >= batchSize) {
@@ -242,7 +258,7 @@ class XtreamAdapter implements SourceAdapter {
     if (perCategory) {
       for (final cat in categories) {
         await for (final json in fetch(categoryId: cat.key)) {
-          final item = map(json, categoryId: cat.key);
+          final item = mapOrSkip(json, cat.key);
           if (item == null || !seen.add(keyOf(item))) continue;
           batch.add(item);
           if (batch.length >= batchSize) {

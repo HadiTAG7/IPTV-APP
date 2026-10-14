@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/sources/models.dart';
 import 'package:iptv_player/sources/xtream/xtream_urls.dart';
 
 void main() {
@@ -45,6 +46,15 @@ void main() {
         XtreamUrls.normalizeBase('http://example.com:80/xmltv.php'),
         'http://example.com:80',
       );
+    });
+
+    test('empty or host-less input does not throw', () {
+      expect(XtreamUrls.normalizeBase(''), 'http://');
+      expect(XtreamUrls.normalizeBase('  '), 'http://');
+      expect(XtreamUrls.normalizeBase('http://'), 'http://');
+      expect(XtreamUrls.normalizeBase('HTTPS:///'), 'https://');
+      expect(XtreamUrls.normalizeBase('///'), 'http://');
+      expect(XtreamUrls('', 'u', 'p').baseUri, isNull);
     });
 
     test('keeps a path prefix', () {
@@ -127,6 +137,69 @@ void main() {
         urls.timeshift('101', 60, DateTime(2024, 3, 5, 7, 9)),
         'http://example.com:8080/timeshift/$u/$p/60/2024-03-05:07-09/101.ts',
       );
+    });
+  });
+
+  group('invalid server address', () {
+    const user = 'demo user';
+    const pass = 'p@ss/w rd';
+
+    for (final base in [
+      'panel.example.com:80a',
+      'host:8O80',
+      'host:80,',
+      'http://host:8080:8080',
+      'http://host:65536',
+      'host:0',
+      'host:-1',
+      'https://host :8080',
+      'http://ho^st:80',
+      'host|8080',
+      'ftp://host:21',
+      'http://:8080',
+      '',
+    ]) {
+      test("'$base' throws a credential-free ParseFailure", () {
+        final urls = XtreamUrls(base, user, pass);
+        expect(urls.baseUri, isNull);
+        try {
+          urls.playerApi(action: 'get_live_streams');
+          fail('expected a ParseFailure');
+        } on ParseFailure catch (e) {
+          expect(e.message, startsWith('Invalid server address'));
+          for (final s in [user, pass, 'demo%20user', 'p%40ss%2Fw%20rd']) {
+            expect(e.toString(), isNot(contains(s)));
+          }
+        }
+      });
+    }
+
+    test('user info typed into the address is redacted too', () {
+      final urls = XtreamUrls('http://demo:secret1@host:80a', 'demo', 'x');
+      expect(
+        () => urls.playerApi(),
+        throwsA(
+          isA<ParseFailure>().having(
+            (e) => e.message,
+            'message',
+            allOf(isNot(contains('secret1')), contains('host:80a')),
+          ),
+        ),
+      );
+    });
+
+    test('valid addresses parse', () {
+      for (final (base, host, port) in [
+        ('panel.example.com', 'panel.example.com', 80),
+        ('127.0.0.1:25461', '127.0.0.1', 25461),
+        ('https://panel.example.com:8443/prefix/', 'panel.example.com', 8443),
+        ('http://[::1]:8080', '::1', 8080),
+        ('http://panel-1.example.com:65535', 'panel-1.example.com', 65535),
+      ]) {
+        final uri = XtreamUrls(base, 'u', 'p').baseUri;
+        expect(uri?.host, host, reason: base);
+        expect(uri?.port, port, reason: base);
+      }
     });
   });
 
