@@ -9,7 +9,10 @@ import 'package:iptv_player/sources/m3u/byte_source.dart';
 import 'package:iptv_player/sources/m3u/m3u_adapter.dart';
 import 'package:iptv_player/sources/models.dart';
 
+import '../../support/real_http.dart';
+
 void main() {
+  useRealHttp();
   group('HttpByteSource against a local server', () {
     late HttpServer server;
     late String base;

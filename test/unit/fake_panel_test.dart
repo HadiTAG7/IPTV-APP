@@ -10,8 +10,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:xml/xml.dart';
 
 import '../support/fake_panel.dart';
+import '../support/real_http.dart';
 
 void main() {
+  useRealHttp();
   group('player_api auth', () {
     late FakePanel panel;
     setUp(() async => panel = await FakePanel.start(mediaDir: null));

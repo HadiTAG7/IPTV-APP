@@ -1,0 +1,5 @@
+tags:
+  bench:
+    description: Slow performance budgets on large synthetic inputs.
+  network:
+    description: Talks to the public internet; never run in default CI.
