@@ -1,0 +1,13 @@
+{
+  "user_info": {
+    "username": "demo_user",
+    "auth": "1",
+    "status": "Active",
+    "exp_date": 1700000000,
+    "is_trial": false,
+    "active_cons": "1",
+    "max_connections": 2,
+    "allowed_output_formats": []
+  },
+  "server_info": []
+}

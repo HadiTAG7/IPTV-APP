@@ -1,0 +1,27 @@
+{
+  "seasons": [
+    {"air_date": "2018-09-01", "episode_count": 2, "id": 1, "name": "Season 1", "overview": "", "season_number": 1, "cover": "http://127.0.0.1/covers/s1.jpg", "cover_big": "http://127.0.0.1/covers/s1_big.jpg"},
+    {"air_date": "", "episode_count": 0, "id": 0, "name": "Specials", "season_number": 0, "cover": ""}
+  ],
+  "info": {
+    "name": "Example Drama",
+    "cover": "http://127.0.0.1/covers/5001.jpg",
+    "plot": "A synthetic plot.",
+    "cast": "Actor A, Actor B",
+    "director": "Director C",
+    "genre": "Drama",
+    "releaseDate": "2018-09-01",
+    "rating": "8.1",
+    "backdrop_path": ["http://127.0.0.1/bd/5001.jpg"],
+    "category_id": "500"
+  },
+  "episodes": {
+    "1": [
+      {"id": "90001", "episode_num": 1, "title": "Example Drama - S01E01", "container_extension": "mkv", "info": {"duration_secs": 2700, "duration": "00:45:00", "plot": "Pilot.", "movie_image": "http://127.0.0.1/stills/90001.jpg"}, "custom_sid": "", "added": "1700000000", "season": 1, "direct_source": ""},
+      {"id": "90002", "episode_num": "2", "title": "Example Drama - S01E02", "container_extension": "mkv", "info": [], "season": "1"}
+    ],
+    "2": [
+      {"id": 90003, "episode_num": 1, "title": "Example Drama - S02E01", "container_extension": "MP4", "info": {"duration": "00:50:30"}, "season": 2}
+    ]
+  }
+}

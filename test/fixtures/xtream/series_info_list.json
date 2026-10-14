@@ -1,0 +1,9 @@
+{
+  "seasons": [],
+  "info": [],
+  "episodes": [
+    {"id": "91002", "episode_num": "2", "title": "Ep 2", "container_extension": "mp4", "season": 1, "info": {"duration_secs": "1500"}},
+    {"id": "91001", "episode_num": "1", "title": "Ep 1", "container_extension": "mp4", "season": 1, "info": []},
+    {"id": "92001", "episode_num": "1", "title": "S2 Ep 1", "container_extension": "mkv", "season": "2", "info": {}}
+  ]
+}

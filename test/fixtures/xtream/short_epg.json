@@ -1,0 +1,6 @@
+{
+  "epg_listings": [
+    {"id": "2", "epg_id": "7", "title": "RXZlbmluZyBTaG93", "lang": "en", "start": "2025-10-14 13:00:00", "end": "2025-10-14 14:00:00", "description": "QSBzeW50aGV0aWMgZXZlbmluZyBwcm9ncmFtbWUu", "channel_id": "news.example", "start_timestamp": 1760446800, "stop_timestamp": 1760450400, "now_playing": 0, "has_archive": 0},
+    {"id": "1", "epg_id": "7", "title": "2YbYtNix2Kkg2KfZhNij2K7YqNin2LE=", "lang": "ar", "start": "2025-10-14 12:00:00", "end": "2025-10-14 13:00:00", "description": "2YXZiNis2LIg2YTYo9mH2YUg2KfZhNij2K7YqNin2LEg2KfZhNmF2K3ZhNmK2Kkg2YjYp9mE2LnYp9mE2YXZitipLg==", "channel_id": "news.example", "start_timestamp": "1760443200", "stop_timestamp": "1760446800", "now_playing": 1, "has_archive": 0}
+  ]
+}

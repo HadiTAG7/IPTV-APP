@@ -1,0 +1,5 @@
+[
+  {"num": 1, "name": "The Sample Movie (2019)", "stream_type": "movie", "stream_id": 1001, "stream_icon": "http://127.0.0.1/posters/1001.jpg", "rating": "7.4", "rating_5based": 3.7, "added": "1700000000", "category_id": "100", "container_extension": "mkv", "custom_sid": null, "direct_source": ""},
+  {"num": 2, "name": "فيلم تجريبي", "stream_type": "movie", "stream_id": "1002", "stream_icon": "", "rating": "", "rating_5based": "4.5", "added": 1700000500, "category_id": "100", "container_extension": "MP4", "year": "2021"},
+  {"num": 3, "name": "Cartoon Example [2015]", "stream_type": "movie", "stream_id": 2001, "rating": 0, "rating_5based": 0, "added": "", "category_id": "200", "container_extension": "avi"}
+]
