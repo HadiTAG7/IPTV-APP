@@ -1,0 +1,8 @@
+[
+  {"num": 1, "name": "Example News HD", "stream_type": "live", "stream_id": 101, "stream_icon": "http://127.0.0.1/logos/news.png", "epg_channel_id": "news.example", "added": "1700000000", "category_id": "10", "category_ids": [10], "custom_sid": "", "tv_archive": 1, "direct_source": "http://example.com/live/someone/secret/101.ts", "tv_archive_duration": "7", "thumbnail": ""},
+  {"num": "2", "name": "قناة الأخبار التجريبية", "stream_type": "live", "stream_id": "102", "stream_icon": "", "epg_channel_id": null, "category_id": "10", "tv_archive": 0, "tv_archive_duration": 0},
+  {"num": 3, "name": "Example Sports 1 {\"live\"} [FHD]", "stream_type": "live", "stream_id": 201, "stream_icon": "http://127.0.0.1/logos/s1.png", "epg_channel_id": "sports1.example", "category_id": "20", "category_ids": [20, 10, 20], "tv_archive": "1", "tv_archive_duration": "3"},
+  {"num": 4, "name": "Example Radio FM", "stream_type": "radio_streams", "stream_id": 301, "category_id": "30", "tv_archive": 0},
+  {"num": 5, "name": "Broken entry without id", "stream_type": "live", "category_id": "10"},
+  {"num": 6, "name": "No category", "stream_type": "live", "stream_id": 401.0, "category_id": null}
+]

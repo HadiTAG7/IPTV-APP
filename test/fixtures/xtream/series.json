@@ -1,0 +1,4 @@
+[
+  {"num": 1, "name": "Example Drama", "series_id": 5001, "cover": "http://127.0.0.1/covers/5001.jpg", "plot": "A synthetic plot.", "cast": "Actor A, Actor B", "director": "", "genre": "Drama", "releaseDate": "2018-09-01", "last_modified": "1700000000", "rating": "8.1", "rating_5based": 4.05, "backdrop_path": ["http://127.0.0.1/bd/5001.jpg"], "youtube_trailer": "", "episode_run_time": "45", "category_id": "500"},
+  {"num": 2, "name": "مسلسل تجريبي", "series_id": "5002", "cover": "", "plot": "", "releaseDate": "", "year": "2020", "rating": "", "rating_5based": "3", "category_id": "500", "category_ids": [500]}
+]

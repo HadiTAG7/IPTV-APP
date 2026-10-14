@@ -1,0 +1,35 @@
+{
+  "info": {
+    "kinopoisk_url": "",
+    "tmdb_id": "0",
+    "name": "The Sample Movie",
+    "o_name": "The Sample Movie",
+    "cover_big": "http://127.0.0.1/posters/1001_big.jpg",
+    "movie_image": "http://127.0.0.1/posters/1001.jpg",
+    "releasedate": "2019-05-01",
+    "episode_run_time": 0,
+    "youtube_trailer": "",
+    "director": "Director X",
+    "actors": "Actor Y",
+    "cast": "Actor Y, Actor Z",
+    "description": "Synthetic description.",
+    "plot": "Synthetic plot.",
+    "age": "",
+    "country": "",
+    "genre": "Drama / Test",
+    "backdrop_path": ["http://127.0.0.1/bd/1001a.jpg", "http://127.0.0.1/bd/1001b.jpg"],
+    "duration_secs": 6300,
+    "duration": "01:45:00",
+    "bitrate": 0,
+    "rating": "7.4"
+  },
+  "movie_data": {
+    "stream_id": 1001,
+    "name": "The Sample Movie (2019)",
+    "added": "1700000000",
+    "category_id": "100",
+    "container_extension": "mkv",
+    "custom_sid": "",
+    "direct_source": ""
+  }
+}
