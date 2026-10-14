@@ -36,6 +36,25 @@ BoxFit mpvFit(AspectMode aspect) => switch (aspect) {
   AspectMode.ratio4x3 => BoxFit.fill,
 };
 
+/// Video output settings for the Hardware/Software decoding setting.
+///
+/// On Android media_kit derives `hwdec` from `enableHardwareAcceleration`
+/// (`auto-safe` or `no`, and always `no` in emulators). On desktop that flag
+/// only picks GPU or CPU rendering and `hwdec` defaults to `auto`, so it is
+/// set explicitly and rendering stays on the GPU.
+@visibleForTesting
+VideoControllerConfiguration mpvVideoConfiguration({
+  required bool hardwareDecoding,
+  required bool android,
+}) => android
+    ? VideoControllerConfiguration(enableHardwareAcceleration: hardwareDecoding)
+    : VideoControllerConfiguration(
+        hwdec: hardwareDecoding ? 'auto-safe' : 'no',
+      );
+
+/// Reads an mpv property as a string; null when unavailable.
+typedef MpvPropertyReader = Future<String?> Function(String name);
+
 /// libmpv through media_kit. One [Player] is reused for the whole session.
 ///
 /// Constructing it needs `MediaKit.ensureInitialized()` and native libraries,
@@ -50,23 +69,27 @@ class MpvEngine implements PlayerEngine {
            bufferSize: (lite ? 32 : 64) * _mib,
            logLevel: MPVLogLevel.warn,
          ),
-       ) {
+       ),
+       _readProperty = null {
     _video = VideoController(
       _player,
-      configuration: VideoControllerConfiguration(
-        enableHardwareAcceleration: hardwareDecoding,
+      configuration: mpvVideoConfiguration(
+        hardwareDecoding: hardwareDecoding,
+        android: defaultTargetPlatform == TargetPlatform.android,
       ),
     );
     _listen();
   }
 
-  /// Wraps an existing [Player] without a video surface.
+  /// Wraps an existing [Player] without a video surface. [readProperty]
+  /// stands in for libmpv property reads.
   @visibleForTesting
   MpvEngine.withPlayer(
     this._player, {
     this.lite = false,
     this.hardwareDecoding = true,
     this.preferredLanguages = kDefaultPreferredLanguages,
+    this._readProperty,
   }) {
     _listen();
   }
@@ -77,6 +100,7 @@ class MpvEngine implements PlayerEngine {
   final List<String> preferredLanguages;
 
   final Player _player;
+  final MpvPropertyReader? _readProperty;
   VideoController? _video;
 
   final _state = ValueNotifier<PlaybackState>(PlaybackState.idle);
@@ -181,23 +205,33 @@ class MpvEngine implements PlayerEngine {
 
   void _onError(String raw) {
     if (!_active) return;
+    final fatal = _fatalPattern.hasMatch(raw);
+    if (!fatal) {
+      final message = redact(raw);
+      _emit(
+        ErrorEvent(
+          message,
+          fatal: false,
+          httpStatus: httpStatusFromMessage(message),
+        ),
+      );
+      return;
+    }
+    if (_fatalSent) return;
+    _fatalSent = true;
+    _update(_state.value.copyWith(playing: false, buffering: false));
+    // The log line explaining the failure (HTTP status, TLS) goes with this
+    // error only; an old TLS warning must not turn a later error into one.
     final detail = _errorDetail;
+    final status = _lastHttpStatus;
+    _errorDetail = null;
+    _lastHttpStatus = null;
     final text = detail != null && !raw.contains(detail)
         ? '$raw ($detail)'
         : raw;
-    final fatal = _fatalPattern.hasMatch(text);
-    if (fatal) {
-      if (_fatalSent) return;
-      _fatalSent = true;
-      _update(_state.value.copyWith(playing: false, buffering: false));
-    }
     final message = redact(text);
     _emit(
-      ErrorEvent(
-        message,
-        fatal: fatal,
-        httpStatus: httpStatusFromMessage(message) ?? _lastHttpStatus,
-      ),
+      ErrorEvent(message, httpStatus: httpStatusFromMessage(message) ?? status),
     );
   }
 
@@ -304,10 +338,30 @@ class MpvEngine implements PlayerEngine {
   Iterable<T> _real<T>(List<T> tracks, String Function(T) id) =>
       tracks.where((t) => id(t) != 'auto' && id(t) != 'no');
 
+  Future<String?> _property(String name) async {
+    try {
+      final read = _readProperty;
+      if (read != null) return await read(name);
+      final native = _player.platform;
+      return native is NativePlayer ? await native.getProperty(name) : null;
+    } catch (_) {
+      return null; // Unknown property, or the player is gone.
+    }
+  }
+
+  /// The track id mpv actually plays. media_kit only records explicit
+  /// selections and reports `auto` otherwise (e.g. after `alang` picked one),
+  /// so ask mpv (`aid` / `sid`, which read back the chosen id or `no`).
+  Future<String> _selectedId(String recorded, String property) async {
+    if (recorded != 'auto') return recorded;
+    final id = (await _property(property))?.trim();
+    return id == null || id.isEmpty ? 'auto' : id;
+  }
+
   @override
   Future<List<TrackInfo>> audioTracks() async {
     if (_disposed) return const [];
-    final selected = _player.state.track.audio.id;
+    final selected = await _selectedId(_player.state.track.audio.id, 'aid');
     return [
       for (final t in _real(_player.state.tracks.audio, (t) => t.id))
         TrackInfo(
@@ -331,7 +385,7 @@ class MpvEngine implements PlayerEngine {
   @override
   Future<List<TrackInfo>> subtitleTracks() async {
     if (_disposed) return const [];
-    final selected = _player.state.track.subtitle.id;
+    final selected = await _selectedId(_player.state.track.subtitle.id, 'sid');
     return [
       for (final t in _real(_player.state.tracks.subtitle, (t) => t.id))
         TrackInfo(
@@ -358,20 +412,16 @@ class MpvEngine implements PlayerEngine {
     if (_disposed) return const {'engine': 'mpv'};
     final state = _player.state;
     final video = _real(state.tracks.video, (t) => t.id).firstOrNull;
-    final audioId = state.track.audio.id;
+    final audioId = await _selectedId(state.track.audio.id, 'aid');
     final audio = _real(
       state.tracks.audio,
       (t) => t.id,
     ).where((t) => t.id == audioId || audioId == 'auto').firstOrNull;
     var hwdec = hardwareDecoding ? 'auto-safe' : 'no';
-    final native = _player.platform;
-    if (native is NativePlayer && _active) {
-      try {
-        final current = await native.getProperty('hwdec-current');
-        if (current.isNotEmpty) hwdec = current;
-      } catch (_) {
-        // Property unavailable before the first frame.
-      }
+    if (_active) {
+      // Unavailable before the first frame.
+      final current = await _property('hwdec-current');
+      if (current != null && current.isNotEmpty) hwdec = current;
     }
     return {
       'engine': 'mpv',

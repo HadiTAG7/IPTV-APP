@@ -18,7 +18,9 @@ class _Switch {
 /// The latest request wins: a switch superseded before its open never opens.
 /// An HTTP 4xx right after an open usually means the panel still holds the
 /// previous connection, so it is retried after 1 s and then 2 s without being
-/// reported as a stream failure.
+/// reported as a stream failure. On single-connection panels any 4xx counts,
+/// and so does an error without a status (ExoPlayer reports only "Source
+/// error"); elsewhere 404/410 and unknown statuses go straight to fallback.
 class ConnectionGuard {
   ConnectionGuard({
     this._clock = const SystemClock(),
@@ -80,15 +82,13 @@ class ConnectionGuard {
     return _tail;
   }
 
-  /// Offers a fatal error to the guard. Returns true when it was an HTTP 4xx
-  /// soon after an open and a retry has been scheduled (the caller should not
-  /// treat it as a failure).
+  /// Offers a fatal error to the guard. Returns true when it may be a held
+  /// connection soon after an open and a retry has been scheduled (the caller
+  /// should not treat it as a failure).
   bool handleError(ErrorEvent e) {
-    final status = e.httpStatus;
     final spec = _last;
-    if (!e.fatal || status == null || spec == null) return false;
-    // 404/410 never clear up by waiting.
-    if (status < 400 || status > 499 || status == 404 || status == 410) {
+    if (!e.fatal || spec == null) return false;
+    if (!_mayBeHeld(e.httpStatus, single: spec.maxConnections == 1)) {
       return false;
     }
     if (_retryTimer != null) return true;
@@ -103,6 +103,14 @@ class ConnectionGuard {
       if (identical(_last, spec)) unawaited(_enqueue(spec));
     });
     return true;
+  }
+
+  static bool _mayBeHeld(int? status, {required bool single}) {
+    if (status == null) return single;
+    if (status < 400 || status > 499) return false;
+    // 404/410 rarely clear up by waiting unless the panel allows only one
+    // connection (some answer the second one with 404).
+    return single || (status != 404 && status != 410);
   }
 
   /// Drops pending switches and retries without stopping anything.

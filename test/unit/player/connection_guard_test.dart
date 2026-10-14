@@ -205,7 +205,8 @@ void main() {
       });
     });
 
-    test('ignores 5xx, 404, unknown status and non-fatal errors', () {
+    test('multi or unknown connections: ignores 5xx, 404, unknown status '
+        'and non-fatal errors', () {
       fakeAsync((async) {
         final r = Recorder(async);
         final guard = guardFor(async);
@@ -222,6 +223,52 @@ void main() {
           isFalse,
         );
         expect(guard.handleError(http(429)), isTrue);
+      });
+    });
+
+    test('single-connection panels: unknown status and 404 may be held', () {
+      fakeAsync((async) {
+        final r = Recorder(async);
+        final guard = guardFor(async);
+        unawaited(
+          guard.switchTo(
+            stop: r.stop('a'),
+            open: r.open('a'),
+            maxConnections: 1,
+          ),
+        );
+        async.elapse(const Duration(milliseconds: 150));
+        // ExoPlayer reports only "Source error", without the status.
+        expect(guard.handleError(const ErrorEvent('Source error')), isTrue);
+        async.elapse(const Duration(milliseconds: 1150));
+        expect(r.log, ['0 stop a', '150 open a', '1150 stop a', '1300 open a']);
+        expect(guard.handleError(http(404)), isTrue);
+        async.elapse(const Duration(milliseconds: 2150));
+        expect(r.log.last, '3450 open a');
+        // Budget spent: the caller's fallback takes over.
+        expect(guard.handleError(const ErrorEvent('Source error')), isFalse);
+        expect(guard.handleError(http(500)), isFalse);
+        expect(
+          guard.handleError(const ErrorEvent('glitch', fatal: false)),
+          isFalse,
+        );
+      });
+    });
+
+    test('single-connection: 5xx is never a held connection', () {
+      fakeAsync((async) {
+        final r = Recorder(async);
+        final guard = guardFor(async);
+        unawaited(
+          guard.switchTo(
+            stop: r.stop('a'),
+            open: r.open('a'),
+            maxConnections: 1,
+          ),
+        );
+        async.elapse(const Duration(milliseconds: 150));
+        expect(guard.handleError(http(503)), isFalse);
+        expect(guard.handleError(http(410)), isTrue);
       });
     });
 

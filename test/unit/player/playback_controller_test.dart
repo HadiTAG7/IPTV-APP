@@ -361,6 +361,76 @@ void main() {
       });
     });
 
+    test('the mid-stream TLS switch happens once; then the watchdog', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        rig.engines.onCreate = (e) {
+          if (e.kind == EngineKind.exo) {
+            e.onOpen = (e, _) => e.emitError('Source error');
+          } else {
+            e.onOpen = (e, _) {
+              e.emitFirstFrame();
+              Timer(
+                const Duration(seconds: 5),
+                () => e.emitError('tls: TLS handshake failed'),
+              );
+            };
+          }
+        };
+        rig.play(liveTs, key: 'ch1');
+        async.elapse(const Duration(minutes: 10));
+        // exo fails, mpv plays, TLS -> exo once, exo fails, mpv again; from
+        // then on TLS errors are ordinary reconnects with backoff.
+        expect(rig.engines.created.map((e) => e.kind), [
+          EngineKind.exo,
+          EngineKind.mpv,
+          EngineKind.exo,
+          EngineKind.mpv,
+        ]);
+        expect(rig.controller.reconnectStatus.value, const ReconnectGaveUp(8));
+        expect(rig.controller.phase, PlaybackPhase.failed);
+        expect(rig.learned, isEmpty);
+        rig.controller.dispose();
+      });
+    });
+
+    test('TLS never switches back to an exo left for silent audio', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        var mpvOpens = 0;
+        rig.engines.onCreate = (e) {
+          if (e.kind == EngineKind.exo) {
+            e.audio = const [TrackInfo(id: '0', codec: 'ac-3')];
+            e.onOpen = (e, _) => e.emitFirstFrame();
+          } else {
+            e.onOpen = (e, _) {
+              e.emitFirstFrame();
+              if (mpvOpens++ > 0) return;
+              Timer(
+                const Duration(seconds: 5),
+                () => e.emitError(
+                  'Failed to open (tls: Error in the pull function.)',
+                ),
+              );
+            };
+          }
+        };
+        rig.play(liveTs, key: 'ch1');
+        async.elapse(const Duration(seconds: 3));
+        expect(rig.controller.engineKind, EngineKind.mpv);
+        async.elapse(const Duration(seconds: 10));
+        expect(rig.controller.engineKind, EngineKind.mpv);
+        expect(rig.engines.created.map((e) => e.kind), [
+          EngineKind.exo,
+          EngineKind.mpv,
+        ]);
+        // Reconnected on mpv instead.
+        expect(rig.of(EngineKind.mpv).count('open'), 2);
+        expect(rig.learned, [('ch1', EngineKind.mpv)]);
+        rig.controller.dispose();
+      });
+    });
+
     test('non-fatal errors are ignored', () {
       fakeAsync((async) {
         final rig = Rig(async)..playsOn(EngineKind.exo);
@@ -653,6 +723,50 @@ void main() {
       });
     });
 
+    test('single-connection: an exo error without status is retried', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        var exoOpens = 0;
+        rig.engines.onCreate = (e) => e.onOpen = (e, _) {
+          if (e.kind == EngineKind.exo && exoOpens++ == 0) {
+            // What video_player_android reports for a 403.
+            e.emitError(
+              'Video player had error androidx.media3.exoplayer.'
+              'ExoPlaybackException: Source error',
+            );
+          } else {
+            e.emitFirstFrame();
+          }
+        };
+        rig.play(liveTs, key: 'ch1', maxConnections: 1);
+        async.elapse(const Duration(seconds: 2));
+        expect(rig.engines.created.map((e) => e.kind), [EngineKind.exo]);
+        expect(rig.engine.count('open'), 2);
+        expect(rig.controller.phase, PlaybackPhase.playing);
+        expect(rig.statuses, isEmpty);
+        rig.controller.dispose();
+      });
+    });
+
+    test('an error after the first frame is never a held connection', () {
+      fakeAsync((async) {
+        final rig = Rig(async)..playsOn(EngineKind.exo);
+        rig.play(liveTs, maxConnections: 1);
+        async.elapse(const Duration(milliseconds: 650));
+        rig.engine.emitError('Source error');
+        async.flushMicrotasks();
+        expect(
+          rig.controller.reconnectStatus.value,
+          isA<ReconnectWaiting>().having(
+            (s) => s.reason,
+            'reason',
+            ReconnectReason.error,
+          ),
+        );
+        rig.controller.dispose();
+      });
+    });
+
     test('after two retries the normal fallback takes over', () {
       fakeAsync((async) {
         final rig = Rig(async)..playsOn(EngineKind.mpv);
@@ -847,6 +961,153 @@ void main() {
       });
     });
 
+    test('a silent-audio check due in the background waits for return', () {
+      fakeAsync((async) {
+        final rig = Rig(async, isAmlogic: true);
+        rig.engines.onCreate = (e) {
+          e.onOpen = (e, _) => e.emitFirstFrame();
+          if (e.kind == EngineKind.exo) {
+            e.audio = const [TrackInfo(id: '0', codec: 'ac-3')];
+          }
+        };
+        rig.play(movie, key: 'm1');
+        async.elapse(const Duration(milliseconds: 500));
+        unawaited(rig.controller.onBackground());
+        async.elapse(const Duration(seconds: 10));
+        expect(rig.engines.created.map((e) => e.kind), [EngineKind.exo]);
+        expect(rig.of(EngineKind.exo).calls, isNot(contains('audioTracks')));
+        expect(rig.controller.state.value.playing, isFalse);
+        expect(rig.learned, isEmpty);
+
+        unawaited(rig.controller.onForeground());
+        async.flushMicrotasks();
+        expect(rig.of(EngineKind.exo).calls.last, 'play');
+        async.elapse(const Duration(seconds: 2));
+        expect(rig.controller.engineKind, EngineKind.mpv);
+        expect(rig.learned, [('m1', EngineKind.mpv)]);
+        expect(rig.controller.state.value.playing, isTrue);
+        rig.controller.dispose();
+      });
+    });
+
+    test('a fallback opened in the background starts paused', () {
+      fakeAsync((async) {
+        final rig = Rig(async, isAmlogic: true);
+        rig.engines.onCreate = (e) {
+          if (e.kind == EngineKind.exo) {
+            e.onOpen = (e, _) {
+              Timer(
+                const Duration(seconds: 2),
+                () => e.emitError('Source error'),
+              );
+            };
+          } else {
+            e.onOpen = (e, _) => e.emitFirstFrame();
+          }
+        };
+        rig.play(movie, key: 'm1');
+        async.elapse(sec);
+        unawaited(rig.controller.onBackground());
+        async.elapse(const Duration(seconds: 5));
+        final mpv = rig.of(EngineKind.mpv);
+        expect(mpv.calls.first, 'open');
+        expect(mpv.calls, contains('pause'));
+        expect(mpv.calls, isNot(contains('play')));
+        expect(rig.controller.state.value.playing, isFalse);
+
+        // It was still opening when the app left: play on return.
+        unawaited(rig.controller.onForeground());
+        async.flushMicrotasks();
+        expect(mpv.calls.last, 'play');
+        expect(rig.controller.state.value.playing, isTrue);
+        rig.controller.dispose();
+      });
+    });
+
+    test('backgrounded mid engine swap: the new engine stays paused', () {
+      fakeAsync((async) {
+        final rig = Rig(async, isAmlogic: true);
+        rig.engines.onCreate = (e) {
+          if (e.kind == EngineKind.exo) {
+            e.disposeDelay = const Duration(milliseconds: 100);
+            e.onOpen = (e, _) => e.emitError('Source error');
+          } else {
+            e.onOpen = (e, _) => e.emitFirstFrame();
+          }
+        };
+        rig.play(movie, key: 'm1');
+        async.elapse(const Duration(milliseconds: 50));
+        expect(rig.controller.engine, isNull, reason: 'swap in progress');
+        unawaited(rig.controller.onBackground());
+        async.elapse(sec);
+        final mpv = rig.of(EngineKind.mpv);
+        expect(mpv.calls, contains('pause'));
+        expect(mpv.calls, isNot(contains('play')));
+        expect(rig.controller.state.value.playing, isFalse);
+        rig.controller.dispose();
+      });
+    });
+
+    test('a paused VOD stays paused across a reconnect', () {
+      fakeAsync((async) {
+        final rig = Rig(async)..playsOn(EngineKind.mpv);
+        rig.play(movie, key: 'm1');
+        unawaited(rig.controller.pause());
+        async.flushMicrotasks();
+        rig.engine.emitError('Source error');
+        async.elapse(const Duration(seconds: 2));
+        expect(rig.engine.count('open'), 2);
+        expect(rig.engine.calls.last, 'pause');
+        expect(rig.controller.state.value.playing, isFalse);
+        unawaited(rig.controller.resume());
+        async.flushMicrotasks();
+        expect(rig.controller.state.value.playing, isTrue);
+        rig.controller.dispose();
+      });
+    });
+
+    test('backgrounded live is not reopened by a late fallback', () {
+      fakeAsync((async) {
+        final rig = Rig(async)..playsOn(EngineKind.mpv);
+        rig.play(liveTs, key: 'ch1');
+        final exo = rig.engine;
+        unawaited(rig.controller.onBackground());
+        async.flushMicrotasks();
+        expect(rig.log.last, 'exo.stop');
+        // An error queued before the stop is delivered afterwards.
+        exo.emitError('Source error');
+        async.elapse(const Duration(seconds: 5));
+        expect(rig.log.where((l) => l.startsWith('mpv.')), isEmpty);
+        expect(exo.count('open'), 1);
+
+        unawaited(rig.controller.onForeground());
+        async.elapse(sec);
+        expect(exo.count('open'), 2);
+        // The fallback is still available after the reopen.
+        exo.emitError('Source error');
+        async.elapse(sec);
+        expect(rig.controller.engineKind, EngineKind.mpv);
+        expect(rig.controller.phase, PlaybackPhase.playing);
+        rig.controller.dispose();
+      });
+    });
+
+    test('backgrounded while opening: VOD starts on return', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        rig.play(movie, key: 'm1');
+        async.elapse(sec);
+        expect(rig.controller.phase, PlaybackPhase.opening);
+        unawaited(rig.controller.onBackground());
+        async.flushMicrotasks();
+        expect(rig.engine.calls.last, 'pause');
+        unawaited(rig.controller.onForeground());
+        async.flushMicrotasks();
+        expect(rig.engine.calls.last, 'play');
+        rig.controller.dispose();
+      });
+    });
+
     test('lifecycle calls without a session are no-ops', () {
       fakeAsync((async) {
         final rig = Rig(async);
@@ -887,6 +1148,27 @@ void main() {
         rig.play(liveTs);
         expect(notified, greaterThanOrEqualTo(3));
         rig.controller.dispose();
+      });
+    });
+
+    test('dispose during an engine swap leaves no engine behind', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        rig.engines.onCreate = (e) {
+          e.disposeDelay = const Duration(milliseconds: 100);
+          if (e.kind == EngineKind.exo) {
+            e.onOpen = (e, _) => e.emitError('Source error');
+          }
+        };
+        rig.play(liveTs, key: 'ch1');
+        // exo failed; the fallback is waiting for exo.dispose().
+        async.elapse(const Duration(milliseconds: 50));
+        expect(rig.controller.engine, isNull);
+        rig.controller.dispose();
+        async.elapse(sec);
+        expect(rig.engines.created.map((e) => e.kind), [EngineKind.exo]);
+        expect(rig.engines.alive, 0);
+        expect(async.pendingTimers, isEmpty);
       });
     });
 

@@ -63,7 +63,22 @@ class _Session {
 
   /// A first frame was seen; later errors go to the reconnect watchdog.
   bool everPlayed = false;
+
+  /// A first frame was seen since the last open. Only errors before it can
+  /// be a refused (held) connection.
+  bool framedSinceOpen = false;
   bool silentChecked = false;
+
+  /// The silent-audio check came due in the background; run it on return.
+  bool silentPending = false;
+
+  /// Engines left because they played without sound; automatic switches
+  /// never go back to them.
+  final silentEngines = <EngineKind>{};
+
+  /// The mid-stream TLS switch to Exo happens at most once per item.
+  bool tlsSwitched = false;
+  bool userPaused = false;
   bool backgrounded = false;
   bool resumeOnForeground = false;
   Duration lastPosition = Duration.zero;
@@ -197,6 +212,7 @@ class PlaybackController extends ChangeNotifier {
     if (target == null) return;
     final key = s.itemKey;
     if (key != null) onEnginePreferenceLearned?.call(key, target);
+    s.silentEngines.remove(target);
     await _switchEngine(s, target);
   }
 
@@ -236,9 +252,13 @@ class PlaybackController extends ChangeNotifier {
     }
   }
 
-  Future<void> pause() async => _engine?.pause();
+  Future<void> pause() async {
+    _session?.userPaused = true;
+    await _engine?.pause();
+  }
 
   Future<void> resume() async {
+    _session?.userPaused = false;
     _rearmAfterEnd();
     await _engine?.play();
   }
@@ -281,7 +301,8 @@ class PlaybackController extends ChangeNotifier {
   }
 
   /// App went to the background: live is stopped to free the connection,
-  /// VOD is paused and its position saved.
+  /// VOD is paused and its position saved. Nothing reopened meanwhile (by a
+  /// fallback or reconnect) starts playing until [onForeground].
   Future<void> onBackground() async {
     final s = _session;
     if (s == null || s.backgrounded || _disposed) return;
@@ -293,7 +314,13 @@ class PlaybackController extends ChangeNotifier {
       _cancelSilentCheck();
       await _guard.stop(() async => _engine?.stop());
     } else {
-      s.resumeOnForeground = _state.value.playing;
+      s.resumeOnForeground =
+          !s.userPaused &&
+          (_state.value.playing || _phase == PlaybackPhase.opening);
+      if (_silentTimer != null) {
+        _cancelSilentCheck();
+        s.silentPending = true;
+      }
       await _engine?.pause();
       await _progress?.flush();
     }
@@ -309,10 +336,17 @@ class PlaybackController extends ChangeNotifier {
       _setPhase(PlaybackPhase.opening);
       _restartWatchdog(s);
       final kind = _engine?.kind ?? _policy.pick(s.original.kind, _input(s));
+      // A fallback skipped in the background must not use up that engine.
+      s.tried = {kind};
       await _open(s, kind, s.request);
     } else {
       _syncWatchdogPause();
       if (s.resumeOnForeground) await _engine?.play();
+      final engine = _engine;
+      if (s.silentPending && engine != null && _isCurrent(s)) {
+        s.silentPending = false;
+        _scheduleSilentCheck(s, engine);
+      }
     }
   }
 
@@ -361,17 +395,29 @@ class PlaybackController extends ChangeNotifier {
     return s.request.copyWith(startAt: s.lastPosition);
   }
 
+  bool _isCurrent(_Session s) => identical(_session, s) && !_disposed;
+
+  /// VOD the user paused or left in the background stays paused across
+  /// reopens (fallbacks, reconnects, engine switches).
+  bool _holdPaused(_Session s) => !s.isLive && (s.backgrounded || s.userPaused);
+
   Future<void> _open(_Session s, EngineKind kind, StreamRequest request) async {
     _cancelSilentCheck();
     await _guard.switchTo(
       stop: () async => _engine?.stop(),
       open: () async {
-        if (!identical(_session, s) || _disposed) return;
+        if (!_isCurrent(s)) return;
+        // Live stays closed in the background; onForeground reopens it.
+        if (s.isLive && s.backgrounded) return;
         final engine = await _ensureEngine(kind);
-        if (!identical(_session, s) || _disposed) return;
+        if (engine == null || !_isCurrent(s)) return;
         _openStartedAt = _clock.now();
         _ttff = null;
+        s.framedSinceOpen = false;
         await engine.open(request);
+        if (_isCurrent(s) && identical(_engine, engine) && _holdPaused(s)) {
+          await engine.pause();
+        }
       },
       maxConnections: s.maxConnections,
     );
@@ -385,13 +431,18 @@ class PlaybackController extends ChangeNotifier {
     await _open(s, kind, _resumeRequest(s));
   }
 
-  Future<PlayerEngine> _ensureEngine(EngineKind kind) async {
+  /// The engine of [kind], replacing (and disposing) another kind first.
+  /// Null when the controller was disposed meanwhile.
+  Future<PlayerEngine?> _ensureEngine(EngineKind kind) async {
     final current = _engine;
     if (current != null && current.kind == kind) return current;
     if (current != null) {
       _detach(current);
       _engine = null;
       await current.dispose();
+      // dispose() may have run meanwhile and seen no engine to dispose.
+      if (_disposed) return null;
+      if (_engine != null) return _ensureEngine(kind);
     }
     final engine = _factory(kind);
     _engine = engine;
@@ -440,39 +491,59 @@ class PlaybackController extends ChangeNotifier {
 
   void _onFirstFrame(_Session s, PlayerEngine engine, FirstFrameEvent e) {
     s.everPlayed = true;
+    s.framedSinceOpen = true;
     s.tried = {engine.kind};
     final started = _openStartedAt;
     if (started != null) _ttff = _clock.now().difference(started);
     _setPhase(PlaybackPhase.playing);
     _watchdog.onEvent(e);
+    if (_holdPaused(s)) unawaited(engine.pause());
     if (engine.kind == EngineKind.exo && !s.silentChecked) {
       s.silentChecked = true;
-      _silentTimer = Timer(silentAudioCheckDelay, () {
-        _silentTimer = null;
-        unawaited(_checkSilentAudio(s, engine));
-      });
+      if (s.backgrounded) {
+        s.silentPending = true;
+      } else {
+        _scheduleSilentCheck(s, engine);
+      }
     }
+  }
+
+  void _scheduleSilentCheck(_Session s, PlayerEngine engine) {
+    _cancelSilentCheck();
+    _silentTimer = Timer(silentAudioCheckDelay, () {
+      _silentTimer = null;
+      unawaited(_checkSilentAudio(s, engine));
+    });
   }
 
   /// ExoPlayer skips audio formats it cannot decode (AC3/MP2 on many boxes):
   /// tracks exist but none is selected. mpv decodes them in software.
+  /// Never runs in the background: the switch would start mpv playing there.
   Future<void> _checkSilentAudio(_Session s, PlayerEngine engine) async {
-    bool current() =>
-        identical(_session, s) && identical(_engine, engine) && !_disposed;
+    bool current() => _isCurrent(s) && identical(_engine, engine);
     if (!current()) return;
+    if (s.backgrounded) {
+      s.silentPending = true;
+      return;
+    }
     final tracks = await engine.audioTracks();
     if (!current()) return;
+    if (s.backgrounded) {
+      s.silentPending = true;
+      return;
+    }
     if (tracks.isEmpty || tracks.any((t) => t.selected)) return;
     final target = _policy.fallbackFor(EngineKind.exo, _input(s));
     if (target != EngineKind.mpv) return;
     final key = s.itemKey;
     if (key != null) onEnginePreferenceLearned?.call(key, EngineKind.mpv);
+    s.silentEngines.add(EngineKind.exo);
     await _switchEngine(s, EngineKind.mpv);
   }
 
   void _onError(_Session s, PlayerEngine engine, ErrorEvent e) {
     if (!e.fatal) return;
-    if (_guard.handleError(e)) return;
+    if (!s.framedSinceOpen && _guard.handleError(e)) return;
     final kind = engine.kind;
     if (!s.everPlayed) {
       if (kind == EngineKind.exo &&
@@ -493,12 +564,17 @@ class PlaybackController extends ChangeNotifier {
       _fail(s, e.message);
       return;
     }
-    if (kind == EngineKind.mpv && looksLikeTlsError(e.message)) {
-      final fallback = _policy.fallbackFor(kind, _input(s));
-      if (fallback == EngineKind.exo) {
-        unawaited(_switchEngine(s, EngineKind.exo));
-        return;
-      }
+    // Once per item, and never back to a silent Exo: otherwise an Exo that
+    // cannot open and an mpv that keeps hitting TLS errors ping-pong forever
+    // outside the watchdog's attempt count.
+    if (kind == EngineKind.mpv &&
+        !s.tlsSwitched &&
+        !s.silentEngines.contains(EngineKind.exo) &&
+        looksLikeTlsError(e.message) &&
+        _policy.fallbackFor(kind, _input(s)) == EngineKind.exo) {
+      s.tlsSwitched = true;
+      unawaited(_switchEngine(s, EngineKind.exo));
+      return;
     }
     _watchdog.onEvent(e);
   }

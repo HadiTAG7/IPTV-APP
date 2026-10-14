@@ -33,7 +33,11 @@ class FakeEngine implements PlayerEngine {
   /// Makes [open] take this long (a fake timer under fake_async).
   Duration openDelay = Duration.zero;
 
+  /// Makes [dispose] take this long, like ExoEngine awaiting the platform.
+  Duration disposeDelay = Duration.zero;
+
   bool disposed = false;
+  bool _disposing = false;
   String? selectedAudio;
   String? selectedSubtitle;
 
@@ -118,9 +122,11 @@ class FakeEngine implements PlayerEngine {
 
   @override
   Future<void> dispose() async {
-    if (disposed) return;
+    if (disposed || _disposing) return;
+    _disposing = true;
     calls.add('dispose');
     log.add('$_tag.dispose');
+    if (disposeDelay > Duration.zero) await Future<void>.delayed(disposeDelay);
     disposed = true;
     await _events.close();
   }

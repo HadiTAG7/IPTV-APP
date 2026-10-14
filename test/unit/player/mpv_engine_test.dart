@@ -66,11 +66,20 @@ class FakePlatformPlayer extends PlatformPlayer {
 }
 
 class Rig {
-  Rig() {
-    engine = MpvEngine.withPlayer(Player(platformPlayer: fake));
+  /// [props] answers libmpv property reads (`aid`, `sid`, `hwdec-current`).
+  Rig({this.props = const {}}) {
+    engine = MpvEngine.withPlayer(
+      Player(platformPlayer: fake),
+      readProperty: (name) async {
+        reads.add(name);
+        return props[name];
+      },
+    );
     engine.events.listen(events.add);
   }
 
+  final Map<String, String> props;
+  final reads = <String>[];
   final fake = FakePlatformPlayer();
   late final MpvEngine engine;
   final events = <EngineEvent>[];
@@ -268,6 +277,33 @@ void main() {
       await rig.engine.dispose();
     });
 
+    test('an old TLS warning does not make a later hiccup fatal', () async {
+      final rig = Rig();
+      await rig.engine.open(live);
+      rig.fake
+        ..log('ffmpeg', 'error', 'tls: Error in the pull function.')
+        ..log('ffmpeg', 'warn', 'http: HTTP error 403 Forbidden')
+        ..error('Error while decoding frame!');
+      await settle();
+      final hiccup = rig.errors.single;
+      expect(hiccup.fatal, isFalse);
+      expect(hiccup.message, 'Error while decoding frame!');
+      expect(hiccup.httpStatus, isNull);
+
+      // The detail is kept for the fatal error it explains, then dropped.
+      rig.fake.error('Failed to open https://example.com/live/a/b/5.ts.');
+      await settle();
+      final fatal = rig.errors.last;
+      expect(fatal.fatal, isTrue);
+      expect(fatal.message, contains('HTTP error 403'));
+      expect(fatal.httpStatus, 403);
+      rig.fake.error('Error while decoding frame!');
+      await settle();
+      expect(rig.errors.last.message, 'Error while decoding frame!');
+      expect(rig.errors.last.httpStatus, isNull);
+      await rig.engine.dispose();
+    });
+
     test('log details do not leak into the next open', () async {
       final rig = Rig();
       await rig.engine.open(live);
@@ -324,6 +360,44 @@ void main() {
       await rig.engine.dispose();
     });
 
+    test('without an explicit choice the selection is read from mpv', () async {
+      // media_kit keeps track.audio/subtitle at 'auto' until setAudioTrack
+      // is called, even though mpv picked a track through alang/slang.
+      final rig = Rig(props: {'aid': '1', 'sid': 'no'});
+      setTracks(rig.fake);
+      rig.fake.state = rig.fake.state.copyWith(track: const Track());
+      final audio = await rig.engine.audioTracks();
+      expect(audio.map((t) => t.selected), [true, false]);
+      final subs = await rig.engine.subtitleTracks();
+      expect(subs.single.selected, isFalse);
+      expect(rig.reads, containsAll(['aid', 'sid']));
+
+      final stats = await rig.engine.stats();
+      expect(stats['audio'], 'ac3');
+      await rig.engine.dispose();
+    });
+
+    test('a subtitle chosen by slang is marked selected', () async {
+      final rig = Rig(props: {'aid': 'no', 'sid': '1'});
+      setTracks(rig.fake);
+      rig.fake.state = rig.fake.state.copyWith(track: const Track());
+      expect((await rig.engine.subtitleTracks()).single.selected, isTrue);
+      expect(
+        (await rig.engine.audioTracks()).where((t) => t.selected),
+        isEmpty,
+      );
+      await rig.engine.dispose();
+    });
+
+    test('an explicit choice wins without asking mpv', () async {
+      final rig = Rig(props: {'aid': '1'});
+      setTracks(rig.fake);
+      final audio = await rig.engine.audioTracks();
+      expect(audio.map((t) => t.selected), [false, true]);
+      expect(rig.reads, isNot(contains('aid')));
+      await rig.engine.dispose();
+    });
+
     test('selecting tracks, and subtitles off', () async {
       final rig = Rig();
       setTracks(rig.fake);
@@ -348,6 +422,15 @@ void main() {
       expect(stats['audio'], 'aac');
       expect(stats['hwdec'], 'auto-safe');
       expect(stats['cache'], '64 MB');
+      await rig.engine.dispose();
+    });
+
+    test('stats report the hwdec mpv actually uses', () async {
+      final rig = Rig(props: {'hwdec-current': 'mediacodec'});
+      await rig.engine.open(live);
+      expect((await rig.engine.stats())['hwdec'], 'mediacodec');
+      await rig.engine.stop();
+      expect((await rig.engine.stats())['hwdec'], 'auto-safe');
       await rig.engine.dispose();
     });
   });
@@ -381,6 +464,25 @@ void main() {
 
     test('kind is mpv', () {
       expect(Rig().engine.kind, EngineKind.mpv);
+    });
+  });
+
+  group('video configuration', () {
+    test('Android: media_kit maps the flag to hwdec (no in emulators)', () {
+      for (final hw in [true, false]) {
+        final c = mpvVideoConfiguration(hardwareDecoding: hw, android: true);
+        expect(c.hwdec, isNull);
+        expect(c.enableHardwareAcceleration, hw);
+      }
+    });
+
+    test('desktop: hwdec is explicit and rendering stays on the GPU', () {
+      final hw = mpvVideoConfiguration(hardwareDecoding: true, android: false);
+      expect(hw.hwdec, 'auto-safe');
+      expect(hw.enableHardwareAcceleration, isTrue);
+      final sw = mpvVideoConfiguration(hardwareDecoding: false, android: false);
+      expect(sw.hwdec, 'no');
+      expect(sw.enableHardwareAcceleration, isTrue);
     });
   });
 

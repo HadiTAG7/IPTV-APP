@@ -31,49 +31,80 @@ VideoPlayerController _defaultControllerFactory(
   viewType: viewType,
 );
 
-/// Durations above this are treated as unknown (ExoPlayer reports
-/// `C.TIME_UNSET` for live and some progressive streams).
+/// ExoPlayer reports `C.TIME_UNSET` (Long.MIN_VALUE + 1) for live TS and
+/// other streams of unknown length; video_player turns it into 1 ms. Anything
+/// at or below this, or above [_maxSaneDuration], is not a real length.
+const _minSaneDuration = Duration(seconds: 1);
 const _maxSaneDuration = Duration(days: 30);
 
-/// Maps a `video_player` value to the engine-neutral [PlaybackState].
+/// True when [d] is a real media length rather than ExoPlayer's "unset".
 @visibleForTesting
-PlaybackState mapExoValue(VideoPlayerValue v, {required bool isLive}) {
+bool isKnownExoDuration(Duration d) =>
+    d > _minSaneDuration && d <= _maxSaneDuration;
+
+/// Maps a `video_player` value to the engine-neutral [PlaybackState].
+///
+/// [position] replaces `v.position`, which video_player clamps to the
+/// (possibly fake) duration.
+@visibleForTesting
+PlaybackState mapExoValue(
+  VideoPlayerValue v, {
+  required bool isLive,
+  Duration? position,
+}) {
   final duration = v.duration;
-  final saneDuration =
-      isLive || duration <= Duration.zero || duration > _maxSaneDuration
-      ? Duration.zero
-      : duration;
+  final pos = position ?? v.position;
   final size = v.size;
   return PlaybackState(
-    position: v.position < Duration.zero ? Duration.zero : v.position,
-    duration: saneDuration,
+    position: pos < Duration.zero ? Duration.zero : pos,
+    duration: isLive || !isKnownExoDuration(duration)
+        ? Duration.zero
+        : duration,
     buffering: !v.hasError && (!v.isInitialized || v.isBuffering),
     playing: v.isPlaying,
     videoSize: size.width > 0 && size.height > 0 ? size : null,
-    hasFirstFrame:
-        v.isInitialized && (v.isPlaying || v.position > Duration.zero),
+    hasFirstFrame: v.isInitialized && (v.isPlaying || pos > Duration.zero),
   );
 }
 
-/// Adds the app User-Agent unless [headers] already carry one, so panels
-/// never see ExoPlayer's library default.
+/// Puts the User-Agent under the exact key `User-Agent` (the only one
+/// video_player_android reads; any other spelling is replaced by
+/// "ExoPlayer"), adding the app default when none is given.
 @visibleForTesting
 Map<String, String> withDefaultUserAgent(Map<String, String> headers) {
-  if (headers.keys.any((k) => k.toLowerCase() == 'user-agent')) return headers;
-  return {...headers, 'User-Agent': kDefaultUserAgent};
+  String? userAgent;
+  final out = <String, String>{};
+  headers.forEach((k, v) {
+    if (k.toLowerCase() == 'user-agent') {
+      userAgent ??= v;
+    } else {
+      out[k] = v;
+    }
+  });
+  out['User-Agent'] = userAgent ?? kDefaultUserAgent;
+  return out;
 }
 
 /// ExoPlayer (Media3) through `video_player`. Android only.
 ///
 /// `video_player` cannot change the source of a controller, so every [open]
 /// disposes the previous controller and creates a new one.
+///
+/// For live and unknown-length streams video_player's position, duration and
+/// completion flag are meaningless (see [isKnownExoDuration]), so the raw
+/// platform position is polled instead and an end is only reported once the
+/// player has stayed stopped and completed for two polls.
 class ExoEngine implements PlayerEngine {
   ExoEngine({
     this.viewType = VideoViewType.textureView,
+    this.positionPollInterval = const Duration(milliseconds: 500),
     ExoControllerFactory? controllerFactory,
   }) : _createController = controllerFactory ?? _defaultControllerFactory;
 
   final VideoViewType viewType;
+
+  /// How often the raw position is read for live and unknown-length streams.
+  final Duration positionPollInterval;
   final ExoControllerFactory _createController;
 
   final _state = ValueNotifier<PlaybackState>(PlaybackState.idle);
@@ -86,6 +117,15 @@ class ExoEngine implements PlayerEngine {
   bool _endedSent = false;
   bool _errorSent = false;
   bool _disposed = false;
+
+  /// Whether playback should run once the controller is ready; [pause]
+  /// before `initialize()` completes clears it.
+  bool _playWhenReady = true;
+
+  /// Live or unknown length: the position comes from [_poll].
+  Duration? _rawPosition;
+  Timer? _poll;
+  int _endedPolls = 0;
 
   @override
   EngineKind get kind => EngineKind.exo;
@@ -111,6 +151,7 @@ class ExoEngine implements PlayerEngine {
     _firstFrameSent = false;
     _endedSent = false;
     _errorSent = false;
+    _playWhenReady = true;
     _state.value = const PlaybackState(buffering: true);
 
     final Uri uri;
@@ -148,15 +189,68 @@ class ExoEngine implements PlayerEngine {
       return;
     }
     if (gen != _generation) return;
+    final raw = _isRaw(c.value);
+    if (raw) {
+      _poll = Timer.periodic(positionPollInterval, (_) {
+        unawaited(_pollPosition(c, gen));
+      });
+    }
     try {
       final startAt = request.startAt;
-      if (!request.isLive && startAt != null && startAt > Duration.zero) {
+      // Seeks are clamped to the duration, so an unknown length can't seek.
+      if (!raw && startAt != null && startAt > Duration.zero) {
         await c.seekTo(startAt);
       }
-      if (gen != _generation) return;
-      await c.play();
+      if (gen != _generation || !_playWhenReady) return;
+      await _resume(c);
     } catch (e) {
       if (gen == _generation && !_errorSent) _emitError(_describe(e));
+    }
+  }
+
+  /// Live, or a length ExoPlayer does not know: video_player's position and
+  /// completion flag are clamped to a fake duration and must be ignored.
+  bool _isRaw(VideoPlayerValue v) =>
+      (_request?.isLive ?? false) ||
+      (v.isInitialized && !isKnownExoDuration(v.duration));
+
+  Future<void> _resume(VideoPlayerController c) async {
+    final v = c.value;
+    // video_player restarts from 0 when position == duration, which is always
+    // true once an unknown length was clamped to its fake 1 ms.
+    if (_isRaw(v) && v.position == v.duration) {
+      c.value = v.copyWith(position: Duration.zero);
+    }
+    await c.play();
+  }
+
+  /// Reads the unclamped platform position and detects a real end.
+  Future<void> _pollPosition(VideoPlayerController c, int gen) async {
+    Duration? raw;
+    try {
+      raw = await c.position;
+    } catch (_) {
+      // Platform call raced a dispose; the next poll (if any) retries.
+    }
+    if (gen != _generation || _disposed || !identical(_controller.value, c)) {
+      return;
+    }
+    if (raw != null && raw >= Duration.zero) _rawPosition = raw;
+    final v = c.value;
+    // A real end makes video_player pause itself and flag completion. A
+    // rebuffer also drops isPlaying, but only briefly and while buffering.
+    final endedLike =
+        _playWhenReady &&
+        v.isInitialized &&
+        !v.hasError &&
+        v.isCompleted &&
+        !v.isPlaying &&
+        !v.isBuffering;
+    _endedPolls = endedLike ? _endedPolls + 1 : 0;
+    _onValue();
+    if (_endedPolls >= 2 && !_endedSent) {
+      _endedSent = true;
+      _events.add(const EndedEvent());
     }
   }
 
@@ -164,7 +258,6 @@ class ExoEngine implements PlayerEngine {
     final c = _controller.value;
     if (c == null || _disposed) return;
     final v = c.value;
-    final isLive = _request?.isLive ?? false;
 
     if (v.hasError) {
       _state.value = _state.value.copyWith(playing: false, buffering: false);
@@ -172,7 +265,12 @@ class ExoEngine implements PlayerEngine {
       return;
     }
 
-    final mapped = mapExoValue(v, isLive: isLive);
+    final raw = _isRaw(v);
+    final mapped = mapExoValue(
+      v,
+      isLive: _request?.isLive ?? false,
+      position: raw ? (_rawPosition ?? Duration.zero) : null,
+    );
     _state.value = _firstFrameSent
         ? mapped.copyWith(hasFirstFrame: true)
         : mapped;
@@ -182,19 +280,24 @@ class ExoEngine implements PlayerEngine {
       _events.add(const FirstFrameEvent());
     }
 
-    if (v.isPlaying) _endedSent = false;
-    if (!_endedSent && _isEnded(v, isLive: isLive)) {
+    if (v.isPlaying) {
+      _endedSent = false;
+      _endedPolls = 0;
+    }
+    if (!raw && !_endedSent && _isEnded(v)) {
       _endedSent = true;
       _events.add(const EndedEvent());
     }
   }
 
-  bool _isEnded(VideoPlayerValue v, {required bool isLive}) {
-    if (!v.isInitialized) return false;
+  /// End of a VOD with a known length. video_player also sets isCompleted
+  /// when a poll overshoots the duration while still playing, so only a
+  /// stopped player counts.
+  bool _isEnded(VideoPlayerValue v) {
+    if (!v.isInitialized || v.isPlaying || v.isBuffering) return false;
     if (v.isCompleted) return true;
-    if (isLive || v.isPlaying) return false;
-    final d = mapExoValue(v, isLive: false).duration;
-    return d > Duration.zero &&
+    final d = v.duration;
+    return isKnownExoDuration(d) &&
         v.position >= d - const Duration(milliseconds: 500);
   }
 
@@ -214,6 +317,10 @@ class ExoEngine implements PlayerEngine {
 
   /// Pauses and disposes the current controller, closing its connection.
   Future<void> _release() async {
+    _poll?.cancel();
+    _poll = null;
+    _rawPosition = null;
+    _endedPolls = 0;
     final c = _controller.value;
     if (c == null) return;
     _controller.value = null;
@@ -232,12 +339,14 @@ class ExoEngine implements PlayerEngine {
 
   @override
   Future<void> play() async {
+    _playWhenReady = true;
     final c = _controller.value;
-    if (c != null && c.value.isInitialized) await c.play();
+    if (c != null && c.value.isInitialized) await _resume(c);
   }
 
   @override
   Future<void> pause() async {
+    _playWhenReady = false;
     final c = _controller.value;
     if (c != null && c.value.isInitialized) await c.pause();
   }
@@ -245,8 +354,7 @@ class ExoEngine implements PlayerEngine {
   @override
   Future<void> seek(Duration position) async {
     final c = _controller.value;
-    if (c == null || !c.value.isInitialized) return;
-    if (_request?.isLive ?? false) return;
+    if (c == null || !c.value.isInitialized || _isRaw(c.value)) return;
     _endedSent = false;
     await c.seekTo(position);
   }

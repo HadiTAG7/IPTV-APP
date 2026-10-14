@@ -23,6 +23,9 @@ class FakeVpc extends VideoPlayerController {
   /// Completes initialize(); errors make it fail like ExoPlayer does.
   final init = Completer<void>();
   Duration reportedDuration = const Duration(minutes: 90);
+
+  /// What the platform reports as the current, unclamped position.
+  Duration rawPosition = Duration.zero;
   List<VideoAudioTrack> tracks = const [];
   bool disposed = false;
 
@@ -74,6 +77,9 @@ class FakeVpc extends VideoPlayerController {
   }
 
   @override
+  Future<Duration?> get position async => disposed ? null : rawPosition;
+
+  @override
   Future<List<VideoAudioTrack>> getAudioTracks() async => tracks;
 
   @override
@@ -90,9 +96,13 @@ class FakeVpc extends VideoPlayerController {
 }
 
 class Rig {
-  Rig({VideoViewType viewType = VideoViewType.textureView}) {
+  Rig({
+    VideoViewType viewType = VideoViewType.textureView,
+    Duration poll = const Duration(milliseconds: 500),
+  }) {
     engine = ExoEngine(
       viewType: viewType,
+      positionPollInterval: poll,
       controllerFactory:
           (
             uri, {
@@ -136,6 +146,9 @@ const movie = StreamRequest(
 
 Future<void> settle() => Future<void>.delayed(Duration.zero);
 
+/// ExoPlayer's `C.TIME_UNSET` (Long.MIN_VALUE + 1).
+const timeUnset = -9223372036854775807;
+
 void main() {
   group('mapExoValue', () {
     const ready = VideoPlayerValue(
@@ -157,6 +170,10 @@ void main() {
       expect(mapExoValue(ready, isLive: true).duration, Duration.zero);
       for (final d in [
         Duration.zero,
+        // C.TIME_UNSET as video_player_android delivers it (wraps to 1 ms).
+        Duration(milliseconds: timeUnset),
+        const Duration(milliseconds: 1),
+        const Duration(seconds: 1),
         const Duration(milliseconds: -9223372036854),
         const Duration(days: 400),
       ]) {
@@ -165,6 +182,21 @@ void main() {
           Duration.zero,
         );
       }
+    });
+
+    test('a raw position replaces the clamped one', () {
+      final clamped = ready.copyWith(
+        duration: const Duration(milliseconds: 1),
+        position: const Duration(milliseconds: 1),
+        isPlaying: true,
+      );
+      final s = mapExoValue(
+        clamped,
+        isLive: true,
+        position: const Duration(seconds: 42),
+      );
+      expect(s.position, const Duration(seconds: 42));
+      expect(s.duration, Duration.zero);
     });
 
     test('uninitialized is buffering, has no frame or size', () {
@@ -199,10 +231,19 @@ void main() {
 
   test('withDefaultUserAgent keeps a custom UA, adds the app one', () {
     expect(withDefaultUserAgent({'User-Agent': 'X'}), {'User-Agent': 'X'});
-    expect(withDefaultUserAgent({'user-agent': 'X'}), {'user-agent': 'X'});
     expect(withDefaultUserAgent({'Referer': 'r'}), {
       'Referer': 'r',
       'User-Agent': kDefaultUserAgent,
+    });
+  });
+
+  test('any spelling of user-agent ends up under the exact key', () {
+    // video_player_android only reads 'User-Agent'; other spellings would be
+    // replaced by "ExoPlayer".
+    expect(withDefaultUserAgent({'user-agent': 'X'}), {'User-Agent': 'X'});
+    expect(withDefaultUserAgent({'USER-AGENT': 'Y', 'Referer': 'r'}), {
+      'Referer': 'r',
+      'User-Agent': 'Y',
     });
   });
 
@@ -247,7 +288,7 @@ void main() {
     test('VOD seeks to startAt before playing', () async {
       final rig = Rig();
       await rig.engine.open(movie);
-      expect(rig.c.httpHeaders, {'user-agent': 'Custom/1.0'});
+      expect(rig.c.httpHeaders, {'User-Agent': 'Custom/1.0'});
       rig.c.ready();
       await settle();
       expect(rig.c.calls, ['initialize', 'seekTo 2520', 'play']);
@@ -413,6 +454,77 @@ void main() {
         );
         await settle();
         expect(rig.events.whereType<EndedEvent>(), isEmpty);
+        await rig.engine.dispose();
+      },
+    );
+  });
+
+  group('play intent', () {
+    test('pause() while initializing is kept: no play after ready', () async {
+      final rig = Rig();
+      await rig.engine.open(movie);
+      await rig.engine.pause();
+      rig.c.ready();
+      await settle();
+      expect(rig.c.calls, ['initialize', 'seekTo 2520']);
+      expect(rig.engine.state.value.playing, isFalse);
+      // The resume frame is on screen even though it is paused.
+      expect(rig.events.whereType<FirstFrameEvent>(), hasLength(1));
+      await rig.engine.play();
+      expect(rig.c.calls.last, 'play');
+      expect(rig.engine.state.value.playing, isTrue);
+      await rig.engine.dispose();
+    });
+
+    test('pause then play while initializing plays once ready', () async {
+      final rig = Rig();
+      await rig.engine.open(live);
+      await rig.engine.pause();
+      await rig.engine.play();
+      expect(rig.c.calls, ['initialize']);
+      rig.c.ready();
+      await settle();
+      expect(rig.c.calls, ['initialize', 'play']);
+      await rig.engine.dispose();
+    });
+
+    test('a new open plays again after an earlier pause', () async {
+      final rig = Rig();
+      await rig.engine.open(live);
+      await rig.engine.pause();
+      await rig.engine.open(live);
+      rig.c.ready();
+      await settle();
+      expect(rig.c.calls, ['initialize', 'play']);
+      await rig.engine.dispose();
+    });
+  });
+
+  group('unknown length', () {
+    test(
+      'VOD without a real duration: no seek, raw position, no end',
+      () async {
+        final rig = Rig(poll: const Duration(milliseconds: 10));
+        rig.onCreate = (c) =>
+            c.reportedDuration = const Duration(milliseconds: 1);
+        await rig.engine.open(movie);
+        rig.c.ready();
+        await settle();
+        expect(rig.c.calls, ['initialize', 'play'], reason: 'cannot seek');
+        // video_player clamps to the fake 1 ms and flags completion.
+        rig.c
+          ..rawPosition = const Duration(seconds: 7)
+          ..value = rig.c.value.copyWith(
+            position: const Duration(milliseconds: 1),
+            isCompleted: true,
+          );
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        final s = rig.engine.state.value;
+        expect(s.duration, Duration.zero);
+        expect(s.position, const Duration(seconds: 7));
+        expect(rig.events.whereType<EndedEvent>(), isEmpty);
+        await rig.engine.seek(const Duration(seconds: 1));
+        expect(rig.c.calls, isNot(contains('seekTo 1')));
         await rig.engine.dispose();
       },
     );
