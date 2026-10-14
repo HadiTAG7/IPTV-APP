@@ -1,0 +1,353 @@
+# The only workflow that produces installables. Never rename this file:
+# versionCode = github.run_number of THIS workflow, and a reset counter would
+# make new APKs look like downgrades.
+name: build
+
+on:
+  push:
+    branches: [main, 'claude/**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      impeller_off:
+        description: Also build iptv-player-universal-compat.apk (Impeller off) for boxes with GPU glitches
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  FLUTTER_VERSION: 3.47.7
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+          pub-cache: true
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Generated code is committed and fresh
+        run: |
+          dart run build_runner build --delete-conflicting-outputs
+          git status --porcelain
+          git diff --exit-code
+          if [ -n "$(git status --porcelain --untracked-files=all -- lib test)" ]; then
+            echo "::error::Generated files are missing from the commit; run build_runner and commit them."
+            exit 1
+          fi
+
+      - name: Format
+        run: dart format --output=none --set-exit-if-changed lib test tool
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test --exclude-tags network,bench
+
+      - name: Upload golden failures
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: golden-failures
+          path: test/**/failures/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  android:
+    name: Android APKs
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+      # Optional Impeller-off universal APK for boxes whose GPU drivers glitch: tick
+      # impeller_off on a manual run, or set the repository variable
+      # IMPELLER_COMPAT_APK=true to ship it with every release.
+      BUILD_COMPAT: ${{ inputs.impeller_off || vars.IMPELLER_COMPAT_APK == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+          pub-cache: true
+
+      - name: Version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            name="${GITHUB_REF_NAME#v}"
+          else
+            name="0.0.0-dev"
+          fi
+          if ! [[ $name =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not a version tag like v1.2.3 or v1.2.3-beta.1."
+            exit 1
+          fi
+          echo "BUILD_NAME=$name" >> "$GITHUB_ENV"
+          echo "Building $name ($BUILD_NUMBER)"
+
+      - name: Release signing
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            # A trailing newline from pasting is dropped; any other line break is an error.
+            for name in KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+              value=${!name}
+              value=${value%$'\n'}
+              value=${value%$'\r'}
+              if [[ $value == *[$'\r\n']* ]]; then
+                echo "::error::ANDROID_$name must be a single line."
+                exit 1
+              fi
+              printf -v "$name" '%s' "$value"
+            done
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/release.jks
+            # build.gradle.kts reads key.properties as UTF-8. Escape what java.util.Properties
+            # would reinterpret: backslashes, tabs, form feeds and a leading space.
+            esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/\t/\\t/g' -e 's/\f/\\f/g' -e '1s/^ /\\ /'; }
+            {
+              echo "storeFile=release.jks"
+              echo "storePassword=$(esc "$KEYSTORE_PASSWORD")"
+              echo "keyAlias=$(esc "$KEY_ALIAS")"
+              echo "keyPassword=$(esc "$KEY_PASSWORD")"
+            } > android/key.properties
+            echo "suffix=" >> "$GITHUB_OUTPUT"
+            echo "release=1" >> "$GITHUB_OUTPUT"
+            echo "Signing with the release key."
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "::error::Release signing secrets are missing. Add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD before tagging a release."
+            exit 1
+          else
+            echo "::warning::Release signing secrets are not set; these APKs are debug-signed and cannot be updated by release builds. Do not install them on your devices."
+            echo "suffix=-debug-signed" >> "$GITHUB_OUTPUT"
+            echo "release=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Release certificate pin
+        id: pin
+        env:
+          RELEASE_SIGNED: ${{ steps.signing.outputs.release }}
+        run: |
+          pin_file=.github/release-cert.sha256
+          if [ "$RELEASE_SIGNED" != "1" ]; then
+            exit 0
+          fi
+          if [ -f "$pin_file" ]; then
+            sha=$(tr -d ':[:space:]' < "$pin_file" | tr '[:upper:]' '[:lower:]')
+            if ! [[ $sha =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::$pin_file must hold one SHA-256 certificate fingerprint (64 hex digits, colons allowed)."
+              exit 1
+            fi
+            echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+            echo "APKs must be signed by certificate $sha"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "::error::$pin_file is missing. Commit the release certificate's SHA-256 fingerprint (keytool -list -v -keystore release.jks, or apksigner verify --print-certs on a release APK) before tagging. Without the pin, a replaced keystore would ship APKs that cannot update installed copies."
+            exit 1
+          else
+            echo "::warning::$pin_file is missing, so the signing certificate is not pinned. Commit its SHA-256 fingerprint before tagging a release."
+          fi
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build split APKs
+        run: >
+          flutter build apk --release --split-per-abi
+          --target-platform android-arm,android-arm64
+          --build-name "$BUILD_NAME"
+          --build-number "$BUILD_NUMBER"
+          -P force-version-code-ignoring-abi=true
+
+      - name: Collect split APKs
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/iptv-player-armeabi-v7a.apk
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/iptv-player-arm64-v8a.apk
+
+      - name: Build universal APK
+        run: >
+          flutter build apk --release
+          --target-platform android-arm,android-arm64
+          --build-name "$BUILD_NAME"
+          --build-number "$BUILD_NUMBER"
+          -P force-version-code-ignoring-abi=true
+
+      - name: Collect universal APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk dist/iptv-player-universal.apk
+
+      - name: Build compat APK (Impeller off)
+        if: env.BUILD_COMPAT == 'true'
+        run: >
+          flutter build apk --release
+          --target-platform android-arm,android-arm64
+          --build-name "$BUILD_NAME"
+          --build-number "$BUILD_NUMBER"
+          -P force-version-code-ignoring-abi=true
+          -P impellerOff=true
+
+      - name: Collect compat APK
+        if: env.BUILD_COMPAT == 'true'
+        run: cp build/app/outputs/flutter-apk/app-release.apk dist/iptv-player-universal-compat.apk
+
+      - name: Check APKs
+        env:
+          REQUIRE_RELEASE_SIGNED: ${{ steps.signing.outputs.release }}
+          EXPECTED_CERT_SHA256: ${{ steps.pin.outputs.sha256 }}
+        run: |
+          bash tool/check_apk.sh dist/iptv-player-universal.apk 90 "armeabi-v7a arm64-v8a"
+          bash tool/check_apk.sh dist/iptv-player-armeabi-v7a.apk 90 "armeabi-v7a"
+          bash tool/check_apk.sh dist/iptv-player-arm64-v8a.apk 90 "arm64-v8a"
+          if [ -f dist/iptv-player-universal-compat.apk ]; then
+            EXPECT_IMPELLER_OFF=1 bash tool/check_apk.sh dist/iptv-player-universal-compat.apk 90 "armeabi-v7a arm64-v8a"
+          fi
+          ls -la dist
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f android/app/release.jks android/key.properties
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: iptv-player-android${{ steps.signing.outputs.suffix }}
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  windows:
+    name: Windows zip
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+          pub-cache: true
+
+      - name: Version
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            name="${GITHUB_REF_NAME#v}"
+          else
+            name="0.0.0-dev"
+          fi
+          if ! [[ $name =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not a version tag like v1.2.3 or v1.2.3-beta.1."
+            exit 1
+          fi
+          echo "BUILD_NAME=$name" >> "$GITHUB_ENV"
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build
+        run: flutter build windows --release --build-name "$env:BUILD_NAME" --build-number "$env:BUILD_NUMBER"
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $release = 'build/windows/x64/runner/Release'
+          # App-local VC++ runtime so the zip runs on PCs without the redistributable.
+          foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
+            Copy-Item -Path (Join-Path $env:WINDIR "System32\$dll") -Destination $release -Force
+          }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "$release/*" -DestinationPath dist/iptv-player-windows-x64.zip -Force
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: iptv-player-windows
+          path: dist/iptv-player-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [android, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- *.apk *.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Optional release files
+        id: optional
+        run: |
+          if [ -f dist/iptv-player-universal-compat.apk ]; then
+            echo "compat=dist/iptv-player-universal-compat.apk" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/iptv-player-universal.apk
+            dist/iptv-player-armeabi-v7a.apk
+            dist/iptv-player-arm64-v8a.apk
+            dist/iptv-player-windows-x64.zip
+            dist/SHA256SUMS.txt
+            ${{ steps.optional.outputs.compat }}
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          body: |
+            **أي ملف أنزّل؟** إذا ما أنت متأكد نزّل `iptv-player-universal.apk`. أجهزة Fire TV Stick والبوكسات الرخيصة: `armeabi-v7a`. الجوالات الحديثة و Shield و Google TV: `arm64-v8a`. الكمبيوتر: `iptv-player-windows-x64.zip`. طريقة التثبيت: https://github.com/${{ github.repository }}/blob/main/docs/INSTALL_AR.md
+
+            **Which file?** Not sure: `iptv-player-universal.apk`. Fire TV Stick and cheap boxes: `armeabi-v7a`. Modern phones, Shield, Google TV: `arm64-v8a`. PC: `iptv-player-windows-x64.zip`.
+
+            `iptv-player-universal-compat.apk` (إن وُجد / if present): فقط للبوكسات اللي تظهر فيها الصورة مشوّهة أو ترمش مع النسخة العادية. Only for boxes whose picture glitches or flickers with the normal APK.
+
+            TV download link: `https://github.com/${{ github.repository }}/releases/latest/download/iptv-player-universal.apk`
+
+            The app is a player only and ships no channels or playlists. / التطبيق مشغّل فقط وما فيه أي قنوات أو قوائم.

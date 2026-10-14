@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Merged into release builds only with -PimpellerOff=true (the -compat APK):
+         falls back to the Skia OpenGL renderer for boxes whose GPU drivers glitch
+         under Impeller. Flutter deprecates this opt-out (it logs a warning), so
+         keep it out of the main manifest and drop it once Flutter removes it. -->
+    <application>
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
+    </application>
+</manifest>
