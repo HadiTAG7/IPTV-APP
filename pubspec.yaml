@@ -1,0 +1,64 @@
+name: iptv_player
+description: "Personal IPTV player for Android, Android TV and Windows. Ships no content."
+publish_to: 'none'
+
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.5
+  flutter: ">=3.47.7 <3.48.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: any
+
+  # Player engines: ExoPlayer (Android live default) and mpv (VOD, fallback, desktop).
+  video_player: ^2.14.1
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
+
+  # State, storage, networking.
+  flutter_riverpod: ^3.4.3
+  drift: ^2.35.2
+  drift_flutter: ^0.3.1
+  dio: ^5.11.1
+  xml: ^7.1.0
+
+  # Platform helpers.
+  path_provider: ^2.1.6
+  file_picker: ^13.1.0
+  wakelock_plus: ^1.8.1
+  pretty_qr_code: ^3.6.0
+  package_info_plus: ^10.2.2
+  connectivity_plus: ^7.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  drift_dev: ^2.35.1
+  build_runner: ^2.16.2
+  mocktail: ^1.0.5
+  fake_async: any
+
+flutter:
+  uses-material-design: true
+  generate: true
+
+  fonts:
+    - family: Tajawal
+      fonts:
+        - asset: assets/fonts/Tajawal-Regular.ttf
+        - asset: assets/fonts/Tajawal-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Tajawal-Bold.ttf
+          weight: 700
+
+  assets:
+    - assets/fonts/OFL.txt
