@@ -73,7 +73,10 @@ class FormFactorScope extends InheritedWidget {
 /// Lays [child] out on a canvas [TvLayout.designWidth] wide and scales it to
 /// the available width, so TV screens look the same at any density.
 ///
-/// The [MediaQuery] seen by [child] reports the design-space size.
+/// The [MediaQuery] seen by [child] reports the design-space size. The widget
+/// tree has the same shape at every size (including the design width and an
+/// empty, minimised window), so resizing never remounts [child] or loses its
+/// state.
 class TvViewport extends StatelessWidget {
   const TvViewport({super.key, required this.child});
 
@@ -85,10 +88,12 @@ class TvViewport extends StatelessWidget {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         final height = constraints.maxHeight;
-        if (!width.isFinite || !height.isFinite || width <= 0) return child;
-        final scale = tvScaleFactor(width);
-        if ((scale - 1).abs() < 0.001) return child;
-        final design = Size(TvLayout.designWidth, height / scale);
+        final usable =
+            width.isFinite && height.isFinite && width > 0 && height > 0;
+        final scale = usable ? tvScaleFactor(width) : 1.0;
+        final design = usable
+            ? Size(TvLayout.designWidth, height / scale)
+            : constraints.smallest;
         final mq = MediaQuery.of(context);
         return FittedBox(
           fit: BoxFit.fill,

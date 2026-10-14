@@ -698,16 +698,16 @@ abstract class AppLocalizations {
   /// **'Next'**
   String get liveNext;
 
-  /// No description provided for @liveNowTitle.
+  /// {title} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.
   ///
   /// In en, this message translates to:
-  /// **'Now: {title}'**
+  /// **'Now: ⁨{title}⁩'**
   String liveNowTitle(String title);
 
-  /// No description provided for @liveNextTitle.
+  /// {title} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.
   ///
   /// In en, this message translates to:
-  /// **'Next: {title}'**
+  /// **'Next: ⁨{title}⁩'**
   String liveNextTitle(String title);
 
   /// No description provided for @liveChannelCount.
@@ -1238,10 +1238,10 @@ abstract class AppLocalizations {
   /// **'Delete source'**
   String get settingsDeleteSource;
 
-  /// No description provided for @settingsDeleteSourceConfirm.
+  /// {name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.
   ///
   /// In en, this message translates to:
-  /// **'Delete “{name}”? Its channels, favorites and watch progress will be removed from this device.'**
+  /// **'Delete “⁨{name}⁩”? Its channels, favorites and watch progress will be removed from this device.'**
   String settingsDeleteSourceConfirm(String name);
 
   /// No description provided for @settingsSetActive.
@@ -1514,10 +1514,10 @@ abstract class AppLocalizations {
   /// **'No favorites yet. Press Menu on a channel to add it.'**
   String get favoritesEmpty;
 
-  /// No description provided for @searchNoResults.
+  /// {query} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.
   ///
   /// In en, this message translates to:
-  /// **'No results for “{query}”'**
+  /// **'No results for “⁨{query}⁩”'**
   String searchNoResults(String query);
 
   /// No description provided for @searchChannels.

@@ -184,10 +184,10 @@ class AppLocalizationsAr extends AppLocalizations {
   String get fieldLiveFormat => 'صيغة البث المباشر';
 
   @override
-  String get liveFormatTs => 'MPEG-TS (.ts)';
+  String get liveFormatTs => '⁦MPEG-TS (.ts)⁩';
 
   @override
-  String get liveFormatHls => 'HLS (.m3u8)';
+  String get liveFormatHls => '⁦HLS (.m3u8)⁩';
 
   @override
   String get fieldAdvancedOptions => 'خيارات متقدمة';
@@ -209,7 +209,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get errorInvalidUrl =>
-      'رابط غير صالح. يجب أن يبدأ بـ http:// أو https://.';
+      'رابط غير صالح. يجب أن يبدأ بـ ⁦http://⁩ أو ⁦https://⁩.';
 
   @override
   String get errorUnreachable =>
@@ -360,12 +360,12 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String liveNowTitle(String title) {
-    return 'الآن: $title';
+    return 'الآن: ⁨$title⁩';
   }
 
   @override
   String liveNextTitle(String title) {
-    return 'التالي: $title';
+    return 'التالي: ⁨$title⁩';
   }
 
   @override
@@ -693,7 +693,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String settingsDeleteSourceConfirm(String name) {
-    return 'هل تريد حذف «$name»؟ ستُحذف قنواته ومفضلته وسجل المشاهدة من هذا الجهاز.';
+    return 'هل تريد حذف «⁨$name⁩»؟ ستُحذف قنواته ومفضلته وسجل المشاهدة من هذا الجهاز.';
   }
 
   @override
@@ -753,7 +753,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String settingsVersion(String version) {
-    return 'الإصدار $version';
+    return 'الإصدار ⁦$version⁩';
   }
 
   @override
@@ -770,7 +770,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get helpLegalBody =>
-      'التطبيق مشغّل فقط وما فيه أي قنوات؛ أنت تضيف رابط M3U أو بيانات Xtream من مصدر يحق لك استخدامه. مصادر مجانية نظامية: قوائم iptv-org العامة (روابط تنشرها القنوات نفسها، وبعضها يتوقف أو يكون محجوب جغرافياً)، أو جهاز الاستقبال الفضائي حقك إذا يصدّر M3U. تطبيقات رسمية مجانية: «الأولى»، والباقة المجانية في «شاهد»، و«ثمانية». الاشتراكات المدفوعة النظامية (شاهد VIP، TOD by beIN، stc tv، OSN+) تشتغل من تطبيقاتها الرسمية فقط وما تعطيك رابط M3U أو Xtream. انتبه من «اشتراكات IPTV» الرخيصة اللي تُباع في الواتساب والتلقرام: غالباً غير مرخّصة، ونظام حقوق المؤلف الجديد (نافذ من أغسطس 2026) يشدّد العقوبات، وفيها خطر احتيال وبرمجيات ضارة.';
+      'التطبيق مشغّل فقط وما فيه أي قنوات؛ أنت تضيف رابط M3U أو بيانات Xtream من مصدر يحق لك استخدامه. مصادر مجانية نظامية: قوائم iptv-org العامة (روابط تنشرها القنوات نفسها، وبعضها يتوقف أو يكون محجوب جغرافياً)، أو جهاز الاستقبال الفضائي حقك إذا يصدّر M3U. تطبيقات رسمية مجانية: «الأولى»، والباقة المجانية في «شاهد»، و«ثمانية». الاشتراكات المدفوعة النظامية (شاهد ⁦VIP⁩، ⁦TOD by beIN⁩، ⁦stc tv⁩، ⁦OSN+⁩) تشتغل من تطبيقاتها الرسمية فقط وما تعطيك رابط M3U أو Xtream. انتبه من «اشتراكات IPTV» الرخيصة اللي تُباع في الواتساب والتلقرام: غالباً غير مرخّصة، ونظام حقوق المؤلف الجديد (نافذ من أغسطس 2026) يشدّد العقوبات، وفيها خطر احتيال وبرمجيات ضارة.';
 
   @override
   String get helpWarningSignsTitle => 'علامات البائع غير المرخّص';
@@ -846,7 +846,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String lanOrOpen(String url) {
-    return 'أو افتح $url';
+    return 'أو افتح ⁦$url⁩';
   }
 
   @override
@@ -867,7 +867,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String searchNoResults(String query) {
-    return 'لا توجد نتائج لـ «$query»';
+    return 'لا توجد نتائج لـ «⁨$query⁩»';
   }
 
   @override

@@ -1,13 +1,47 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'key_repeat.dart';
+
+/// Whether an arrow press towards [direction] should move focus away from
+/// [node] rather than move a caret.
+///
+/// True when [node] is not in a text field, for up/down in a single-line
+/// field, when the field is empty or has no caret, and when the collapsed
+/// caret already sits at the end the press would move it to. Flutter moves
+/// the caret logically (Left and Up go backward) in either text direction,
+/// so those ends are offset 0 and the text length.
+bool arrowLeavesTextField(FocusNode node, TraversalDirection direction) {
+  final editable = node.context?.findAncestorStateOfType<EditableTextState>();
+  if (editable == null) return true;
+  final value = editable.textEditingValue;
+  final selection = value.selection;
+  if (value.text.isEmpty || !selection.isValid) return true;
+  final vertical =
+      direction == TraversalDirection.up ||
+      direction == TraversalDirection.down;
+  if (vertical && editable.widget.maxLines == 1) return true;
+  if (!selection.isCollapsed) return false;
+  final backward =
+      direction == TraversalDirection.left ||
+      direction == TraversalDirection.up;
+  return backward
+      ? selection.baseOffset <= 0
+      : selection.baseOffset >= value.text.length;
+}
+
 /// A [TextField] that works with a D-pad.
 ///
 /// Up/Down leave the field via [FocusNode.focusInDirection] (a single-line
-/// field otherwise swallows them, flutter#147772). OK / Select opens the soft
-/// keyboard. [textInputAction] `next` moves to [nextFocusNode] (or the next
-/// field in traversal order); `done` and other actions hide the keyboard but
-/// keep focus on the field, so a TV never ends up with nothing focused.
+/// field otherwise swallows them, flutter#147772); Left/Right move the caret
+/// and leave the field once it is at that end ([arrowLeavesTextField]), on a
+/// fresh press only. A press with nowhere to go inside the pane is left to an
+/// enclosing `PaneScope`, so a pane holding only a field never traps focus.
+///
+/// OK / Select opens the soft keyboard. [textInputAction] `next` moves to
+/// [nextFocusNode] (or the next field in traversal order); `done` and other
+/// actions hide the keyboard but keep focus on the field, so a TV never ends
+/// up with nothing focused.
 class TvTextField extends StatefulWidget {
   const TvTextField({
     super.key,
@@ -80,14 +114,19 @@ class _TvTextFieldState extends State<TvTextField> {
       return KeyEventResult.ignored;
     }
     final key = event.logicalKey;
-    final direction = key == LogicalKeyboardKey.arrowUp
-        ? TraversalDirection.up
-        : key == LogicalKeyboardKey.arrowDown
-        ? TraversalDirection.down
-        : null;
+    final direction = arrowDirection(key);
     if (direction != null) {
-      _node.focusInDirection(direction);
-      return KeyEventResult.handled;
+      if (!arrowLeavesTextField(_node, direction)) {
+        return KeyEventResult.ignored;
+      }
+      final horizontal =
+          direction == TraversalDirection.left ||
+          direction == TraversalDirection.right;
+      // A held Left/Right stops at the end of the text.
+      if (horizontal && event is KeyRepeatEvent) return KeyEventResult.handled;
+      return _node.focusInDirection(direction)
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored;
     }
     if (key == LogicalKeyboardKey.select ||
         key == LogicalKeyboardKey.gameButtonA) {

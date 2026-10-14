@@ -135,7 +135,7 @@ class _PosterImage extends StatelessWidget {
           frameBuilder: (context, child, frame, sync) =>
               frame == null && !sync ? placeholder : child,
           errorBuilder: (context, error, stackTrace) {
-            FailedImageCache.add(u);
+            FailedImageCache.add(u, error: error);
             return placeholder;
           },
         );

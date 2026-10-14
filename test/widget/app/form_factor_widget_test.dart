@@ -29,9 +29,55 @@ void main() {
     expect(tester.getRect(content), const Rect.fromLTWH(0, 0, 1920, 1080));
   });
 
-  testWidgets('TvViewport is a no-op at the design width', (tester) async {
-    await pumpTv(tester, const TvViewport(child: Text('x')));
-    expect(find.byType(FittedBox), findsNothing);
+  testWidgets('TvViewport at the design width is an identity layout', (
+    tester,
+  ) async {
+    Size? seen;
+    double? dpr;
+    await pumpTv(
+      tester,
+      TvViewport(
+        child: Builder(
+          builder: (context) {
+            seen = MediaQuery.sizeOf(context);
+            dpr = MediaQuery.devicePixelRatioOf(context);
+            return const SizedBox.expand(key: ValueKey('content'));
+          },
+        ),
+      ),
+    );
+    final content = find.byKey(const ValueKey('content'));
+    expect(seen, tester.getSize(content));
+    expect(dpr, 2);
+    expect(tester.getSize(content).width, TvLayout.designWidth);
+  });
+
+  testWidgets('TvViewport keeps child state across any resize', (tester) async {
+    var created = 0;
+    _CounterState counter() => tester.state(find.byType(_Counter));
+    addTearDown(tester.view.reset);
+    Future<void> resize(Size physical, double dpr) async {
+      tester.view.physicalSize = physical;
+      tester.view.devicePixelRatio = dpr;
+      await tester.pump();
+    }
+
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 2; // exactly the design width
+    // No key: a GlobalKey would hide a remount by reparenting the state.
+    await tester.pumpWidget(
+      TvViewport(child: _Counter(onCreate: () => created++)),
+    );
+    counter().value = 7;
+
+    await resize(const Size(2000, 1080), 2); // 1000 dp: scaled
+    await resize(const Size(1918, 1080), 2); // 959 dp
+    await resize(const Size(1920, 1080), 1); // 1920 dp: scale 2
+    await resize(Size.zero, 1); // minimised window
+    await resize(const Size(1920, 1080), 2);
+    expect(tester.takeException(), isNull);
+    expect(created, 1);
+    expect(counter().value, 7);
   });
 
   testWidgets('FormFactorScope', (tester) async {
@@ -100,4 +146,26 @@ void main() {
     final fallback = tester.getSize(find.byKey(const ValueKey('fallback')));
     expect(tajawal.width, lessThan(fallback.width * 0.8));
   });
+}
+
+class _Counter extends StatefulWidget {
+  const _Counter({required this.onCreate});
+
+  final VoidCallback onCreate;
+
+  @override
+  State<_Counter> createState() => _CounterState();
+}
+
+class _CounterState extends State<_Counter> {
+  int value = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.onCreate();
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.expand();
 }

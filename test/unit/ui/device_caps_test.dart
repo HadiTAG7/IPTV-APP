@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/app/form_factor.dart';
 import 'package:iptv_player/core/platform/device_caps.dart';
 
 /// Shape of the Android `getCaps` reply as it arrives over the channel.
@@ -263,6 +264,36 @@ void main() {
         expect(caps.uiModeTv, isFalse);
         expect(caps.isTv, isFalse);
       }
+      expect(called, isFalse);
+    });
+
+    test('a browser is never a TV, even on Android', () async {
+      var called = false;
+      messenger.setMockMethodCallHandler(DeviceCaps.channel, (call) async {
+        called = true;
+        return _channelMap();
+      });
+      for (final p in [TargetPlatform.android, TargetPlatform.iOS]) {
+        final caps = await DeviceCaps.load(platform: p, web: true);
+        expect(caps.platform, p);
+        expect(caps.touch, isTrue, reason: p.name);
+        expect(caps.isTv, isFalse, reason: p.name);
+        expect(
+          resolveFormFactor(
+            caps,
+            FormFactorOverride.auto,
+            const Size(400, 860),
+            p,
+          ),
+          FormFactor.phone,
+        );
+      }
+      final desktop = await DeviceCaps.load(
+        platform: TargetPlatform.windows,
+        web: true,
+      );
+      expect(desktop, const DeviceCaps.desktop());
+      expect(desktop.isTv, isFalse);
       expect(called, isFalse);
     });
   });

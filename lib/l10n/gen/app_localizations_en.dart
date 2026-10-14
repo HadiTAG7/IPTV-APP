@@ -352,12 +352,12 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String liveNowTitle(String title) {
-    return 'Now: $title';
+    return 'Now: ⁨$title⁩';
   }
 
   @override
   String liveNextTitle(String title) {
-    return 'Next: $title';
+    return 'Next: ⁨$title⁩';
   }
 
   @override
@@ -674,7 +674,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String settingsDeleteSourceConfirm(String name) {
-    return 'Delete “$name”? Its channels, favorites and watch progress will be removed from this device.';
+    return 'Delete “⁨$name⁩”? Its channels, favorites and watch progress will be removed from this device.';
   }
 
   @override
@@ -846,7 +846,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String searchNoResults(String query) {
-    return 'No results for “$query”';
+    return 'No results for “⁨$query⁩”';
   }
 
   @override

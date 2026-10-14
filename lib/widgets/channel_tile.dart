@@ -8,7 +8,9 @@ import 'logo_image.dart';
 import 'states.dart';
 
 /// One row of a channel list: number, logo, name, current programme with a
-/// thin progress bar, and a favourite star. Fits [TvLayout.channelExtent].
+/// thin progress bar, and a favourite star. Fits [TvLayout.channelExtent]:
+/// lists use a fixed item extent, so the system font size is honoured only up
+/// to [maxTextScale].
 ///
 /// Each text line takes its own direction ([BidiText]), so Latin names in an
 /// Arabic list (and the reverse) render correctly.
@@ -52,6 +54,9 @@ class ChannelTile extends StatelessWidget {
   final bool autofocus;
   final FocusNode? focusNode;
 
+  /// Largest text scale the fixed-height row can hold without overflowing.
+  static const double maxTextScale = 1.1;
+
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
@@ -62,7 +67,10 @@ class ChannelTile extends StatelessWidget {
       autofocus: autofocus,
       focusNode: focusNode,
       semanticLabel: number == null ? name : '$number $name',
-      child: _ChannelTileBody(tile: this),
+      child: MediaQuery.withClampedTextScaling(
+        maxScaleFactor: maxTextScale,
+        child: _ChannelTileBody(tile: this),
+      ),
     );
   }
 }

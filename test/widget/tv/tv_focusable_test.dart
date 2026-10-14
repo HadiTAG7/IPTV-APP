@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/theme/tokens.dart';
+import 'package:iptv_player/tv/dpad_shortcuts.dart';
 import 'package:iptv_player/tv/tv_focusable.dart';
 
 import '../support/tv_harness.dart';
@@ -184,6 +185,80 @@ void main() {
       expect(count, 1);
     });
 
+    for (final locale in testLocales) {
+      testWidgets('held OK does not confirm the dialog it opened '
+          '(${locale.languageCode})', (tester) async {
+        var deleted = false;
+        await pumpTv(
+          tester,
+          Builder(
+            builder: (context) => TvFocusable(
+              autofocus: true,
+              onSelect: () => showDialog<void>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  content: const Text('Delete source?'),
+                  actions: [
+                    TextButton(
+                      autofocus: true,
+                      onPressed: () => deleted = true,
+                      child: const Text('Delete'),
+                    ),
+                  ],
+                ),
+              ),
+              child: const SizedBox(width: 100, height: 50),
+            ),
+          ),
+          locale: locale,
+        );
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+        await tester.pumpAndSettle();
+        expect(find.text('Delete source?'), findsOneWidget);
+        for (var i = 0; i < 3; i++) {
+          await tester.sendKeyRepeatEvent(LogicalKeyboardKey.select);
+          await tester.pump();
+        }
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+        await tester.pumpAndSettle();
+        expect(deleted, isFalse);
+
+        // A fresh press on the focused button confirms.
+        await press(tester, LogicalKeyboardKey.select);
+        expect(deleted, isTrue);
+      });
+    }
+
+    testWidgets('appShortcuts activate once per press on every OK key', (
+      tester,
+    ) async {
+      final shortcuts = appShortcuts;
+      for (final key in {...selectKeys, LogicalKeyboardKey.space}) {
+        final activators = shortcuts.entries
+            .where(
+              (e) =>
+                  e.key is SingleActivator &&
+                  (e.key as SingleActivator).trigger == key,
+            )
+            .toList();
+        expect(activators, hasLength(1), reason: key.debugName);
+        expect(activators.single.value, isA<ActivateIntent>());
+        expect(
+          (activators.single.key as SingleActivator).includeRepeats,
+          isFalse,
+          reason: key.debugName,
+        );
+      }
+      expect(
+        shortcuts[const SingleActivator(LogicalKeyboardKey.arrowUp)],
+        isA<DirectionalFocusIntent>(),
+      );
+      expect(
+        shortcuts[const SingleActivator(LogicalKeyboardKey.escape)],
+        isA<DismissIntent>(),
+      );
+    });
+
     testWidgets('long OK fires onLongSelect once, short OK fires onSelect', (
       tester,
     ) async {
@@ -301,6 +376,48 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('item')));
       expect(taps, 1);
+    });
+
+    testWidgets('disabled item ignores taps, long presses and clicks', (
+      tester,
+    ) async {
+      var taps = 0;
+      var longs = 0;
+      await pumpTv(
+        tester,
+        Center(
+          child: TvFocusable(
+            key: const ValueKey('item'),
+            enabled: false,
+            onSelect: () => taps++,
+            onLongSelect: () => longs++,
+            child: const SizedBox(width: 120, height: 60),
+          ),
+        ),
+      );
+      final item = find.byKey(const ValueKey('item'));
+      await tester.tap(item);
+      await tester.longPress(item);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: tester.getCenter(item));
+      await tester.pumpAndSettle();
+      await mouse.down(tester.getCenter(item));
+      await mouse.up();
+      await tester.pumpAndSettle();
+      expect((taps, longs), (0, 0));
+      expect(_hasBorder(tester, 'item'), isFalse, reason: 'no hover ring');
+      final detector = tester.widget<FocusableActionDetector>(
+        find.descendant(
+          of: item,
+          matching: find.byType(FocusableActionDetector),
+        ),
+      );
+      expect(detector.mouseCursor, MouseCursor.defer);
+      expect(
+        tester.getSemantics(item),
+        isSemantics(isButton: true, hasEnabledState: true, isEnabled: false),
+      );
     });
 
     testWidgets('long press falls back to onMenu', (tester) async {

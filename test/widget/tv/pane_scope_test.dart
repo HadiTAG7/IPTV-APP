@@ -279,4 +279,37 @@ void main() {
     expect(exits, isEmpty);
     expect(field.hasPrimaryFocus, isTrue);
   });
+
+  for (final locale in testLocales) {
+    testWidgets('a plain text field exits once the caret is at the end '
+        '(${locale.languageCode})', (tester) async {
+      final field = FocusNode();
+      final controller = TextEditingController(text: 'abc');
+      final exits = <String>[];
+      addTearDown(field.dispose);
+      addTearDown(controller.dispose);
+      await pumpTv(
+        tester,
+        PaneScope(
+          onExitStart: () => exits.add('start'),
+          onExitEnd: () => exits.add('end'),
+          onExitDown: () => exits.add('down'),
+          child: SizedBox(
+            width: 300,
+            child: TextField(focusNode: field, controller: controller),
+          ),
+        ),
+        locale: locale,
+      );
+      field.requestFocus();
+      await tester.pumpAndSettle();
+      controller.selection = const TextSelection.collapsed(offset: 1);
+      await press(tester, LogicalKeyboardKey.arrowLeft);
+      expect(exits, isEmpty);
+      await press(tester, LogicalKeyboardKey.arrowLeft);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      final rtl = locale == ar;
+      expect(exits, [if (rtl) 'end' else 'start', 'down']);
+    });
+  }
 }

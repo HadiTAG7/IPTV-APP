@@ -102,6 +102,43 @@ void main() {
         expect(find.byIcon(Icons.star_rounded), findsNothing);
       });
 
+      for (final scale in [1.15, 1.3, 2.0]) {
+        testWidgets('fits the TV row at system text scale $scale', (
+          tester,
+        ) async {
+          await pumpTv(
+            tester,
+            Builder(
+              builder: (context) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(scale)),
+                child: Align(
+                  alignment: AlignmentDirectional.topStart,
+                  child: SizedBox(
+                    width: 420,
+                    height: TvLayout.channelExtent,
+                    child: ChannelTile(
+                      number: 7,
+                      name: rtl ? 'قناة الأخبار' : 'Example News',
+                      nowTitle: rtl ? 'نشرة المساء' : 'Evening bulletin',
+                      progress: 0.4,
+                      isFavorite: true,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            locale: locale,
+          );
+          expect(tester.takeException(), isNull);
+          final name = find.text(rtl ? 'قناة الأخبار' : 'Example News');
+          expect(
+            MediaQuery.textScalerOf(tester.element(name)),
+            const TextScaler.linear(ChannelTile.maxTextScale),
+          );
+        });
+      }
+
       testWidgets('rows fit the fixed list extent and respond to keys', (
         tester,
       ) async {

@@ -46,7 +46,7 @@ class TvFocusable extends StatefulWidget {
   /// rebuilds keep focus.
   final FocusNode? focusNode;
 
-  /// When false the item cannot take focus.
+  /// When false the item cannot take focus and ignores taps and clicks.
   final bool enabled;
   final BorderRadius borderRadius;
   final double focusScale;
@@ -92,7 +92,7 @@ class _TvFocusableState extends State<TvFocusable> {
   }
 
   Object? _select() {
-    widget.onSelect?.call();
+    if (widget.enabled) widget.onSelect?.call();
     return null;
   }
 
@@ -124,7 +124,9 @@ class _TvFocusableState extends State<TvFocusable> {
   }
 
   KeyEventResult _onKey(FocusNode _, KeyEvent event) {
-    if (!_node.hasPrimaryFocus) return KeyEventResult.ignored;
+    if (!widget.enabled || !_node.hasPrimaryFocus) {
+      return KeyEventResult.ignored;
+    }
     final key = event.logicalKey;
     if (arrowDirection(key) != null) {
       final step = KeyRepeatThrottle.instance.stepFor(event);
@@ -171,10 +173,11 @@ class _TvFocusableState extends State<TvFocusable> {
 
   @override
   Widget build(BuildContext context) {
+    final enabled = widget.enabled;
     final focused = _focusHighlight;
     final highlighted = focused || _hoverHighlight;
-    final onTap = widget.onSelect;
-    final onLongPress = widget.onLongSelect ?? widget.onMenu;
+    final onTap = enabled ? widget.onSelect : null;
+    final onLongPress = enabled ? widget.onLongSelect ?? widget.onMenu : null;
 
     Widget content = DecoratedBox(
       position: DecorationPosition.foreground,
@@ -210,10 +213,11 @@ class _TvFocusableState extends State<TvFocusable> {
       includeSemantics: false,
       onKeyEvent: _onKey,
       child: Semantics(
-        button: onTap != null,
+        button: widget.onSelect != null,
+        enabled: widget.onSelect != null ? enabled : null,
         label: widget.semanticLabel,
         child: FocusableActionDetector(
-          enabled: widget.enabled,
+          enabled: enabled,
           focusNode: _node,
           autofocus: widget.autofocus,
           actions: _actions,

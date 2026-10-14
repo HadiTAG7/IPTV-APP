@@ -43,6 +43,35 @@ void main() {
         expect(find.byIcon(Icons.star), findsOneWidget);
       });
 
+      testWidgets('holding OK on Retry retries once', (tester) async {
+        var retries = 0;
+        await pumpTv(
+          tester,
+          ErrorView(onRetry: () => retries++),
+          locale: locale,
+        );
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+        for (var i = 0; i < 5; i++) {
+          await tester.sendKeyRepeatEvent(LogicalKeyboardKey.select);
+        }
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+        await tester.pump();
+        expect(retries, 1);
+
+        // Enter and the game pad A button behave the same.
+        for (final key in [
+          LogicalKeyboardKey.enter,
+          LogicalKeyboardKey.gameButtonA,
+        ]) {
+          await tester.sendKeyDownEvent(key);
+          await tester.sendKeyRepeatEvent(key);
+          await tester.sendKeyRepeatEvent(key);
+          await tester.sendKeyUpEvent(key);
+        }
+        await tester.pump();
+        expect(retries, 3);
+      });
+
       testWidgets('ErrorView retry is focused and OK retries', (tester) async {
         var retries = 0;
         await pumpTv(

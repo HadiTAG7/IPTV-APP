@@ -126,12 +126,14 @@
   "liveNoProgrammeInfo": "No programme info",
   "liveNow": "Now",
   "liveNext": "Next",
-  "liveNowTitle": "Now: {title}",
+  "liveNowTitle": "Now: \u2068{title}\u2069",
   "@liveNowTitle": {
+    "description": "{title} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
     "placeholders": {"title": {"type": "String"}}
   },
-  "liveNextTitle": "Next: {title}",
+  "liveNextTitle": "Next: \u2068{title}\u2069",
   "@liveNextTitle": {
+    "description": "{title} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
     "placeholders": {"title": {"type": "String"}}
   },
   "liveChannelCount": "{count, plural, =0{No channels} =1{1 channel} other{{count} channels}}",
@@ -266,8 +268,9 @@
   "settingsAddSource": "Add source",
   "settingsEditSource": "Edit source",
   "settingsDeleteSource": "Delete source",
-  "settingsDeleteSourceConfirm": "Delete “{name}”? Its channels, favorites and watch progress will be removed from this device.",
+  "settingsDeleteSourceConfirm": "Delete “\u2068{name}\u2069”? Its channels, favorites and watch progress will be removed from this device.",
   "@settingsDeleteSourceConfirm": {
+    "description": "{name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
     "placeholders": {"name": {"type": "String"}}
   },
   "settingsSetActive": "Set active",
@@ -340,8 +343,9 @@
   "lanNoNetwork": "No local network found.",
 
   "favoritesEmpty": "No favorites yet. Press Menu on a channel to add it.",
-  "searchNoResults": "No results for “{query}”",
+  "searchNoResults": "No results for “\u2068{query}\u2069”",
   "@searchNoResults": {
+    "description": "{query} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
     "placeholders": {"query": {"type": "String"}}
   },
   "searchChannels": "Channels",

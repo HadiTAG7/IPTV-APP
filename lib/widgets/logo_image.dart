@@ -1,29 +1,65 @@
 import 'package:flutter/material.dart';
 
+import '../core/time/clock.dart';
 import '../theme/tokens.dart';
 import 'bidi_text.dart';
 
-/// Image URLs that failed to load, so scrolling lists don't retry them.
+/// Image URLs that failed to load recently, so scrolling lists don't retry
+/// them on every build.
 ///
-/// Insertion-ordered and capped at [maxEntries] (oldest dropped first).
+/// A definitive failure (HTTP 4xx other than 408 and 429) is remembered for
+/// [definitiveTtl]. Anything else (no network yet at boot, DNS, timeouts, 5xx,
+/// bad image data) is remembered only for [transientTtl], so images come back
+/// with the network; call [clearTransient] when connectivity returns to retry
+/// them at once. Insertion-ordered and capped at [maxEntries] (oldest dropped
+/// first).
 abstract final class FailedImageCache {
   static const maxEntries = 2000;
-  static final Set<String> _urls = {};
+  static const transientTtl = Duration(minutes: 10);
+  static const definitiveTtl = Duration(hours: 6);
 
-  static bool contains(String url) => _urls.contains(url);
+  /// Time source for expiry; tests swap in a fake.
+  static Clock clock = const SystemClock();
 
-  static void add(String url) {
-    _urls
+  static final Map<String, ({DateTime until, bool definitive})> _entries = {};
+
+  /// Whether [url] failed recently; an expired entry is dropped.
+  static bool contains(String url) {
+    final entry = _entries[url];
+    if (entry == null) return false;
+    if (clock.now().isBefore(entry.until)) return true;
+    _entries.remove(url);
+    return false;
+  }
+
+  /// Records a failed load of [url]; [error] decides how long it is kept.
+  static void add(String url, {Object? error}) {
+    final definitive = isDefinitive(error);
+    final ttl = definitive ? definitiveTtl : transientTtl;
+    _entries
       ..remove(url)
-      ..add(url);
-    while (_urls.length > maxEntries) {
-      _urls.remove(_urls.first);
+      ..[url] = (until: clock.now().add(ttl), definitive: definitive);
+    while (_entries.length > maxEntries) {
+      _entries.remove(_entries.keys.first);
     }
   }
 
-  static int get length => _urls.length;
+  /// Whether [error] means the image will not load on a retry either.
+  static bool isDefinitive(Object? error) => switch (error) {
+    NetworkImageLoadException(:final statusCode) =>
+      statusCode >= 400 &&
+          statusCode < 500 &&
+          statusCode != 408 &&
+          statusCode != 429,
+    _ => false,
+  };
 
-  static void clear() => _urls.clear();
+  /// Forgets transient failures, e.g. when the network comes back.
+  static void clearTransient() => _entries.removeWhere((_, e) => !e.definitive);
+
+  static int get length => _entries.length;
+
+  static void clear() => _entries.clear();
 }
 
 final _prefixTag = RegExp(r'^\s*(\|[^|]{1,6}\||[A-Za-z]{2,3}\s*[:|])\s*');
@@ -117,7 +153,7 @@ class InitialsAvatar extends StatelessWidget {
 ///
 /// Shows an [InitialsAvatar] while loading, when [url] is empty or not
 /// http(s), and on error; failed URLs go into [FailedImageCache] and are not
-/// requested again.
+/// requested again until that entry expires.
 class LogoImage extends StatelessWidget {
   const LogoImage({
     super.key,
@@ -165,7 +201,7 @@ class LogoImage extends StatelessWidget {
           frameBuilder: (context, child, frame, sync) =>
               frame == null && !sync ? avatar : child,
           errorBuilder: (context, error, stackTrace) {
-            FailedImageCache.add(u);
+            FailedImageCache.add(u, error: error);
             return avatar;
           },
         ),

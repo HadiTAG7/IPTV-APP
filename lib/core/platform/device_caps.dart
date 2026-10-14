@@ -84,16 +84,22 @@ class DeviceCaps {
   ];
 
   /// Reads caps from the platform. Android asks the device channel and falls
-  /// back to plain phone defaults if it fails; other platforms (and web) get
-  /// [DeviceCaps.desktop].
+  /// back to plain phone defaults if it fails; other platforms get
+  /// [DeviceCaps.desktop]. Browsers have no channel: a phone or tablet browser
+  /// gets touch phone defaults (never TV), any other browser desktop defaults.
+  /// [web] defaults to [kIsWeb] and exists for tests.
   static Future<DeviceCaps> load({
     TargetPlatform? platform,
     MethodChannel methodChannel = channel,
+    bool web = kIsWeb,
   }) async {
     final p = platform ?? defaultTargetPlatform;
-    if (kIsWeb || p != TargetPlatform.android) {
-      return DeviceCaps.desktop(platform: p);
+    if (web) {
+      return p == TargetPlatform.android || p == TargetPlatform.iOS
+          ? DeviceCaps(platform: p)
+          : DeviceCaps.desktop(platform: p);
     }
+    if (p != TargetPlatform.android) return DeviceCaps.desktop(platform: p);
     try {
       final map = await methodChannel.invokeMapMethod<Object?, Object?>(
         'getCaps',
