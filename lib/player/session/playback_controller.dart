@@ -1,0 +1,582 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+
+import '../../core/time/clock.dart';
+import '../../sources/models.dart';
+import '../engine/engine_factory.dart';
+import '../engine/engine_policy.dart';
+import '../engine/player_engine.dart';
+import 'connection_guard.dart';
+import 'progress_saver.dart';
+import 'reconnect_watchdog.dart';
+
+/// Coarse lifecycle of the current item, for the player UI.
+enum PlaybackPhase {
+  idle,
+
+  /// Opening (or falling back) until the first frame.
+  opening,
+  playing,
+
+  /// A movie or episode reached its end.
+  ended,
+
+  /// Every engine failed or reconnecting gave up; see
+  /// [PlaybackController.errorMessage].
+  failed,
+}
+
+/// Saves the engine that worked for a channel (`channel_prefs.engine`).
+typedef EnginePreferenceCallback = void Function(
+  String channelKey,
+  EngineKind kind,
+);
+
+/// Persists VOD progress for [itemKey].
+typedef ItemProgressCallback = Future<void> Function(
+  String itemKey,
+  Duration position,
+  Duration duration,
+);
+
+class _Session {
+  _Session({
+    required this.original,
+    required this.itemKey,
+    required this.maxConnections,
+    required this.channelPref,
+  }) : request = original;
+
+  final StreamRequest original;
+
+  /// What is opened now (the HLS hint may have been added).
+  StreamRequest request;
+  final String? itemKey;
+  final int? maxConnections;
+  final EngineKind? channelPref;
+
+  /// Engines tried since the last successful start or manual switch.
+  Set<EngineKind> tried = {};
+  bool hlsRetried = false;
+
+  /// A first frame was seen; later errors go to the reconnect watchdog.
+  bool everPlayed = false;
+  bool silentChecked = false;
+  bool backgrounded = false;
+  bool resumeOnForeground = false;
+  Duration lastPosition = Duration.zero;
+
+  bool get isLive => original.isLive;
+}
+
+/// Orchestrates one playback session for the UI: engine choice and fallback,
+/// connection hygiene, reconnecting, VOD progress and app lifecycle.
+///
+/// Owns at most one [PlayerEngine]; switching engine kinds disposes the old
+/// engine before the factory creates the new one.
+class PlaybackController extends ChangeNotifier {
+  PlaybackController({
+    required this._factory,
+    required this._policyInput,
+    this._policy = const EnginePolicy(),
+    this._clock = const SystemClock(),
+    this.onEnginePreferenceLearned,
+    this.onProgress,
+    this.onWakelockChanged,
+    ConnectionGuard? guard,
+    List<Duration> reconnectBackoff = kReconnectBackoff,
+    this.silentAudioCheckDelay = const Duration(seconds: 2),
+    this.progressInterval = const Duration(seconds: 10),
+  }) : _guard = guard ?? ConnectionGuard(clock: _clock) {
+    _watchdog = ReconnectWatchdog(
+      reconnect: _reconnect,
+      onGiveUp: _onGiveUp,
+      clock: _clock,
+      backoff: reconnectBackoff,
+    );
+  }
+
+  final EngineFactory _factory;
+  final EnginePolicyInput Function() _policyInput;
+  final EnginePolicy _policy;
+  final Clock _clock;
+  final ConnectionGuard _guard;
+  late final ReconnectWatchdog _watchdog;
+
+  final EnginePreferenceCallback? onEnginePreferenceLearned;
+  final ItemProgressCallback? onProgress;
+
+  /// Called with true while something is playing or loading, false otherwise.
+  final ValueChanged<bool>? onWakelockChanged;
+  final Duration silentAudioCheckDelay;
+  final Duration progressInterval;
+
+  final _state = ValueNotifier<PlaybackState>(PlaybackState.idle);
+  final _events = StreamController<EngineEvent>.broadcast();
+
+  PlayerEngine? _engine;
+  StreamSubscription<EngineEvent>? _engineSub;
+  _Session? _session;
+  _Session? _lastSession;
+  ProgressSaver? _progress;
+  Timer? _silentTimer;
+  PlaybackPhase _phase = PlaybackPhase.idle;
+  String? _error;
+  DateTime? _openStartedAt;
+  Duration? _ttff;
+  bool _online = true;
+  bool _wakelock = false;
+  bool _disposed = false;
+
+  /// Mirrors the current engine's state.
+  ValueListenable<PlaybackState> get state => _state;
+
+  /// Engine events of the current engine.
+  Stream<EngineEvent> get events => _events.stream;
+  ValueListenable<ReconnectStatus> get reconnectStatus => _watchdog.status;
+  PlaybackPhase get phase => _phase;
+
+  /// Redacted reason when [phase] is [PlaybackPhase.failed].
+  String? get errorMessage => _error;
+  PlayerEngine? get engine => _engine;
+  EngineKind? get engineKind => _engine?.kind;
+
+  /// The request being played (with any HLS hint the fallback added).
+  StreamRequest? get request => _session?.request;
+  String? get itemKey => _session?.itemKey;
+
+  /// Time from the last open to its first frame.
+  Duration? get timeToFirstFrame => _ttff;
+
+  /// Starts [request], stopping whatever played before (latest call wins).
+  ///
+  /// [itemKey] identifies the channel or title for learned engine
+  /// preferences and progress. [maxConnections] of 1 adds a gap between
+  /// closing and opening. [channelPref] overrides the policy's channel
+  /// preference.
+  Future<void> play(
+    StreamRequest request, {
+    String? itemKey,
+    int? maxConnections,
+    EngineKind? channelPref,
+  }) async {
+    if (_disposed) return;
+    _endSession();
+    final s = _Session(
+      original: request,
+      itemKey: itemKey,
+      maxConnections: maxConnections,
+      channelPref: channelPref,
+    );
+    _session = s;
+    _lastSession = s;
+    final kind = _policy.pick(request.kind, _input(s));
+    s.tried.add(kind);
+    _error = null;
+    _setPhase(PlaybackPhase.opening);
+    _restartWatchdog(s);
+    final onProgress = this.onProgress;
+    if (!request.isLive && itemKey != null && onProgress != null) {
+      _progress = ProgressSaver(
+        save: (p, d) => onProgress(itemKey, p, d),
+        interval: progressInterval,
+      )..start();
+    }
+    await _open(s, kind, s.request);
+  }
+
+  /// Plays the current item with the other engine and remembers that choice
+  /// for the channel. No-op where only one engine exists.
+  Future<void> switchEngine() async {
+    final s = _session;
+    final engine = _engine;
+    if (s == null || engine == null || _disposed) return;
+    final target = _policy.fallbackFor(engine.kind, _input(s));
+    if (target == null) return;
+    final key = s.itemKey;
+    if (key != null) onEnginePreferenceLearned?.call(key, target);
+    await _switchEngine(s, target);
+  }
+
+  /// Stops playback, saves progress and closes the connection. The engine
+  /// instance is kept for the next [play].
+  Future<void> stop() async {
+    if (_disposed) return;
+    _endSession();
+    _session = null;
+    _setPhase(PlaybackPhase.idle);
+    await _guard.stop(() async => _engine?.stop());
+    if (_disposed) return;
+    _state.value = PlaybackState.idle;
+    _setWakelock(false);
+  }
+
+  /// Replays the last item from scratch (after a failure or give-up).
+  Future<void> retry() async {
+    final s = _session ?? _lastSession;
+    if (s == null || _disposed) return;
+    final resumeAt = !s.isLive && s.lastPosition > Duration.zero
+        ? s.lastPosition
+        : s.original.startAt;
+    await play(
+      s.original.copyWith(startAt: resumeAt),
+      itemKey: s.itemKey,
+      maxConnections: s.maxConnections,
+      channelPref: s.channelPref,
+    );
+  }
+
+  Future<void> togglePlayPause() async {
+    if (_state.value.playing) {
+      await pause();
+    } else {
+      await resume();
+    }
+  }
+
+  Future<void> pause() async => _engine?.pause();
+
+  Future<void> resume() async {
+    _rearmAfterEnd();
+    await _engine?.play();
+  }
+
+  Future<void> seek(Duration position) async {
+    _rearmAfterEnd();
+    await _engine?.seek(position);
+  }
+
+  Future<List<TrackInfo>> audioTracks() async =>
+      await _engine?.audioTracks() ?? const [];
+
+  Future<void> selectAudio(String id) async => _engine?.selectAudio(id);
+
+  Future<List<TrackInfo>> subtitleTracks() async =>
+      await _engine?.subtitleTracks() ?? const [];
+
+  Future<void> selectSubtitle(String? id) async => _engine?.selectSubtitle(id);
+
+  /// Engine stats plus session timing for the stats overlay.
+  Future<Map<String, String>> stats() async {
+    final base = await _engine?.stats() ?? const <String, String>{};
+    final ttff = _ttff;
+    return {
+      ...base,
+      if (ttff != null) 'ttff': '${ttff.inMilliseconds} ms',
+      'reconnects': '${_watchdog.attempts}',
+    };
+  }
+
+  /// The current engine's video surface (black before the first play).
+  Widget buildView({AspectMode aspect = AspectMode.fit}) =>
+      _engine?.buildView(aspect: aspect) ??
+      const ColoredBox(color: Color(0xFF000000), child: SizedBox.expand());
+
+  /// Network availability (connectivity_plus). Offline pauses reconnecting.
+  void setOnline(bool online) {
+    _online = online;
+    _syncWatchdogPause();
+  }
+
+  /// App went to the background: live is stopped to free the connection,
+  /// VOD is paused and its position saved.
+  Future<void> onBackground() async {
+    final s = _session;
+    if (s == null || s.backgrounded || _disposed) return;
+    s.backgrounded = true;
+    _syncWatchdogPause();
+    _setWakelock(false);
+    if (s.isLive) {
+      s.resumeOnForeground = _phase != PlaybackPhase.failed;
+      _cancelSilentCheck();
+      await _guard.stop(() async => _engine?.stop());
+    } else {
+      s.resumeOnForeground = _state.value.playing;
+      await _engine?.pause();
+      await _progress?.flush();
+    }
+  }
+
+  /// Back in the foreground: reopens live, resumes VOD if it was playing.
+  Future<void> onForeground() async {
+    final s = _session;
+    if (s == null || !s.backgrounded || _disposed) return;
+    s.backgrounded = false;
+    if (s.isLive) {
+      if (!s.resumeOnForeground) return;
+      _setPhase(PlaybackPhase.opening);
+      _restartWatchdog(s);
+      final kind = _engine?.kind ?? _policy.pick(s.original.kind, _input(s));
+      await _open(s, kind, s.request);
+    } else {
+      _syncWatchdogPause();
+      if (s.resumeOnForeground) await _engine?.play();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+
+  EnginePolicyInput _input(_Session s) {
+    final input = _policyInput();
+    final pref = s.channelPref;
+    return pref == null ? input : input.copyWith(channelPref: pref);
+  }
+
+  /// Ends the previous item: saves progress and cancels its timers. The
+  /// stream itself is closed by the next switch (or [stop]).
+  void _endSession() {
+    _cancelSilentCheck();
+    _watchdog.cancel();
+    final saver = _progress;
+    _progress = null;
+    if (saver != null) unawaited(saver.stop());
+  }
+
+  void _restartWatchdog(_Session s) {
+    _watchdog.watch(isLive: s.isLive);
+    _syncWatchdogPause();
+  }
+
+  void _syncWatchdogPause() {
+    final backgrounded = _session?.backgrounded ?? false;
+    if (_online && !backgrounded) {
+      _watchdog.resume();
+    } else {
+      _watchdog.pause();
+    }
+  }
+
+  /// Seeking or playing again after the end resumes normal monitoring.
+  void _rearmAfterEnd() {
+    final s = _session;
+    if (s == null || _phase != PlaybackPhase.ended) return;
+    _setPhase(PlaybackPhase.playing);
+    _restartWatchdog(s);
+  }
+
+  StreamRequest _resumeRequest(_Session s) {
+    if (s.isLive || s.lastPosition <= Duration.zero) return s.request;
+    return s.request.copyWith(startAt: s.lastPosition);
+  }
+
+  Future<void> _open(_Session s, EngineKind kind, StreamRequest request) async {
+    _cancelSilentCheck();
+    await _guard.switchTo(
+      stop: () async => _engine?.stop(),
+      open: () async {
+        if (!identical(_session, s) || _disposed) return;
+        final engine = await _ensureEngine(kind);
+        if (!identical(_session, s) || _disposed) return;
+        _openStartedAt = _clock.now();
+        _ttff = null;
+        await engine.open(request);
+      },
+      maxConnections: s.maxConnections,
+    );
+  }
+
+  Future<void> _switchEngine(_Session s, EngineKind kind) async {
+    s.tried = {kind};
+    s.everPlayed = false;
+    _setPhase(PlaybackPhase.opening);
+    _restartWatchdog(s);
+    await _open(s, kind, _resumeRequest(s));
+  }
+
+  Future<PlayerEngine> _ensureEngine(EngineKind kind) async {
+    final current = _engine;
+    if (current != null && current.kind == kind) return current;
+    if (current != null) {
+      _detach(current);
+      _engine = null;
+      await current.dispose();
+    }
+    final engine = _factory(kind);
+    _engine = engine;
+    engine.state.addListener(_onEngineState);
+    _engineSub = engine.events.listen((e) => _onEngineEvent(engine, e));
+    if (!_disposed) {
+      _state.value = engine.state.value;
+      notifyListeners();
+    }
+    return engine;
+  }
+
+  void _detach(PlayerEngine engine) {
+    engine.state.removeListener(_onEngineState);
+    unawaited(_engineSub?.cancel());
+    _engineSub = null;
+  }
+
+  void _onEngineState() {
+    final engine = _engine;
+    if (engine == null || _disposed) return;
+    final st = engine.state.value;
+    _state.value = st;
+    final s = _session;
+    if (s == null) return;
+    if (!s.isLive && st.position > Duration.zero) s.lastPosition = st.position;
+    _watchdog.onState(st);
+    _progress?.update(st);
+    if (!s.backgrounded) _setWakelock(st.playing || st.buffering);
+  }
+
+  void _onEngineEvent(PlayerEngine engine, EngineEvent e) {
+    if (!identical(engine, _engine) || _disposed) return;
+    final s = _session;
+    if (s == null) return;
+    _events.add(e);
+    switch (e) {
+      case FirstFrameEvent():
+        _onFirstFrame(s, engine, e);
+      case ErrorEvent():
+        _onError(s, engine, e);
+      case EndedEvent():
+        _onEnded(s, e);
+    }
+  }
+
+  void _onFirstFrame(_Session s, PlayerEngine engine, FirstFrameEvent e) {
+    s.everPlayed = true;
+    s.tried = {engine.kind};
+    final started = _openStartedAt;
+    if (started != null) _ttff = _clock.now().difference(started);
+    _setPhase(PlaybackPhase.playing);
+    _watchdog.onEvent(e);
+    if (engine.kind == EngineKind.exo && !s.silentChecked) {
+      s.silentChecked = true;
+      _silentTimer = Timer(silentAudioCheckDelay, () {
+        _silentTimer = null;
+        unawaited(_checkSilentAudio(s, engine));
+      });
+    }
+  }
+
+  /// ExoPlayer skips audio formats it cannot decode (AC3/MP2 on many boxes):
+  /// tracks exist but none is selected. mpv decodes them in software.
+  Future<void> _checkSilentAudio(_Session s, PlayerEngine engine) async {
+    bool current() =>
+        identical(_session, s) && identical(_engine, engine) && !_disposed;
+    if (!current()) return;
+    final tracks = await engine.audioTracks();
+    if (!current()) return;
+    if (tracks.isEmpty || tracks.any((t) => t.selected)) return;
+    final target = _policy.fallbackFor(EngineKind.exo, _input(s));
+    if (target != EngineKind.mpv) return;
+    final key = s.itemKey;
+    if (key != null) onEnginePreferenceLearned?.call(key, EngineKind.mpv);
+    await _switchEngine(s, EngineKind.mpv);
+  }
+
+  void _onError(_Session s, PlayerEngine engine, ErrorEvent e) {
+    if (!e.fatal) return;
+    if (_guard.handleError(e)) return;
+    final kind = engine.kind;
+    if (!s.everPlayed) {
+      if (kind == EngineKind.exo &&
+          !s.hlsRetried &&
+          !s.request.isHls &&
+          !hasKnownMediaExtension(s.request.url)) {
+        s.hlsRetried = true;
+        s.request = s.request.copyWith(isHls: true);
+        unawaited(_open(s, EngineKind.exo, s.request));
+        return;
+      }
+      final fallback = _policy.fallbackFor(kind, _input(s));
+      if (fallback != null && !s.tried.contains(fallback)) {
+        s.tried.add(fallback);
+        unawaited(_open(s, fallback, _resumeRequest(s)));
+        return;
+      }
+      _fail(s, e.message);
+      return;
+    }
+    if (kind == EngineKind.mpv && looksLikeTlsError(e.message)) {
+      final fallback = _policy.fallbackFor(kind, _input(s));
+      if (fallback == EngineKind.exo) {
+        unawaited(_switchEngine(s, EngineKind.exo));
+        return;
+      }
+    }
+    _watchdog.onEvent(e);
+  }
+
+  void _onEnded(_Session s, EndedEvent e) {
+    if (s.isLive) {
+      _watchdog.onEvent(e);
+      return;
+    }
+    _watchdog.cancel();
+    _setPhase(PlaybackPhase.ended);
+    final progress = _progress;
+    if (progress != null) unawaited(progress.flush());
+  }
+
+  Future<void> _reconnect(int attempt) async {
+    final s = _session;
+    final engine = _engine;
+    if (s == null || _disposed) return;
+    final kind = engine?.kind ?? _policy.pick(s.original.kind, _input(s));
+    await _open(s, kind, _resumeRequest(s));
+  }
+
+  void _onGiveUp() {
+    final s = _session;
+    if (s == null) return;
+    _fail(
+      s,
+      'Stream lost: gave up after ${_watchdog.attempts} attempts',
+      keepReconnectStatus: true,
+    );
+  }
+
+  void _fail(_Session s, String message, {bool keepReconnectStatus = false}) {
+    if (!identical(_session, s)) return;
+    _cancelSilentCheck();
+    // After a give-up the watchdog already stopped and shows its status.
+    if (!keepReconnectStatus) _watchdog.cancel();
+    _error = message;
+    _setPhase(PlaybackPhase.failed);
+    _setWakelock(false);
+    unawaited(_guard.stop(() async => _engine?.stop()));
+  }
+
+  void _cancelSilentCheck() {
+    _silentTimer?.cancel();
+    _silentTimer = null;
+  }
+
+  void _setPhase(PlaybackPhase phase) {
+    if (_phase == phase || _disposed) return;
+    _phase = phase;
+    notifyListeners();
+  }
+
+  void _setWakelock(bool on) {
+    if (_wakelock == on) return;
+    _wakelock = on;
+    onWakelockChanged?.call(on);
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _endSession();
+    _disposed = true;
+    _session = null;
+    _watchdog.dispose();
+    _guard.dispose();
+    final engine = _engine;
+    _engine = null;
+    if (engine != null) {
+      _detach(engine);
+      unawaited(engine.dispose());
+    }
+    _setWakelock(false);
+    unawaited(_events.close());
+    _state.dispose();
+    super.dispose();
+  }
+}
