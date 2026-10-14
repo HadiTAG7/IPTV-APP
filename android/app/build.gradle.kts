@@ -1,8 +1,43 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// Release signing: CI (or a local release build) writes android/key.properties with
+// storeFile (relative to android/app), storePassword, keyAlias and keyPassword.
+// Without it, release builds fall back to the debug key so they still install for testing.
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties =
+    Properties().apply {
+        if (keystorePropertiesFile.exists()) {
+            keystorePropertiesFile.inputStream().use { load(it) }
+        }
+    }
+val hasReleaseKey = keystorePropertiesFile.exists()
+
+fun keystoreValue(name: String): String =
+    requireNotNull(keystoreProperties.getProperty(name)) { "android/key.properties is missing $name" }
+
+// Non-split Flutter builds keep abiFilters at every default ABI (x86_64 included), so the
+// universal APK would carry plugins' x86_64 libraries (libmpv) without libflutter.so and
+// crash on x86_64 devices. Package only the ABIs passed with --target-platform instead.
+// Split builds (--split-per-abi) use splits.abi, which AGP refuses to combine with abiFilters.
+val flutterPlatformAbis =
+    mapOf("android-arm" to "armeabi-v7a", "android-arm64" to "arm64-v8a", "android-x64" to "x86_64")
+
+fun booleanProperty(name: String): Boolean = findProperty(name)?.toString()?.toBoolean() ?: false
+
+val targetAbis =
+    findProperty("target-platform")
+        ?.toString()
+        ?.split(",")
+        ?.mapNotNull { flutterPlatformAbis[it.trim()] }
+        .orEmpty()
+val filterTargetAbis =
+    targetAbis.isNotEmpty() && !booleanProperty("split-per-abi") && !booleanProperty("disable-abi-filtering")
 
 android {
     namespace = "io.github.haditag7.iptv_player"
@@ -15,25 +50,45 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        // Never change: it identifies the installed app, and changing it means a reinstall.
         applicationId = "io.github.haditag7.iptv_player"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Android 7.0+ (API 24); older boxes and Fire OS 5 are unsupported.
+        minSdk = maxOf(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
-        // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
-        // flag during build.
+        // CI passes `-P force-version-code-ignoring-abi=true` so every APK of a build shares
+        // one versionCode (the build.yml run number).
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        if (filterTargetAbis) {
+            ndk {
+                abiFilters.clear()
+                abiFilters.addAll(targetAbis)
+            }
+        }
+    }
+
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = file(keystoreValue("storeFile"))
+                storePassword = keystoreValue("storePassword")
+                keyAlias = keystoreValue("keyAlias")
+                keyPassword = keystoreValue("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig =
+                if (hasReleaseKey) {
+                    signingConfigs.getByName("release")
+                } else {
+                    signingConfigs.getByName("debug")
+                }
         }
     }
 }
