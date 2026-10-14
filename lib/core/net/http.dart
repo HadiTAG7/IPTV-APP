@@ -55,6 +55,7 @@ SourceFailure mapDioError(Object error, {Iterable<String> secrets = const []}) {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
       case DioExceptionType.receiveTimeout:
+      case DioExceptionType.transformTimeout:
         return TimeoutFailure('Timed out: $url');
       case DioExceptionType.badResponse:
         final code = error.response?.statusCode;
