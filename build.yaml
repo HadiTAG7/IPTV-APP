@@ -1,0 +1,16 @@
+targets:
+  $default:
+    builders:
+      drift_dev:
+        options:
+          # Used by `dart run drift_dev make-migrations`.
+          databases:
+            iptv: lib/core/db/app_db.dart
+          schema_dir: drift_schemas/
+          test_dir: test/drift/
+          generate_manager: false
+          skip_verification_code: true
+          sql:
+            dialect: sqlite
+            options:
+              version: "3.45"
