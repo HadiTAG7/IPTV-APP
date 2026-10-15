@@ -22,8 +22,10 @@ import 'providers.dart';
 ///
 /// * Large layout (TV, desktop, wide landscape): a header (title, last
 ///   update, channel filter, "Refresh guide") above the [GuideGrid].
-///   Entering the page from the rail focuses the grid; Up from the first
-///   row reaches the header buttons.
+///   Entering the page from the rail focuses the grid (or, while the page
+///   loads, a placeholder in its place); Up from the first row reaches the
+///   header buttons. When the body is replaced while it has focus (loaded,
+///   guide data arrived, the filter fell back), its successor takes focus.
 /// * Phone: a header with refresh, filter chips and the channel list
 ///   ([GuidePhoneList]); a channel opens its day schedule.
 /// * Without any guide data: how to add a guide URL, with Refresh and a
@@ -46,12 +48,79 @@ class GuideScreen extends ConsumerWidget {
 /// One policy for every rebuild, so directional focus history survives.
 final _focusPolicy = OrderedTraversalPolicy();
 
-class _GuidePage extends ConsumerWidget {
+class _GuidePage extends ConsumerStatefulWidget {
   const _GuidePage({super.key, required this.source});
 
   final SourceView source;
 
   static const headerHeight = 36.0;
+
+  @override
+  ConsumerState<_GuidePage> createState() => _GuidePageState();
+}
+
+/// What the page body shows; focus follows a change of it.
+sealed class _Body {
+  const _Body();
+}
+
+final class _BodyLoading extends _Body {
+  const _BodyLoading();
+}
+
+final class _BodyError extends _Body {
+  const _BodyError();
+}
+
+final class _BodyNoData extends _Body {
+  const _BodyNoData();
+}
+
+final class _BodyChannels extends _Body {
+  const _BodyChannels(this.filter);
+
+  final GuideFilter filter;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _BodyChannels && other.filter == filter;
+
+  @override
+  int get hashCode => filter.hashCode;
+}
+
+class _GuidePageState extends ConsumerState<_GuidePage> {
+  /// Around the body (not focusable itself): whether focus is in it.
+  final _bodyNode = FocusNode(
+    debugLabel: 'guide-body',
+    canRequestFocus: false,
+    skipTraversal: true,
+  );
+  _Body? _body;
+
+  @override
+  void dispose() {
+    _bodyNode.dispose();
+    super.dispose();
+  }
+
+  /// Notes the body about to be built. When it replaces one that has focus,
+  /// the new body's first item takes focus after the frame; otherwise focus
+  /// would go back to what the page focused before (often the header).
+  void _bodyChanged(_Body body) {
+    if (body == _body) return;
+    _body = body;
+    if (!_bodyNode.hasFocus) return;
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (!mounted) return;
+        _bodyNode.traversalDescendants
+            .where((n) => n is! FocusScopeNode)
+            .firstOrNull
+            ?.requestFocus();
+      })
+      ..ensureVisualUpdate();
+  }
 
   void _onStatus(
     BuildContext context,
@@ -74,7 +143,8 @@ class _GuidePage extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
+    final source = widget.source;
     final l10n = AppLocalizations.of(context);
     final id = source.id;
     final large = isLargeLayout(context);
@@ -95,7 +165,7 @@ class _GuidePage extends ConsumerWidget {
       // Keep the default once known, so the list does not jump when a
       // favourite is added elsewhere.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!context.mounted) return;
+        if (!mounted) return;
         if (ref.read(guideFilterProvider(id)) == null) {
           ref.read(guideFilterProvider(id).notifier).select(filter);
         }
@@ -122,10 +192,17 @@ class _GuidePage extends ConsumerWidget {
 
     final Widget body;
     if (hasData.hasError) {
+      _bodyChanged(const _BodyError());
       body = ErrorView(onRetry: () => ref.invalidate(guideHasDataProvider(id)));
     } else if (!hasData.hasValue || !favorites.hasValue) {
-      body = const LoadingView();
+      _bodyChanged(const _BodyLoading());
+      // Focusable, so entering the page now lands in the body.
+      body = const FocusTraversalOrder(
+        order: NumericFocusOrder(0),
+        child: Focus(debugLabel: 'guide-loading', child: LoadingView()),
+      );
     } else if (hasData.value != true) {
+      _bodyChanged(const _BodyNoData());
       body = GuideNoData(
         running: status.isRunning,
         onRefresh: refresh,
@@ -133,6 +210,7 @@ class _GuidePage extends ConsumerWidget {
             unawaited(pushHomePage(context, ref, HomeTab.settings)),
       );
     } else if (large) {
+      _bodyChanged(_BodyChannels(filter));
       body = GuideGrid(
         key: ValueKey(filter),
         sourceId: id,
@@ -141,6 +219,7 @@ class _GuidePage extends ConsumerWidget {
         catalogVersion: source.generation,
       );
     } else {
+      _bodyChanged(_BodyChannels(filter));
       body = GuidePhoneList(
         key: ValueKey(filter),
         sourceId: id,
@@ -159,7 +238,7 @@ class _GuidePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(
-              height: headerHeight,
+              height: _GuidePage.headerHeight,
               child: _TvHeader(
                 updatedAt: source.lastEpgAt,
                 filterLabel: filterLabel,
@@ -169,7 +248,9 @@ class _GuidePage extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: Spacing.sm),
-            Expanded(child: body),
+            Expanded(
+              child: Focus(focusNode: _bodyNode, child: body),
+            ),
           ],
         ),
       );
@@ -183,7 +264,9 @@ class _GuidePage extends ConsumerWidget {
             onRefresh: refresh,
           ),
           _FilterChips(options: options, current: filter, onSelect: select),
-          Expanded(child: body),
+          Expanded(
+            child: Focus(focusNode: _bodyNode, child: body),
+          ),
         ],
       );
     }

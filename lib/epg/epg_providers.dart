@@ -5,7 +5,9 @@
 // in `IptvApp.build` (or `HomeShell.build`):
 //   ref.listen(epgAutoRefreshProvider, (_, _) {});
 // The guide screen does the same, so it already runs once the Guide tab
-// has been opened.
+// has been opened. The fullscreen player reports itself, so Lite devices
+// hold guide imports while it plays (one call on open, one on close):
+//   ref.read(fullscreenPlaybackProvider.notifier).set(true / false);
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -13,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app/providers.dart';
 import '../core/net/http.dart';
+import '../sources/source_repository.dart';
 import '../sources/sync/sync_service.dart';
 import 'epg_progress.dart';
 import 'epg_service.dart';
@@ -204,6 +207,27 @@ class GuideRefreshController extends Notifier<GuideRefreshStatus> {
 // ---------------------------------------------------------------------------
 // Background schedule.
 
+/// Whether the fullscreen player is playing. The player sets it (see the
+/// integration note at the top of this file); nothing else reads it to
+/// decide anything but guide imports.
+final fullscreenPlaybackProvider = NotifierProvider<FullscreenPlayback, bool>(
+  FullscreenPlayback.new,
+);
+
+class FullscreenPlayback extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  /// Fullscreen playback started ([active]) or ended.
+  void set(bool active) => state = active;
+}
+
+/// Whether guide imports wait: fullscreen playback on a Lite device, where
+/// a download and XMLTV parse next to the player could make it stutter.
+final epgImportsPausedProvider = Provider<bool>(
+  (ref) => ref.watch(liteModeProvider) && ref.watch(fullscreenPlaybackProvider),
+);
+
 /// How often the active source's guide is checked while the app runs (TV
 /// boxes stay on for days); null turns the periodic check off.
 final epgAutoRefreshIntervalProvider = Provider<Duration?>(
@@ -221,6 +245,11 @@ final epgAutoRefreshIntervalProvider = Provider<Duration?>(
 ///   decides instead: done refreshes anyway, failed runs this check;
 /// * every [epgAutoRefreshIntervalProvider], the same check for the active
 ///   source.
+///
+/// While [epgImportsPausedProvider] is true (fullscreen playback on a Lite
+/// device), refreshes it would start are held, and running ones (also
+/// "Refresh guide" runs) are cancelled and held; held runs start when the
+/// pause ends, followed by the periodic check.
 final epgAutoRefreshProvider = Provider<EpgAutoRefresh>((ref) {
   final auto = EpgAutoRefresh._(ref);
   ref.onDispose(auto._dispose);
@@ -232,12 +261,32 @@ final epgAutoRefreshProvider = Provider<EpgAutoRefresh>((ref) {
   ref.listen<int?>(activeSourceIdProvider, (_, id) {
     if (id != null) unawaited(auto.checkSource(id));
   }, fireImmediately: true);
+  ref.listen<bool>(epgImportsPausedProvider, (_, paused) {
+    if (paused) {
+      auto._pause();
+    } else {
+      auto._resume();
+    }
+  });
   final every = ref.watch(epgAutoRefreshIntervalProvider);
   if (every != null) {
     auto._timer = Timer.periodic(every, (_) => unawaited(auto._periodic()));
   }
   return auto;
 });
+
+/// A refresh [EpgAutoRefresh] holds while imports are paused; a later
+/// value includes the earlier ones.
+enum _Held {
+  /// A plain refresh (a due check, a cancelled background run).
+  refresh,
+
+  /// [GuideRefreshController.refreshAfterSync].
+  afterSync,
+
+  /// A cancelled "Refresh guide" run.
+  forced,
+}
 
 /// The state behind [epgAutoRefreshProvider].
 class EpgAutoRefresh {
@@ -251,12 +300,21 @@ class EpgAutoRefresh {
   /// Sources whose launch check is running.
   final _checking = <int>{};
   final _waits = <StreamSubscription<SyncStatus>, Completer<SyncStatus?>>{};
+
+  /// Refreshes waiting for the import pause to end, by source.
+  final _held = <int, _Held>{};
   Timer? _timer;
   bool _disposed = false;
 
   /// Whether the launch check of [sourceId] has run.
   @visibleForTesting
   bool checked(int sourceId) => _checked.contains(sourceId);
+
+  /// Sources with a refresh waiting for the import pause to end.
+  @visibleForTesting
+  Set<int> get held => Set.unmodifiable(_held.keys);
+
+  bool get _paused => _ref.read(epgImportsPausedProvider);
 
   /// The launch check of [sourceId] (does nothing after the first time).
   Future<void> checkSource(int sourceId) async {
@@ -280,7 +338,7 @@ class EpgAutoRefresh {
         if (_disposed) return;
         if (sync.isRunning(sourceId)) continue;
         _checked.add(sourceId);
-        if (due) _controller(sourceId).refresh();
+        if (due) _start(sourceId, _Held.refresh);
       }
     } on Object catch (e, st) {
       if (!_disposed) {
@@ -294,16 +352,68 @@ class EpgAutoRefresh {
   void _onSynced(int sourceId) {
     if (_disposed) return;
     _checked.add(sourceId);
-    _controller(sourceId).refreshAfterSync();
+    _start(sourceId, _Held.afterSync);
+  }
+
+  /// Starts [what] for [sourceId], or holds it while imports are paused.
+  void _start(int sourceId, _Held what) {
+    if (_paused) {
+      _hold(sourceId, what);
+      return;
+    }
+    final controller = _controller(sourceId);
+    switch (what) {
+      case _Held.refresh:
+        controller.refresh();
+      case _Held.afterSync:
+        controller.refreshAfterSync();
+      case _Held.forced:
+        controller.refresh(force: true);
+    }
+  }
+
+  void _hold(int sourceId, _Held what) {
+    final held = _held[sourceId];
+    if (held == null || what.index > held.index) _held[sourceId] = what;
+  }
+
+  /// Imports paused: cancels the refreshes that are running and holds them.
+  void _pause() {
+    if (_disposed) return;
+    final service = _ref.read(epgServiceProvider);
+    final sources = _ref.read(sourcesProvider).value ?? const <SourceView>[];
+    for (final source in sources) {
+      final id = source.id;
+      if (!service.isRefreshing(id)) continue;
+      final known = _ref.exists(guideRefreshProvider(id));
+      final status = known ? _ref.read(guideRefreshProvider(id)) : null;
+      final forced = status is GuideRefreshRunning && status.forced;
+      // Whatever it was for, run it again in full once playback ends.
+      _hold(id, forced ? _Held.forced : _Held.afterSync);
+      unawaited(known ? _controller(id).cancel() : service.cancel(id));
+    }
+  }
+
+  /// Imports may run again: starts what was held, then checks the active
+  /// source as the periodic check would.
+  void _resume() {
+    if (_disposed) return;
+    final held = Map.of(_held);
+    _held.clear();
+    for (final MapEntry(key: id, value: what) in held.entries) {
+      _start(id, what);
+    }
+    unawaited(_periodic());
   }
 
   Future<void> _periodic() async {
+    if (_paused) return;
     final id = _ref.read(activeSourceIdProvider);
     if (id == null || !_checked.contains(id)) return;
     if (_ref.read(syncServiceProvider).isRunning(id)) return;
     if (_ref.read(guideRefreshProvider(id)).isRunning) return;
     try {
-      if (await _isDue(id) && !_disposed) _controller(id).refresh();
+      if (await _isDue(id) && !_disposed) _start(id, _Held.refresh);
     } on Object catch (e, st) {
       if (!_disposed) {
         _ref.read(ringLogProvider).error('Guide check failed', e, st);

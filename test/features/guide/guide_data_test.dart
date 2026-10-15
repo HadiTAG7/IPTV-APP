@@ -164,6 +164,11 @@ void main() {
         expect(store.programmesOf('b'), isEmpty); // loaded, no data
         expect(store.programmesOf('c'), isNull); // not in the block
         expect(store.hasRange(from, to), isTrue);
+        expect(store.range, (from: from, to: to));
+        expect(
+          store.hasRange(from.subtract(const Duration(minutes: 1)), to),
+          isFalse,
+        );
         expect(store.covers(['a', 'c'], from, to), isFalse);
         expect(
           store.covers(['a'], from, to.add(const Duration(hours: 1))),
@@ -233,6 +238,19 @@ void main() {
         effectiveGuideFilter(pick, ['c1'], [empty]),
         GuideFilter.favorites, // the category is gone
       );
+      // Favourites while there are any; after the last one, all channels.
+      expect(
+        effectiveGuideFilter(GuideFilter.favorites, ['c1'], null),
+        GuideFilter.favorites,
+      );
+      expect(
+        effectiveGuideFilter(GuideFilter.favorites, const [], [news]),
+        GuideFilter.all,
+      );
+      expect(
+        effectiveGuideFilter(GuideFilter.all, ['c1'], null),
+        GuideFilter.all,
+      );
     });
 
     test('labels and picker options', () {
@@ -286,6 +304,40 @@ void main() {
       expect(all.categoryKey, isNull);
       expect(all.zapKeys, isNull);
     });
+  });
+
+  test('favourite keys leave out channels not in the catalog', () async {
+    final db = openGuideDb();
+    addTearDown(db.close);
+    final seeded = await seedGuide(
+      db,
+      channels: 5,
+      favorites: ['c4', 'gone', 'c2', 'c5'],
+    );
+    final id = seeded.sourceId;
+    final updates = <List<String>>[];
+    final sub = db.watchAvailableFavoriteChannelKeys(id).listen(updates.add);
+    addTearDown(sub.cancel);
+    await pumpEventQueue();
+    expect(updates.single, ['c4', 'c2', 'c5']);
+
+    await db.favoritesDao.setFavorite(id, ContentKind.live, 'c2', false);
+    await pumpEventQueue();
+    expect(updates.last, ['c4', 'c5']);
+
+    // A sync drops c4; the favourite itself stays (it may come back).
+    await resyncChannels(db, id, [
+      for (var i = 1; i <= 5; i++)
+        if (i != 4) channelData(i),
+    ]);
+    await pumpEventQueue();
+    expect(updates.last, ['c5']);
+    expect(await db.favoritesDao.isFavorite(id, ContentKind.live, 'c4'), true);
+    // Unrelated writes do not emit the same list again.
+    final count = updates.length;
+    await db.sourcesDao.markEpgFetched(id, guideNow);
+    await pumpEventQueue();
+    expect(updates, hasLength(count));
   });
 
   test('hasGuideData follows imports and disabled guides', () async {

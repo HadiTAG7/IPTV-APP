@@ -145,7 +145,7 @@ class _GuidePhoneListState extends ConsumerState<GuidePhoneList> {
       sourceId: widget.sourceId,
       channel: channel,
       filter: widget.filter,
-      favoriteKeys: _pager.loadedKeys(),
+      favoriteKeys: widget.favoriteKeys,
     );
     unawaited(
       Navigator.of(context).push<void>(
@@ -214,8 +214,9 @@ class _GuidePhoneListState extends ConsumerState<GuidePhoneList> {
 }
 
 /// One channel's programmes for today or tomorrow (local time), with the
-/// programme on air highlighted. Tapping it plays the channel; tapping
-/// another programme shows its details.
+/// programme on air highlighted (kept current while the page is open).
+/// Tapping it plays the channel; tapping another programme shows its
+/// details.
 class GuideSchedulePage extends ConsumerStatefulWidget {
   const GuideSchedulePage({
     super.key,
@@ -245,14 +246,21 @@ class _GuideSchedulePageState extends ConsumerState<GuideSchedulePage> {
   int _request = 0;
   ScrollController? _scroll;
 
+  /// Rebuilds, so "now" (highlight, minutes left) follows the clock.
+  Timer? _tick;
+
   @override
   void initState() {
     super.initState();
     unawaited(_load(first: true));
+    _tick = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
+    _tick?.cancel();
     _scroll?.dispose();
     super.dispose();
   }
@@ -292,10 +300,15 @@ class _GuideSchedulePageState extends ConsumerState<GuideSchedulePage> {
     }
   }
 
-  void _play() =>
-      unawaited(ref.read(guidePlayerProvider)(context, widget.request));
+  void _play() {
+    if (!mounted) return;
+    unawaited(ref.read(guidePlayerProvider)(context, widget.request));
+  }
 
-  void _select(EpgProgramme p, DateTime now, DateFormat format) {
+  /// Plays the programme on air (at the time of the tap); shows the
+  /// details of any other.
+  void _select(EpgProgramme p, DateFormat format) {
+    final now = _clock.now();
     if (p.isOnAt(now)) {
       _play();
       return;
@@ -347,7 +360,7 @@ class _GuideSchedulePageState extends ConsumerState<GuideSchedulePage> {
           now: now,
           format: format,
           autofocus: current < 0 ? i == 0 : i == current,
-          onSelect: () => _select(programmes[i], now, format),
+          onSelect: () => _select(programmes[i], format),
         ),
       );
     }

@@ -19,8 +19,16 @@ abstract final class GuideTimes {
   /// How far after now the grid can be browsed (the guide keeps 3 days).
   static const ahead = Duration(days: 3);
 
-  /// How far after the visible window programmes are loaded.
+  /// How far after the visible window (or the focused programme, when it
+  /// ends later) programmes are loaded.
   static const loadAhead = Duration(hours: 12);
+
+  /// How far before the visible window programmes are loaded.
+  static const loadBehind = Duration(hours: 6);
+
+  /// A new block is loaded once the current one ends less than this before
+  /// or after the visible window.
+  static const prefetch = Duration(hours: 2);
 }
 
 DateTime _later(DateTime a, DateTime b) => a.isAfter(b) ? a : b;

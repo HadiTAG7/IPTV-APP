@@ -190,8 +190,8 @@ class GuideChannelPager extends ChangeNotifier {
     return keys;
   }
 
-  /// Keys of every row, in order; only complete for lists held in memory
-  /// (favourites) or once every page was loaded.
+  /// Keys of the loaded rows, in order: only pages still in memory, so not
+  /// a zap list.
   List<String> loadedKeys() => keysIn(0, (_length ?? 0) - 1);
 
   Future<void> _fetch(int page, int epoch) async {
@@ -269,6 +269,13 @@ class GuideProgrammeStore extends ChangeNotifier {
         !wanted.from.isAfter(from) &&
         !wanted.to.isBefore(to) &&
         wanted.keys.containsAll(keys);
+  }
+
+  /// Time range of the delivered block; null before the first one.
+  ({DateTime from, DateTime to})? get range {
+    final f = _from;
+    final t = _to;
+    return f == null || t == null ? null : (from: f, to: t);
   }
 
   /// Whether the delivered block covers the time range `[from, to)`.

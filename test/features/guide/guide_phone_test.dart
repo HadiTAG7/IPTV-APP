@@ -2,6 +2,7 @@
 // schedule, in English and Arabic.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/core/time/clock.dart';
 import 'package:iptv_player/features/guide/guide_phone.dart';
 import 'package:iptv_player/features/guide/guide_screen.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
@@ -116,6 +117,66 @@ void main() {
       await disposeApp(tester, db);
     });
   }
+
+  testWidgets('the schedule follows the clock', (tester) async {
+    final db = openGuideDb();
+    await seedGuide(db);
+    final clock = FakeClock(guideNow); // 18:47
+    final player = PlayerLog();
+    await pumpGuideApp(
+      tester,
+      db: db,
+      player: player,
+      caps: phoneCaps,
+      clock: clock,
+    );
+    await _openGuideTab(tester);
+    // Channel 2 has half-hour programmes: 18:30-19:00 is on air.
+    await tester.tap(find.text('Channel 2'));
+    await _navigate(tester);
+    expect(_inSchedule(find.textContaining(en.guideMinutesLeft(13))), findsOne);
+
+    // 19:07: the next one is on air. A tap decides by the time of the tap.
+    clock.advance(const Duration(minutes: 20));
+    await tester.tap(_inSchedule(find.text(progTitle(2, 1))));
+    await settle(tester);
+    expect(find.byKey(const ValueKey('guide-info')), findsNothing);
+    expect(player.requests.single.item.key, 'c2');
+
+    // The highlight moves with the clock.
+    await tester.pump(const Duration(seconds: 30));
+    await settle(tester);
+    expect(_inSchedule(find.textContaining(en.guideMinutesLeft(23))), findsOne);
+    expect(
+      _inSchedule(find.textContaining(en.guideMinutesLeft(13))),
+      findsNothing,
+    );
+    await tester.tap(_inSchedule(find.text(progTitle(2, 0))));
+    await settle(tester);
+    expect(find.byKey(const ValueKey('guide-info')), findsOneWidget);
+    expect(player.requests, hasLength(1));
+    await disposeApp(tester, db);
+  });
+
+  testWidgets('favourites: the whole list is the zap list', (tester) async {
+    final db = openGuideDb();
+    await seedGuide(db, favorites: ['c3', 'gone', 'c1']);
+    final player = PlayerLog();
+    await pumpGuideApp(tester, db: db, player: player, caps: phoneCaps);
+    await _openGuideTab(tester);
+    final chip = tester.widget<ChoiceChip>(
+      find.byKey(const ValueKey('guide-chip-0')),
+    );
+    expect(chip.selected, isTrue);
+    expect(find.text(en.liveFavorites), findsOneWidget);
+    await tester.tap(find.text('Channel 1'));
+    await _navigate(tester);
+    await tester.tap(find.byKey(const ValueKey('guide-schedule-play')));
+    await settle(tester);
+    expect(player.requests.single.item.key, 'c1');
+    expect(player.requests.single.zapKeys, ['c3', 'c1']);
+    await disposeApp(tester, db);
+  });
 
   testWidgets('a category chip narrows the list; its zap list', (tester) async {
     final db = openGuideDb();

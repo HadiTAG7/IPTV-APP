@@ -45,13 +45,14 @@ final guideCategoriesProvider = StreamProvider.autoDispose
           .watchCategories(sourceId, ContentKind.live),
     );
 
-/// Favourite channel keys of a source in favourite order.
+/// Favourite channel keys of a source in favourite order, without the
+/// channels that are not in the catalog (any more): what the guide lists
+/// and zaps through for [GuideFilter.favorites].
 final guideFavoriteKeysProvider = StreamProvider.autoDispose
     .family<List<String>, int>(
       (ref, sourceId) => ref
-          .watch(favoritesDaoProvider)
-          .watchFavorites(sourceId, ContentKind.live)
-          .map((keys) => keys.toList(growable: false)),
+          .watch(databaseProvider)
+          .watchAvailableFavoriteChannelKeys(sourceId),
     );
 
 /// Whether the source has any guide data to show.
@@ -59,8 +60,9 @@ final guideHasDataProvider = StreamProvider.autoDispose.family<bool, int>(
   (ref, sourceId) => ref.watch(databaseProvider).watchHasGuideData(sourceId),
 );
 
-/// The filter in effect: the picked one while it still exists, else
-/// favourites when there are any, else all channels.
+/// The filter in effect: the picked one while it still has channels to
+/// show (a category that still exists, favourites while there are any),
+/// else favourites when there are any, else all channels.
 GuideFilter effectiveGuideFilter(
   GuideFilter? picked,
   List<String> favoriteKeys,
@@ -70,16 +72,18 @@ GuideFilter effectiveGuideFilter(
       ? GuideFilter.all
       : GuideFilter.favorites;
   if (picked == null) return fallback;
-  if (picked.kind == GuideFilterKind.category &&
-      categories != null &&
-      !categories.any((c) => c.key == picked.categoryKey)) {
-    return fallback;
-  }
-  return picked;
+  final gone = switch (picked.kind) {
+    GuideFilterKind.favorites => favoriteKeys.isEmpty,
+    GuideFilterKind.category =>
+      categories != null && !categories.any((c) => c.key == picked.categoryKey),
+    GuideFilterKind.all => false,
+  };
+  return gone ? fallback : picked;
 }
 
 /// What the player zaps through when started from the guide with [filter]:
-/// the same channels in the same order.
+/// the same channels in the same order. For favourites, [favoriteKeys] is
+/// the whole list ([guideFavoriteKeysProvider]), not just the rows loaded.
 PlayRequest guidePlayRequest({
   required int sourceId,
   required ChannelRow channel,

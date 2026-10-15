@@ -214,6 +214,126 @@ void main() {
     });
   });
 
+  group('fullscreen playback on a Lite device', () {
+    const lite = AppSettings(lite: LiteSetting.on, epgRefreshHours: 6);
+
+    void playing(bool active) =>
+        container.read(fullscreenPlaybackProvider.notifier).set(active);
+
+    test('a due launch check waits for playback to end', () async {
+      container.dispose();
+      container = makeContainer(settings: lite);
+      final id = (await seedGuide(db)).sourceId;
+      epg.due.add(id);
+      playing(true);
+      expect(container.read(epgImportsPausedProvider), isTrue);
+      final auto = await startSchedule();
+      expect(epg.needsCalls, [id]);
+      expect(epg.calls, isEmpty);
+      expect(auto.held, {id});
+
+      playing(false);
+      await pumpEventQueue();
+      expect(epg.calls, [
+        (sourceId: id, force: false, lite: true, refreshHours: 6),
+      ]);
+      expect(auto.held, isEmpty);
+      expect(container.read(guideRefreshProvider(id)).isRunning, isTrue);
+    });
+
+    test('a sync ending during playback refreshes after it', () async {
+      container.dispose();
+      container = makeContainer(settings: lite);
+      final id = (await seedGuide(db)).sourceId;
+      final auto = await startSchedule();
+      playing(true);
+      await syncAndFinish(id, SyncPhase.done);
+      expect(epg.calls, isEmpty);
+      expect(auto.held, {id});
+
+      playing(false);
+      await pumpEventQueue();
+      expect(epg.calls.single.force, isFalse);
+      expect(auto.held, isEmpty);
+    });
+
+    test('running imports stop and run again, in full, afterwards', () async {
+      container.dispose();
+      container = makeContainer(settings: lite);
+      final id = (await seedGuide(db)).sourceId;
+      final auto = await startSchedule();
+      // "Refresh guide", then the user starts watching.
+      container.read(guideRefreshProvider(id).notifier).refresh(force: true);
+      expect(epg.calls.single.force, isTrue);
+      playing(true);
+      await pumpEventQueue();
+      expect(epg.cancelled, [id]);
+      final cancelled = container.read(guideRefreshProvider(id));
+      expect((cancelled as GuideRefreshFailed).cancelled, isTrue);
+      expect(auto.held, {id});
+
+      // Zapping or leaving and re-entering keeps it held.
+      playing(true);
+      await pumpEventQueue();
+      expect(epg.calls, hasLength(1));
+
+      playing(false);
+      await pumpEventQueue();
+      expect(epg.calls, hasLength(2));
+      expect(epg.calls.last.force, isTrue);
+      final running = container.read(guideRefreshProvider(id));
+      expect((running as GuideRefreshRunning).forced, isTrue);
+
+      // A background run is cancelled too and run again afterwards.
+      await epg.finish(id);
+      await pumpEventQueue();
+      epg.refresh(id); // e.g. started by the launch check of another screen
+      playing(true);
+      await pumpEventQueue();
+      expect(epg.cancelled, [id, id]);
+      playing(false);
+      await pumpEventQueue();
+      expect(epg.calls, hasLength(4));
+      expect(epg.calls.last.force, isFalse);
+    });
+
+    test('the periodic check waits while playing', () async {
+      container.dispose();
+      container = makeContainer(
+        settings: lite,
+        every: const Duration(milliseconds: 20),
+      );
+      final id = (await seedGuide(db)).sourceId;
+      await startSchedule();
+      playing(true);
+      epg.due.add(id);
+      epg.needsCalls.clear();
+      await Future<void>.delayed(const Duration(milliseconds: 70));
+      await pumpEventQueue();
+      expect(epg.needsCalls, isEmpty);
+      expect(epg.calls, isEmpty);
+
+      playing(false);
+      await pumpEventQueue();
+      expect(epg.calls, hasLength(1));
+    });
+
+    test('without Lite, playback does not hold imports', () async {
+      final id = (await seedGuide(db)).sourceId;
+      final auto = await startSchedule();
+      playing(true);
+      expect(container.read(epgImportsPausedProvider), isFalse);
+      container.read(guideRefreshProvider(id).notifier).refresh(force: true);
+      await pumpEventQueue();
+      expect(epg.cancelled, isEmpty);
+      await epg.finish(id);
+      await pumpEventQueue();
+      await syncAndFinish(id, SyncPhase.done);
+      expect(epg.calls, hasLength(2));
+      expect(auto.held, isEmpty);
+    });
+  });
+
   test('the periodic check refreshes the active source when due', () async {
     container.dispose();
     container = makeContainer(every: const Duration(milliseconds: 20));

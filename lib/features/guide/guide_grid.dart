@@ -39,14 +39,18 @@ import 'providers.dart';
 ///   keep the time, Left/Right step to the previous/next programme
 ///   (mirrored in RTL) and the window follows. A fresh press past the
 ///   first programme or above the first row is left to the page, so focus
-///   goes to the rail or to the header buttons.
+///   goes to the rail or to the header buttons. The [Focus] is there from
+///   the first frame, while the channels load, so entering the page early
+///   lands in the grid and stays there once the rows arrive.
 /// * OK on the programme on air (or a row without guide data) plays the
 ///   channel with the guide's list as the zap list; on any other programme
 ///   it shows its details. Menu/Info show the details too. Back returns to
 ///   now before the shell takes focus to the rail.
 /// * Channels come from the database in pages ([GuideChannelPager]) and
 ///   programmes of the visible rows ± [rowMargin] from one query
-///   ([GuideProgrammeStore]), debounced while scrolling.
+///   ([GuideProgrammeStore]), debounced while scrolling, over the visible
+///   window plus [GuideTimes.loadBehind] / [GuideTimes.loadAhead]. Time
+///   outside the loaded block shows as loading, not as a gap.
 class GuideGrid extends ConsumerStatefulWidget {
   const GuideGrid({
     super.key,
@@ -105,6 +109,10 @@ class GuideGridState extends ConsumerState<GuideGrid> {
   @visibleForTesting
   GuideWindow get window => _window;
 
+  /// Time range of the programmes in memory (for tests).
+  @visibleForTesting
+  ({DateTime from, DateTime to})? get loadedRange => _store.range;
+
   /// The grid's focus node.
   FocusNode get focusNode => _gridNode;
 
@@ -118,6 +126,7 @@ class GuideGridState extends ConsumerState<GuideGrid> {
     _pager = _newPager();
     _scroll.addListener(_maybeLoad);
     _tick = Timer.periodic(const Duration(seconds: 30), (_) => _onTick());
+    // The grid's Focus is built in the first frame (also while loading).
     WidgetsBinding.instance
       ..addPostFrameCallback((_) => _claimLostFocus())
       ..ensureVisualUpdate();
@@ -207,7 +216,10 @@ class GuideGridState extends ConsumerState<GuideGrid> {
     _maybeLoad();
   }
 
-  /// Loads the channel pages and the programmes around the visible rows.
+  /// Loads the channel pages and the programmes around the visible rows:
+  /// one block over the visible window (and the focused programme) plus
+  /// [GuideTimes.loadBehind] before and [GuideTimes.loadAhead] after, again
+  /// once the block ends less than [GuideTimes.prefetch] from them.
   void _maybeLoad() {
     final n = _pager.length ?? 0;
     if (n == 0 || !_scroll.hasClients) return;
@@ -220,32 +232,65 @@ class GuideGridState extends ConsumerState<GuideGrid> {
     _pager.ensure(first - margin, last + margin);
     final needed = _pager.keysIn(first - margin ~/ 4, last + margin ~/ 4);
     if (needed.isEmpty) return;
-    final from = _window.minTime;
-    final need = _earliest(
-      _pos.viewEnd.add(const Duration(hours: 2)),
-      _window.maxTime,
-    );
-    if (_store.covers(needed, from, need)) return;
+    // A long programme counts in full, so the ones next to it are known.
+    final focused = _focusedSlot?.programme;
+    var start = _pos.viewStart;
+    var end = _pos.viewEnd;
+    if (focused != null) {
+      if (focused.start.isBefore(start)) start = focused.start;
+      if (focused.stop.isAfter(end)) end = focused.stop;
+    }
+    DateTime from(Duration d) => _later(_window.minTime, start.subtract(d));
+    DateTime to(Duration d) => _earliest(end.add(d), _window.maxTime);
+    const prefetch = GuideTimes.prefetch;
+    if (_store.covers(needed, from(prefetch), to(prefetch))) return;
     _store.request(
       _pager.keysIn(first - margin, last + margin),
-      from,
-      _earliest(_pos.viewEnd.add(GuideTimes.loadAhead), _window.maxTime),
-      immediate: _store.version == 0,
+      from(GuideTimes.loadBehind),
+      to(GuideTimes.loadAhead),
+      // At once when nothing of the window is there (first load, jumps);
+      // after a failed load only after the debounce, so a failing query is
+      // not retried every frame.
+      immediate: _store.version == 0 || (!_viewLoaded && _store.error == null),
     );
   }
 
   static DateTime _earliest(DateTime a, DateTime b) => a.isBefore(b) ? a : b;
+  static DateTime _later(DateTime a, DateTime b) => a.isAfter(b) ? a : b;
 
-  /// Slots of a row, or null while its programmes load.
+  /// Whether the delivered block covers the visible window.
+  bool get _viewLoaded => _store.hasRange(
+    _later(_pos.viewStart, _window.minTime),
+    _earliest(_pos.viewEnd, _window.maxTime),
+  );
+
+  /// Slots of a row over the loaded block, or null while its programmes
+  /// (or those of the visible window) load.
   List<GuideSlot>? _slotsOf(String key) {
     if (_slotsVersion != _store.version || _slotsWindow != _window) {
       _slots.clear();
       _slotsVersion = _store.version;
       _slotsWindow = _window;
     }
+    final block = _store.range;
+    if (block == null || !_viewLoaded) return null;
     final programmes = _store.programmesOf(key);
     if (programmes == null) return null;
-    return _slots[key] ??= _window.slotsFor(programmes);
+    return _slots[key] ??= buildSlots(
+      programmes,
+      _later(block.from, _window.minTime),
+      _earliest(block.to, _window.maxTime),
+    );
+  }
+
+  /// Whether the browsable range goes on past the loaded block, after
+  /// ([forward]) or before it.
+  bool _moreBeyondBlock({required bool forward}) {
+    final block = _store.range;
+    if (block == null) return false;
+    return forward
+        ? block.to.isBefore(_window.maxTime)
+        : block.from.isAfter(_window.minTime);
   }
 
   /// The focused slot; null while the row loads.
@@ -266,7 +311,7 @@ class GuideGridState extends ConsumerState<GuideGrid> {
   }
 
   /// Takes focus when it fell back to the page (the view this grid
-  /// replaced had it).
+  /// replaced had it and no focus watchdog restored it).
   void _claimLostFocus() {
     if (!mounted) return;
     final primary = FocusManager.instance.primaryFocus;
@@ -327,12 +372,21 @@ class GuideGridState extends ConsumerState<GuideGrid> {
       _setPosition(next);
       return true;
     }
+    // No rows (yet): the page decides (the rail is that way).
+    if (_rowCount == 0) return false;
     final channel = _pager.rowAt(_pos.row);
     final slots = channel == null ? null : _slotsOf(channel.key);
-    // Still loading: stay in the grid.
+    // The row is loading: stay in the grid.
     if (slots == null) return true;
     final next = moveSlot(_pos, slots, _window, forward: forward);
-    if (next == null) return false;
+    if (next == null) {
+      if (!_moreBeyondBlock(forward: forward)) return false;
+      // The row goes on past the loaded block: scroll that way while it
+      // loads.
+      _follow = false;
+      _setPosition(shiftView(_pos, forward ? 1 : -1, _window));
+      return true;
+    }
     _follow = false;
     _setPosition(next);
     return true;
@@ -392,14 +446,27 @@ class GuideGridState extends ConsumerState<GuideGrid> {
     }
   }
 
-  void _play(ChannelRow channel) {
+  void _play(ChannelRow channel) => _player(channel)();
+
+  /// Plays [channel] with the guide's zap list when called. Safe to call
+  /// after this grid is gone (from a dialog it opened): the player and the
+  /// request are taken now, and the navigator is used without the grid.
+  VoidCallback _player(ChannelRow channel) {
+    final player = ref.read(guidePlayerProvider);
     final request = guidePlayRequest(
       sourceId: widget.sourceId,
       channel: channel,
       filter: widget.filter,
-      favoriteKeys: _pager.loadedKeys(),
+      favoriteKeys: widget.favoriteKeys,
     );
-    unawaited(ref.read(guidePlayerProvider)(context, request));
+    final navigator = Navigator.of(context);
+    return () {
+      if (mounted) {
+        unawaited(player(context, request));
+      } else if (navigator.mounted) {
+        unawaited(player(navigator.context, request));
+      }
+    };
   }
 
   void _showInfo() {
@@ -412,7 +479,7 @@ class GuideGridState extends ConsumerState<GuideGrid> {
         programme: _focusedSlot?.programme,
         now: _window.now,
         timeFormat: _timeFormat,
-        onWatch: () => _play(channel),
+        onWatch: _player(channel),
       ),
     );
   }
@@ -493,19 +560,40 @@ class GuideGridState extends ConsumerState<GuideGrid> {
     });
     final l10n = AppLocalizations.of(context);
     final n = _pager.length;
+    final Widget content;
     if (n == null) {
-      return _pager.error != null
+      content = _pager.error != null
           ? ErrorView(onRetry: () => unawaited(_pager.reload()))
           : const LoadingView();
-    }
-    if (n == 0) {
-      return EmptyView(
+    } else if (n == 0) {
+      content = EmptyView(
         icon: Icons.live_tv_outlined,
         message: widget.filter.kind == GuideFilterKind.favorites
             ? l10n.favoritesEmpty
             : l10n.liveNoChannels,
       );
+    } else {
+      content = _grid(context, l10n, n);
     }
+    return HomeTabBackHandler(
+      onBack: _onBack,
+      child: FocusTraversalOrder(
+        // First in the page: entering the Guide lands here, also while the
+        // channels load, and focus stays when they arrive.
+        order: const NumericFocusOrder(0),
+        child: Focus(
+          focusNode: _gridNode,
+          // Retry, or the header for an empty list, take focus instead.
+          canRequestFocus: n == null ? _pager.error == null : n > 0,
+          onKeyEvent: _onKey,
+          onFocusChange: _onFocusChange,
+          child: content,
+        ),
+      ),
+    );
+  }
+
+  Widget _grid(BuildContext context, AppLocalizations l10n, int n) {
     final theme = Theme.of(context).textTheme;
     final direction = Directionality.of(context);
     final locale = Localizations.localeOf(context).toLanguageTag();
@@ -514,95 +602,80 @@ class GuideGridState extends ConsumerState<GuideGrid> {
     final focusedSlot = _focusedSlot;
     final now = _window.now;
 
-    return HomeTabBackHandler(
-      onBack: _onBack,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final channelWidth = (constraints.maxWidth * 0.22).clamp(
-            112.0,
-            260.0,
-          );
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(
-                height: GuideGrid.infoHeight,
-                child: GuideInfoPanel(
-                  channel: focusedChannel,
-                  slot: focusedSlot,
-                  now: now,
-                  timeFormat: _timeFormat,
-                ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final channelWidth = (constraints.maxWidth * 0.22).clamp(112.0, 260.0);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              height: GuideGrid.infoHeight,
+              child: GuideInfoPanel(
+                channel: focusedChannel,
+                slot: focusedSlot,
+                now: now,
+                timeFormat: _timeFormat,
               ),
-              const SizedBox(height: Spacing.sm),
-              SizedBox(
-                height: GuideGrid.headerHeight,
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: channelWidth,
-                      child: Padding(
-                        padding: const EdgeInsetsDirectional.only(
-                          start: Spacing.sm,
-                        ),
-                        child: Align(
-                          alignment: AlignmentDirectional.centerStart,
-                          child: Text(
-                            guideDayLabel(l10n, locale, _pos.viewStart, now),
-                            key: const ValueKey('guide-day'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.labelMedium,
-                          ),
-                        ),
+            ),
+            const SizedBox(height: Spacing.sm),
+            SizedBox(
+              height: GuideGrid.headerHeight,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: channelWidth,
+                    child: Padding(
+                      padding: const EdgeInsetsDirectional.only(
+                        start: Spacing.sm,
                       ),
-                    ),
-                    Expanded(
-                      child: CustomPaint(
-                        key: const ValueKey('guide-header'),
-                        painter: GuideHeaderPainter(
-                          viewStart: _pos.viewStart,
-                          now: now,
-                          textDirection: direction,
-                          labelStyle: style.time.copyWith(
-                            color: AppColors.textSecondary,
-                          ),
-                          timeFormat: _timeFormat,
+                      child: Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Text(
+                          guideDayLabel(l10n, locale, _pos.viewStart, now),
+                          key: const ValueKey('guide-day'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.labelMedium,
                         ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: FocusTraversalOrder(
-                  // First in the page: entering the Guide lands here.
-                  order: const NumericFocusOrder(0),
-                  child: Focus(
-                    focusNode: _gridNode,
-                    onKeyEvent: _onKey,
-                    onFocusChange: _onFocusChange,
-                    child: Semantics(
-                      key: const ValueKey('guide-grid'),
-                      focusable: true,
-                      focused: _focused,
-                      label: _semanticLabel(l10n, focusedChannel, focusedSlot),
-                      child: ListView.builder(
-                        controller: _scroll,
-                        padding: EdgeInsets.zero,
-                        itemExtent: GuideGrid.rowExtent,
-                        itemCount: n,
-                        itemBuilder: (context, i) =>
-                            _row(i, channelWidth, style, l10n, direction),
                       ),
                     ),
                   ),
+                  Expanded(
+                    child: CustomPaint(
+                      key: const ValueKey('guide-header'),
+                      painter: GuideHeaderPainter(
+                        viewStart: _pos.viewStart,
+                        now: now,
+                        textDirection: direction,
+                        labelStyle: style.time.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                        timeFormat: _timeFormat,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Semantics(
+                key: const ValueKey('guide-grid'),
+                focusable: true,
+                focused: _focused,
+                label: _semanticLabel(l10n, focusedChannel, focusedSlot),
+                child: ListView.builder(
+                  controller: _scroll,
+                  padding: EdgeInsets.zero,
+                  itemExtent: GuideGrid.rowExtent,
+                  itemCount: n,
+                  itemBuilder: (context, i) =>
+                      _row(i, channelWidth, style, l10n, direction),
                 ),
               ),
-            ],
-          );
-        },
-      ),
+            ),
+          ],
+        );
+      },
     );
   }
 

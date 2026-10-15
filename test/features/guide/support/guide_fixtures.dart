@@ -1,8 +1,10 @@
 // Synthetic guide data and an app pump for the guide tests.
-import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:drift/drift.dart'
+    show ApplyInterceptor, QueryExecutor, QueryInterceptor, driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/app/app.dart';
 import 'package:iptv_player/app/providers.dart';
@@ -34,9 +36,29 @@ final guideNow = DateTime(2026, 10, 15, 18, 47).toUtc();
 /// Start of the visible window at [guideNow] (18:30 local).
 DateTime get guideViewStart => floorToSlot(guideNow);
 
-AppDatabase openGuideDb() {
+/// An in-memory database; [interceptor] sees every statement.
+AppDatabase openGuideDb({QueryInterceptor? interceptor}) {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
-  return AppDatabase(NativeDatabase.memory(), clock: FakeClock(guideNow));
+  final QueryExecutor memory = NativeDatabase.memory();
+  return AppDatabase(
+    interceptor == null ? memory : memory.interceptWith(interceptor),
+    clock: FakeClock(guideNow),
+  );
+}
+
+/// Delays every read by [delay] (zero at first): a slow box.
+class SlowReads extends QueryInterceptor {
+  Duration delay = Duration.zero;
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    if (delay > Duration.zero) await Future<void>.delayed(delay);
+    return executor.runSelect(statement, args);
+  }
 }
 
 /// Title of programme [k] of channel [i] (k = 0 is on air at [guideNow]).
@@ -131,7 +153,14 @@ Future<SeededGuide> seedGuide(
     await db.favoritesDao.setFavorite(sourceId, ContentKind.live, key, true);
   }
   if (!guide) return (sourceId: sourceId, epgSourceId: -1);
+  final epgSourceId = await addGuide(db, sourceId, withGuide: withGuide);
+  return (sourceId: sourceId, epgSourceId: epgSourceId);
+}
 
+/// Writes what a guide import of [sourceId] would: a guide with
+/// [programmesFor] channels 1..[withGuide], linked by tvg-id. Returns the
+/// guide's id.
+Future<int> addGuide(AppDatabase db, int sourceId, {int withGuide = 25}) async {
   final epgSourceId = await db.epgDao.addEpgSource(
     sourceId,
     'http://127.0.0.1:9/guide.xml',
@@ -149,7 +178,7 @@ Future<SeededGuide> seedGuide(
       ),
   });
   await db.sourcesDao.markEpgFetched(sourceId, guideNow);
-  return (sourceId: sourceId, epgSourceId: epgSourceId);
+  return epgSourceId;
 }
 
 /// Requests handed to the player.
@@ -161,7 +190,8 @@ class PlayerLog {
 }
 
 /// Pumps the real app on [db] with the guide's collaborators faked: the
-/// clock at [guideNow], [epg] for refreshes, [player] for playback.
+/// clock ([clock], else at [guideNow]), [epg] for refreshes, [player] for
+/// playback; [overrides] come last.
 Future<void> pumpGuideApp(
   WidgetTester tester, {
   required AppDatabase db,
@@ -170,6 +200,8 @@ Future<void> pumpGuideApp(
   DeviceCaps caps = tvCaps,
   bool rtl = false,
   Size? logicalSize,
+  FakeClock? clock,
+  List<Override> overrides = const [],
 }) async {
   final size =
       logicalSize ?? (caps.isTv ? const Size(960, 540) : const Size(390, 800));
@@ -190,10 +222,11 @@ Future<void> pumpGuideApp(
         ),
         ringLogProvider.overrideWithValue(RingLog()),
         autoSyncOnStartProvider.overrideWithValue(false),
-        clockProvider.overrideWithValue(FakeClock(guideNow)),
+        clockProvider.overrideWithValue(clock ?? FakeClock(guideNow)),
         epgServiceProvider.overrideWithValue(epg ?? FakeEpgService()),
         epgAutoRefreshIntervalProvider.overrideWithValue(null),
         guidePlayerProvider.overrideWithValue(player.call),
+        ...overrides,
       ],
       child: const IptvApp(),
     ),
