@@ -117,6 +117,75 @@ void main() {
       await disposeApp(tester, db);
     });
 
+    for (final rtl in [false, true]) {
+      final locale = Locale(rtl ? 'ar' : 'en');
+      final l10n = lookupAppLocalizations(locale);
+
+      testWidgets('${locale.languageCode}: with focus in the info pane: focus '
+          'follows into All channels on the same channel', (tester) async {
+        final db = openAppTestDb();
+        final id = await seedThreeCategories(db);
+        await db.settingsDao.setString(liveLastListKey(id), 'cat:kids');
+        await pumpLiveApp(tester, db, locale: locale);
+        await press(tester, toEnd(rtl));
+        await press(tester, LogicalKeyboardKey.arrowDown);
+        expectFocusOn('Channel 22');
+        await press(tester, toEnd(rtl));
+        expectFocusOn(l10n.vodPlay);
+
+        await syncWithoutKids(db, id);
+        await settle(tester);
+        await wait(tester, LiveView.selectDelay * 2);
+        expect(liveState(tester).selected, const LiveList.all());
+        expectFocusOn('Channel 22');
+        expect(await db.settingsDao.getString(liveLastListKey(id)), 'all');
+
+        // Nothing is stranded: Left reaches the categories, then the rail.
+        await press(tester, toStart(rtl));
+        expect(focusedIn(const ValueKey('live-category-all')), isTrue);
+        await press(tester, toStart(rtl));
+        expect(focusedIn(const ValueKey('rail-live')), isTrue);
+        await disposeApp(tester, db);
+      });
+    }
+
+    testWidgets('a sync that empties the category while the info pane has '
+        'focus moves focus into All channels', (tester) async {
+      final db = openAppTestDb();
+      final id = await seedThreeCategories(db);
+      final en = lookupAppLocalizations(const Locale('en'));
+      await db.settingsDao.setString(liveLastListKey(id), 'cat:kids');
+      await pumpLiveApp(tester, db);
+      await press(tester, LogicalKeyboardKey.arrowRight);
+      expectFocusOn('Channel 21');
+      await press(tester, LogicalKeyboardKey.arrowRight);
+      expectFocusOn(en.vodPlay);
+
+      // Kids stays listed, without channels.
+      await seedCatalog(
+        db,
+        id,
+        categories: [
+          liveCategory('news', 'News', 0),
+          liveCategory('sports', 'Sports', 1),
+          liveCategory('kids', 'Kids', 2),
+        ],
+        channels: [
+          for (var n = 1; n <= 30; n++)
+            testChannel(n, categories: [n > 10 && n <= 20 ? 'sports' : 'news']),
+        ],
+      );
+      await settle(tester);
+      await wait(tester, LiveView.selectDelay * 2);
+      expect(find.text('Kids'), findsOneWidget);
+      expect(liveState(tester).selected, const LiveList.all());
+      expectFocusOn('Channel 21');
+      expect(await db.settingsDao.getString(liveLastListKey(id)), 'all');
+      await press(tester, LogicalKeyboardKey.arrowLeft);
+      expect(focusedIn(const ValueKey('live-category-all')), isTrue);
+      await disposeApp(tester, db);
+    });
+
     testWidgets('with focus on its category: All channels gets focus and '
         'stays selected', (tester) async {
       final db = openAppTestDb();
