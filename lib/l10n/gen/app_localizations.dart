@@ -1543,6 +1543,84 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This subscription has expired.'**
   String get errorExpiredNoDate;
+
+  /// No description provided for @sourcesEditorType.
+  ///
+  /// In en, this message translates to:
+  /// **'Source type'**
+  String get sourcesEditorType;
+
+  /// No description provided for @sourcesKeepPassword.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave empty to keep the saved password.'**
+  String get sourcesKeepPassword;
+
+  /// No description provided for @sourcesReenterUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved credentials are hidden. Enter the full link again.'**
+  String get sourcesReenterUrl;
+
+  /// No description provided for @sourcesXtreamLinkTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'This is an Xtream Codes link'**
+  String get sourcesXtreamLinkTitle;
+
+  /// No description provided for @sourcesXtreamLinkBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Save it as an Xtream Codes source to get movie and series details, a short guide for each channel and the provider\'s TV guide.'**
+  String get sourcesXtreamLinkBody;
+
+  /// No description provided for @sourcesXtreamLinkConvert.
+  ///
+  /// In en, this message translates to:
+  /// **'Use Xtream Codes'**
+  String get sourcesXtreamLinkConvert;
+
+  /// No description provided for @sourcesXtreamLinkConverted.
+  ///
+  /// In en, this message translates to:
+  /// **'Switched to Xtream Codes. Check the details, then press Test & save.'**
+  String get sourcesXtreamLinkConverted;
+
+  /// No description provided for @sourcesUserAgentDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Default'**
+  String get sourcesUserAgentDefault;
+
+  /// No description provided for @sourcesReceivedFromPhone.
+  ///
+  /// In en, this message translates to:
+  /// **'Received from your phone.'**
+  String get sourcesReceivedFromPhone;
+
+  /// No description provided for @sourcesImportSaving.
+  ///
+  /// In en, this message translates to:
+  /// **'Saving…'**
+  String get sourcesImportSaving;
+
+  /// No description provided for @sourcesImportCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'Import cancelled.'**
+  String get sourcesImportCancelled;
+
+  /// No description provided for @sourcesNeverImported.
+  ///
+  /// In en, this message translates to:
+  /// **'Not imported yet'**
+  String get sourcesNeverImported;
+
+  /// No description provided for @lanNewCode.
+  ///
+  /// In en, this message translates to:
+  /// **'New code'**
+  String get lanNewCode;
 }
 
 class _AppLocalizationsDelegate

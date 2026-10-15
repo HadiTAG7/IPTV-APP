@@ -257,5 +257,19 @@
   "searchMovies": "الأفلام",
   "searchSeries": "المسلسلات",
 
-  "errorExpiredNoDate": "انتهى هذا الاشتراك."
+  "errorExpiredNoDate": "انتهى هذا الاشتراك.",
+
+  "sourcesEditorType": "نوع المصدر",
+  "sourcesKeepPassword": "اتركه فارغاً للاحتفاظ بكلمة المرور المحفوظة.",
+  "sourcesReenterUrl": "بيانات الدخول المحفوظة مخفية. أدخل الرابط كاملاً مرة أخرى.",
+  "sourcesXtreamLinkTitle": "هذا رابط Xtream Codes",
+  "sourcesXtreamLinkBody": "احفظه كمصدر Xtream Codes لتحصل على تفاصيل الأفلام والمسلسلات، ودليل مختصر لكل قناة، ودليل البرامج من المزوّد.",
+  "sourcesXtreamLinkConvert": "التحويل إلى Xtream Codes",
+  "sourcesXtreamLinkConverted": "تم التحويل إلى Xtream Codes. راجع البيانات ثم اضغط «اختبار وحفظ».",
+  "sourcesUserAgentDefault": "الافتراضي",
+  "sourcesReceivedFromPhone": "تم الاستلام من جوالك.",
+  "sourcesImportSaving": "جارٍ الحفظ…",
+  "sourcesImportCancelled": "تم إلغاء الاستيراد.",
+  "sourcesNeverImported": "لم يُستورد بعد",
+  "lanNewCode": "رمز جديد"
 }

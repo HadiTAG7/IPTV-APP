@@ -355,5 +355,19 @@
   "errorExpiredNoDate": "This subscription has expired.",
   "@errorExpiredNoDate": {
     "description": "Account expiry error when the provider sent no expiry date."
-  }
+  },
+
+  "sourcesEditorType": "Source type",
+  "sourcesKeepPassword": "Leave empty to keep the saved password.",
+  "sourcesReenterUrl": "Saved credentials are hidden. Enter the full link again.",
+  "sourcesXtreamLinkTitle": "This is an Xtream Codes link",
+  "sourcesXtreamLinkBody": "Save it as an Xtream Codes source to get movie and series details, a short guide for each channel and the provider's TV guide.",
+  "sourcesXtreamLinkConvert": "Use Xtream Codes",
+  "sourcesXtreamLinkConverted": "Switched to Xtream Codes. Check the details, then press Test & save.",
+  "sourcesUserAgentDefault": "Default",
+  "sourcesReceivedFromPhone": "Received from your phone.",
+  "sourcesImportSaving": "Saving…",
+  "sourcesImportCancelled": "Import cancelled.",
+  "sourcesNeverImported": "Not imported yet",
+  "lanNewCode": "New code"
 }
