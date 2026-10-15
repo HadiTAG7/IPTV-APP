@@ -98,7 +98,16 @@ class NowNextStore extends ChangeNotifier {
   Future<void> refresh() =>
       _fetch({..._visible, ..._pinned}.toList(), always: true);
 
-  /// Forgets everything (after a guide refresh or a catalog change).
+  /// New guide data (a guide refresh ended): forgets the channels that are
+  /// neither visible nor pinned and reads those again. Their old values
+  /// stay on screen until the new ones arrive.
+  Future<void> reload() {
+    final keep = {..._visible, ..._pinned};
+    _data.removeWhere((key, _) => !keep.contains(key));
+    return refresh();
+  }
+
+  /// Forgets everything (after a catalog change).
   void clear() {
     _data.clear();
     notifyListeners();

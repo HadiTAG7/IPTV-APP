@@ -216,6 +216,10 @@ class _Rail extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
+    // Built under another route (the layout changed while the player or a
+    // pushed page is open): the selected item must not take the focus of
+    // the route on top.
+    final current = ModalRoute.isCurrentOf(context) ?? true;
     return Material(
       color: AppColors.surface,
       borderRadius: Radii.lgAll,
@@ -235,7 +239,7 @@ class _Rail extends ConsumerWidget {
                   label: tab.label(l10n),
                   selected: i == selected,
                   focusNode: nodes[i],
-                  autofocus: i == selected,
+                  autofocus: current && i == selected,
                   onFocus: () => onFocusTab(i),
                   onSelect: () => onSelectTab(i),
                 ),

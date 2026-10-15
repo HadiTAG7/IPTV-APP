@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -239,17 +241,24 @@ class _HomeTabBackHandlerState extends State<HomeTabBackHandler> {
 /// * Starts a sync of the active source when its catalog is older than
 ///   [autoSyncMaxAge] or was never synced (once per source per launch).
 /// * Shows a snack bar when a sync of the active source fails.
+/// * [HomeShellState.showTab] switches tabs from outside the shells (the
+///   player's Guide button).
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
   /// How long a second Back press exits the app.
   static const exitWindow = Duration(seconds: 2);
 
+  /// The home shell [context] is in (a tab page), or null for a pushed
+  /// page or a dialog (their routes sit above the shell).
+  static HomeShellState? maybeOf(BuildContext context) =>
+      context.findAncestorStateOfType<HomeShellState>();
+
   @override
-  ConsumerState<HomeShell> createState() => _HomeShellState();
+  ConsumerState<HomeShell> createState() => HomeShellState();
 }
 
-class _HomeShellState extends ConsumerState<HomeShell> {
+class HomeShellState extends ConsumerState<HomeShell> {
   final _tvKey = GlobalKey<TvShellState>();
   final _phoneKey = GlobalKey<PhoneShellState>();
   final _pages = HomePages();
@@ -273,12 +282,49 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     _autoSynced.add(source.id);
     // Not during build: starting a sync updates providers.
     WidgetsBinding.instance
-      ..addPostFrameCallback((_) {
-        if (!mounted) return;
-        final sync = ref.read(syncServiceProvider);
-        if (!sync.isRunning(source.id)) sync.sync(source.id);
-      })
+      ..addPostFrameCallback((_) => unawaited(_autoSync(source.id)))
       ..ensureVisualUpdate();
+  }
+
+  /// Syncs [sourceId] unless a sync of it is running or its saved row says
+  /// it is fresh. The row the shell was built with can be older than the
+  /// database: the import that just added the source (onboarding, the
+  /// source editor) saves its sync time right before the shell appears, and
+  /// must not be followed by a second full import.
+  Future<void> _autoSync(int sourceId) async {
+    if (!mounted) return;
+    final sync = ref.read(syncServiceProvider);
+    final dao = ref.read(sourcesDaoProvider);
+    final clock = ref.read(clockProvider);
+    final log = ref.read(ringLogProvider);
+    if (sync.isRunning(sourceId)) return;
+    final SourceView? saved;
+    try {
+      saved = await dao.byId(sourceId);
+    } on Object catch (e, st) {
+      log.error('Reading the source failed', e, st);
+      return;
+    }
+    if (!mounted || saved == null || sync.isRunning(sourceId)) return;
+    if (needsAutoSync(saved, clock.now())) sync.sync(sourceId);
+  }
+
+  /// Shows [tab] in the shell on screen now (the TV / large-layout rail or
+  /// the phone bar); with [enter], focus moves into its page (large
+  /// layout). The choice is kept in [HomePages], so it survives the shells
+  /// being swapped (a phone turning back to portrait after the player).
+  /// A destination the shell on screen has no slot for is ignored.
+  void showTab(HomeTab tab, {bool enter = false}) {
+    if (!mounted) return;
+    final tv = _tvKey.currentState;
+    final phone = _phoneKey.currentState;
+    if (tv != null) {
+      tv.select(tab, enter: enter);
+    } else if (phone != null) {
+      phone.select(tab);
+    } else {
+      setState(() => _pages.show(tab));
+    }
   }
 
   void _onBack() {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../epg/epg_providers.dart';
 import '../l10n/gen/app_localizations.dart';
 import '../theme/app_theme.dart';
 import '../tv/dpad_shortcuts.dart';
@@ -19,11 +20,17 @@ final navigatorKeyProvider = Provider<GlobalKey<NavigatorState>>(
 ///
 /// The locale follows Settings (Auto uses the device language when it is
 /// Arabic or English, else English). The builder installs [AppFrame].
+///
+/// Keeps the background guide schedule ([epgAutoRefreshProvider]) running
+/// for the app's lifetime: guides are refreshed after every successful
+/// catalog sync (the first import included), on launch when due, and
+/// periodically.
 class IptvApp extends ConsumerWidget {
   const IptvApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen(epgAutoRefreshProvider, (_, _) {});
     final locale = ref.watch(settingsProvider.select((s) => s.locale));
     final tv = ref.watch(tvModeProvider);
     return MaterialApp(

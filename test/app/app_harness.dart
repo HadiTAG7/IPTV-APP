@@ -6,19 +6,25 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/app/app.dart';
 import 'package:iptv_player/app/home_shell.dart';
 import 'package:iptv_player/app/providers.dart';
+import 'package:iptv_player/app/wiring.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/log/ring_log.dart';
 import 'package:iptv_player/core/platform/device_caps.dart';
 import 'package:iptv_player/core/time/clock.dart';
+import 'package:iptv_player/epg/epg_providers.dart';
+import 'package:iptv_player/epg/epg_service.dart';
 import 'package:iptv_player/sources/models.dart';
 import 'package:iptv_player/sources/sync/sync_service.dart';
 import 'package:iptv_player/tv/dpad_shortcuts.dart';
 import 'package:iptv_player/tv/key_repeat.dart';
 import 'package:iptv_player/tv/tv_focusable.dart';
+
+import '../support/fake_epg_service.dart';
 
 const tvCaps = DeviceCaps(uiModeTv: true, leanback: true, touch: false);
 const phoneCaps = DeviceCaps();
@@ -74,7 +80,12 @@ class FakeTabPage extends StatelessWidget {
   );
 }
 
-/// Pumps [IptvApp] with [db]. Auto-sync is off unless [autoSync].
+/// Pumps [IptvApp] with [db] and the app's wiring ([appWiring]), as
+/// bootstrap does. Auto-sync is off unless [autoSync]. Guides come from
+/// [epg] (default: a [FakeEpgService] that downloads nothing; the guide
+/// schedule in [IptvApp] is always alive); with [realGuide] the app's own
+/// EpgService imports them, on the test isolate (it needs real sockets,
+/// see `useRealHttp`). [overrides] go last.
 Future<void> pumpApp(
   WidgetTester tester, {
   required AppDatabase db,
@@ -88,6 +99,9 @@ Future<void> pumpApp(
   Clock? clock,
   SyncRunner? runner,
   void Function()? onExit,
+  EpgService? epg,
+  bool realGuide = false,
+  List<Override> overrides = const [],
 }) async {
   final size =
       logicalSize ?? (caps.isTv ? const Size(960, 540) : const Size(390, 800));
@@ -110,6 +124,12 @@ Future<void> pumpApp(
         if (onExit != null) appExitProvider.overrideWithValue(onExit),
         if (pages != null || fakePages)
           homePageBuilderProvider.overrideWithValue(pages ?? FakeTabPage.new),
+        if (realGuide)
+          epgRunInIsolateProvider.overrideWithValue(false)
+        else
+          epgServiceProvider.overrideWithValue(epg ?? FakeEpgService()),
+        ...appWiring(),
+        ...overrides,
       ],
       child: const IptvApp(),
     ),

@@ -240,8 +240,8 @@ void main() {
       await press(tester, LogicalKeyboardKey.contextMenu);
       expect(find.text('Options'), findsOneWidget);
       expect(focusedIn(const ValueKey('player-choice-0')), isTrue);
-      // Audio, Subtitles, Aspect, Favourite, Switch player, Stats.
-      for (var i = 0; i < 5; i++) {
+      // Audio, Subtitles, Aspect, Favourite, Switch player, Guide, Stats.
+      for (var i = 0; i < 6; i++) {
         await press(tester, LogicalKeyboardKey.arrowDown);
       }
       await press(tester, LogicalKeyboardKey.select);

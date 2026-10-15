@@ -5,6 +5,9 @@ import 'package:iptv_player/app/home_shell.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/features/favorites/favorites_screen.dart';
 import 'package:iptv_player/features/favorites/vod_navigation.dart';
+import 'package:iptv_player/features/movies/movie_detail_screen.dart';
+import 'package:iptv_player/features/series/series_detail_screen.dart';
+import 'package:iptv_player/features/vod_common/vod_providers.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/sources/models.dart';
 import 'package:iptv_player/widgets/poster_card.dart';
@@ -210,7 +213,8 @@ void main() {
     });
 
     testWidgets('${locale.languageCode}: phone favourites as a pushed page; '
-        'a movie resumes from its saved position', (tester) async {
+        'a movie opens its detail page and resumes there; a series opens '
+        'its detail page', (tester) async {
       final db = openAppTestDb();
       final id = await seedFavorites(db);
       await db.progressDao.saveProgress(
@@ -226,7 +230,10 @@ void main() {
         db,
         tv: false,
         locale: locale,
-        overrides: [player.override],
+        overrides: [
+          player.override,
+          vodPlayerLauncherProvider.overrideWithValue(player.launch),
+        ],
       );
       await tester.tap(find.byKey(const ValueKey('nav-more')));
       await tester.pumpAndSettle();
@@ -252,21 +259,42 @@ void main() {
         find.byKey(const ValueKey('poster-m1')),
       );
       expect(card.progress, closeTo(12 / 90, 0.001));
+      // The movie's detail page (the same one the Movies grid opens),
+      // offering to resume.
       await tester.tap(find.byKey(const ValueKey('poster-m1')));
+      await tester.pumpAndSettle();
+      final detail = tester.widget<MovieDetailScreen>(
+        find.byType(MovieDetailScreen),
+      );
+      expect((detail.sourceId, detail.movieKey), (id, 'm1'));
+      expect(player.requests, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('vod-play')));
       await tester.pumpAndSettle();
       final request = player.requests.single;
       expect(request.item.kind, PlayableKind.movie);
       expect(request.item.key, 'm1');
       expect(request.startAt, const Duration(minutes: 12));
+      // Back from the player, then from the detail page.
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
+      expect(find.byType(MovieDetailScreen), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(MovieDetailScreen), findsNothing);
+      expect(find.byType(FavoritesView), findsOneWidget);
 
-      // A series has no detail screen yet: the default does nothing.
+      // A series opens its detail page (seasons and episodes).
       await tester.tap(find.byKey(const ValueKey('favorites-tab-series')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('poster-s1')));
       await tester.pumpAndSettle();
+      final series = tester.widget<SeriesDetailScreen>(
+        find.byType(SeriesDetailScreen),
+      );
+      expect((series.sourceId, series.seriesKey), (id, 's1'));
       expect(player.requests, hasLength(1));
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
       expect(find.byType(FavoritesView), findsOneWidget);
       await disposeApp(tester, db);
     });

@@ -319,6 +319,18 @@ class PlayerSession extends ChangeNotifier {
     }
   }
 
+  /// New guide data was imported (a guide refresh of this source ended):
+  /// forgets every cached now/next and reads the current channel's again,
+  /// and the zap banner's channel when it points elsewhere.
+  void reloadGuide() {
+    if (isClosed || !isLive) return;
+    final banner = _zap?.preview.value.item?.key;
+    final keys = {_request.item.key, ?banner};
+    // The shown ones stay until their new value is read.
+    _guide.removeWhere((key, _) => !keys.contains(key));
+    unawaited(_loadGuide(keys.toList(), force: true));
+  }
+
   /// Zaps forward (CH+); the banner moves at once, the stream after the
   /// debounce.
   void zapNext() => _zap?.next();

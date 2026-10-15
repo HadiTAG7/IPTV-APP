@@ -11,6 +11,7 @@ import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/log/ring_log.dart';
 import 'package:iptv_player/core/platform/device_caps.dart';
 import 'package:iptv_player/core/time/clock.dart';
+import 'package:iptv_player/epg/epg_providers.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/sources/source_repository.dart';
 import 'package:iptv_player/sources/sync/sync_service.dart';
@@ -18,6 +19,7 @@ import 'package:iptv_player/tv/dpad_shortcuts.dart';
 import 'package:iptv_player/tv/key_repeat.dart';
 
 import '../../app/app_harness.dart';
+import '../../support/fake_epg_service.dart';
 
 export '../../app/app_harness.dart';
 
@@ -159,6 +161,8 @@ Future<void> pumpAppWith(
         initialSettingsProvider.overrideWithValue(settings),
         ringLogProvider.overrideWithValue(RingLog()),
         autoSyncOnStartProvider.overrideWithValue(false),
+        // No guide downloads: the schedule in IptvApp is always alive.
+        epgServiceProvider.overrideWithValue(FakeEpgService()),
         if (clock != null) clockProvider.overrideWithValue(clock),
         if (runner != null) syncRunnerProvider.overrideWithValue(runner),
         homePageBuilderProvider.overrideWithValue(pages ?? FakeTabPage.new),

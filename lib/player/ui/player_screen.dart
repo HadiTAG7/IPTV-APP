@@ -10,6 +10,7 @@ import '../../app/providers.dart';
 import '../../core/db/queries/player_ui_queries.dart';
 import '../../core/net/redact.dart';
 import '../../core/time/clock.dart';
+import '../../epg/epg_providers.dart';
 import '../../features/diagnostics/providers.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../../theme/tokens.dart';
@@ -121,6 +122,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// the lock of a player opened during its exit transition.
   static Object? _orientationOwner;
 
+  /// The player reported as fullscreen playback (guide imports wait for it
+  /// on Lite devices), with the same hand-over rule as the orientation.
+  static Object? _fullscreenOwner;
+  late final FullscreenPlayback _fullscreen;
+
   bool get _failed =>
       _controller.phase == PlaybackPhase.failed || _session.error != null;
 
@@ -147,6 +153,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     )..addListener(_rebuild);
     _lifecycle = AppLifecycleListener(onStateChange: _onLifecycle);
     _onlineSub = ref.read(playerOnlineProvider)?.listen(_controller.setOnline);
+    _fullscreen = ref.read(fullscreenPlaybackProvider.notifier);
+    _fullscreenOwner = this;
+    // Not while the route is being built.
+    scheduleMicrotask(() {
+      if (identical(_fullscreenOwner, this)) _fullscreen.set(true);
+    });
+    // New guide data: the banner and OSD read now/next again.
+    ref.listenManual<GuideRefreshStatus>(
+      guideRefreshProvider(widget.request.sourceId),
+      (previous, next) {
+        if (next is GuideRefreshDone && previous is! GuideRefreshDone) {
+          _session.reloadGuide();
+        }
+      },
+    );
     unawaited(_session.start());
     _bannerVisible = true;
     _bannerTimer = Timer(PlayerScreen.bannerTimeout, () {
@@ -194,8 +215,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       node.dispose();
     }
     _releaseOrientation();
+    _releaseFullscreen(later: true);
     _controllerSub.close();
     super.dispose();
+  }
+
+  /// Ends the fullscreen playback report while this player holds it;
+  /// [later] when the widget tree is being finalized (providers cannot
+  /// change then).
+  void _releaseFullscreen({bool later = false}) {
+    if (!identical(_fullscreenOwner, this)) return;
+    _fullscreenOwner = null;
+    final fullscreen = _fullscreen;
+    if (later) {
+      scheduleMicrotask(() => fullscreen.set(false));
+    } else {
+      fullscreen.set(false);
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -650,15 +686,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     unawaited(_onlineSub?.cancel());
     _onlineSub = null;
     _releaseOrientation();
+    _releaseFullscreen();
     unawaited(_controller.stop());
     Navigator.of(context).pop();
   }
 
+  /// The Guide button and key: closes the player and shows the home
+  /// shell's Guide tab ([PlayerGuideScope]). A channel opened from a pushed
+  /// page (no shell around it) just closes the player.
   void _openGuide() {
+    if (_exiting) return;
     final open = PlayerGuideScope.maybeOf(context);
-    if (open == null || _exiting) return;
+    if (open == null && !_session.isLive) return;
     _exit();
-    open();
+    open?.call();
   }
 
   void _onInfo() {
@@ -820,8 +861,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     PlayerAction.aspect,
     if (_session.isLive) PlayerAction.favorite,
     PlayerAction.switchPlayer,
-    if (_session.isLive && PlayerGuideScope.maybeOf(context) != null)
-      PlayerAction.guide,
+    if (_session.isLive) PlayerAction.guide,
     PlayerAction.stats,
   ];
 
@@ -1163,9 +1203,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     add(PlayerAction.aspect);
     if (s.isLive) add(PlayerAction.favorite, active: s.favorite);
     add(PlayerAction.switchPlayer);
-    if (s.isLive && PlayerGuideScope.maybeOf(context) != null) {
-      add(PlayerAction.guide);
-    }
+    if (s.isLive) add(PlayerAction.guide);
     add(PlayerAction.stats, active: _statsVisible);
 
     final theme = Theme.of(context);

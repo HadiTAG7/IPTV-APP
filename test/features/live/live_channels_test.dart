@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/time/clock.dart';
+import 'package:iptv_player/epg/epg_providers.dart';
 import 'package:iptv_player/features/live/channel_list.dart';
 import 'package:iptv_player/features/live/info_pane.dart';
 import 'package:iptv_player/features/live/live_actions.dart';
@@ -17,6 +19,7 @@ import 'package:iptv_player/tv/key_repeat.dart';
 import 'package:iptv_player/widgets/channel_tile.dart';
 import 'package:iptv_player/widgets/states.dart';
 
+import '../../support/fake_epg_service.dart';
 import 'support/live_test_utils.dart';
 
 final en = lookupAppLocalizations(const Locale('en'));
@@ -297,6 +300,42 @@ void main() {
         await disposeApp(tester, db);
       });
     }
+
+    testWidgets('a finished guide refresh brings the new guide at once', (
+      tester,
+    ) async {
+      final db = openAppTestDb();
+      final id = await seedThreeCategories(db);
+      await pumpLiveApp(tester, db);
+      final store = liveState(tester).nowNext;
+      await wait(tester, const Duration(milliseconds: 200));
+      expect(
+        tester.widget<ChannelTile>(find.byType(ChannelTile).first).nowTitle,
+        isNull,
+      );
+      final queries = store.queries;
+
+      // A refresh (background or "Refresh guide") imports the guide and
+      // ends; the rows read it without waiting for the minute refresh.
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(LiveView)),
+      );
+      container.read(guideRefreshProvider(id).notifier).refresh();
+      final start = DateTime.utc(2026, 10, 15, 18);
+      await tester.runAsync(
+        () => seedGuide(db, id, {
+          1: [programme(1, start, const Duration(hours: 1), 'Fresh News')],
+        }),
+      );
+      await (container.read(epgServiceProvider) as FakeEpgService).finish(id);
+      await wait(tester, const Duration(milliseconds: 50));
+      expect(store.queries, queries + 1);
+      expect(
+        tester.widget<ChannelTile>(find.byType(ChannelTile).first).nowTitle,
+        'Fresh News',
+      );
+      await disposeApp(tester, db);
+    });
   });
 
   group('menu', () {

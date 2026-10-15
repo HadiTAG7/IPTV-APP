@@ -1,7 +1,6 @@
 // Time and date text of the guide, in the device's time zone. Arabic uses
-// Western digits, matching the remote's keys: Flutter's own `ar` date
-// symbols (loaded by the Material localizations) would print Arabic-Indic
-// digits, so every format here turns native digits off.
+// Western digits, matching the remote's keys (set app-wide by
+// `useWesternDigits` at start).
 import 'package:flutter/widgets.dart';
 import 'package:intl/intl.dart' show DateFormat;
 
@@ -9,33 +8,17 @@ import '../../epg/epg_models.dart';
 import '../../l10n/gen/app_localizations.dart';
 
 /// Clock times: 24-hour when the device asks for it, else the locale's
-/// default (`8:30 PM`, `8:30 م`), always with Western digits.
+/// default (`8:30 PM`, `8:30 م`).
 DateFormat guideTimeFormat(BuildContext context) {
   final locale = Localizations.localeOf(context).toLanguageTag();
-  final format = MediaQuery.alwaysUse24HourFormatOf(context)
+  return MediaQuery.alwaysUse24HourFormatOf(context)
       ? DateFormat.Hm(locale)
       : DateFormat.jm(locale);
-  return format..useNativeDigits = false;
 }
 
-bool _isEasternDigit(int unit) =>
-    (unit >= 0x0660 && unit <= 0x0669) || (unit >= 0x06F0 && unit <= 0x06F9);
-
-/// [text] with Arabic-Indic and Persian digits replaced by Western ones
-/// (for localized messages that format dates themselves).
-String westernDigits(String text) {
-  if (!text.codeUnits.any(_isEasternDigit)) return text;
-  return String.fromCharCodes([
-    for (final unit in text.codeUnits)
-      _isEasternDigit(unit)
-          ? 0x30 + unit - (unit >= 0x06F0 ? 0x06F0 : 0x0660)
-          : unit,
-  ]);
-}
-
-/// "Guide updated (date)" with Western digits.
+/// "Guide updated (date)", in local time.
 String guideUpdatedText(AppLocalizations l10n, DateTime updatedAt) =>
-    westernDigits(l10n.guideUpdated(updatedAt.toLocal()));
+    l10n.guideUpdated(updatedAt.toLocal());
 
 DateTime _day(DateTime t) => DateTime(t.year, t.month, t.day);
 
@@ -61,7 +44,7 @@ String guideDayLabel(
   if (day == DateTime(today.year, today.month, today.day + 1)) {
     return l10n.guideTomorrow;
   }
-  return (DateFormat.MMMEd(locale)..useNativeDigits = false).format(day);
+  return DateFormat.MMMEd(locale).format(day);
 }
 
 /// `20:00 – 21:30` (local times).

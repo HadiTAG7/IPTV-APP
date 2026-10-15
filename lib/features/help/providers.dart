@@ -24,7 +24,9 @@ typedef AddSourcePrefill = Future<void> Function(
 
 /// What Help's "Add as source" buttons call. Null (the default) means no
 /// source editor route is available, and the buttons are hidden; the app
-/// wires it to the source editor.
+/// wires it to the source editor (`appWiring` in lib/app/wiring.dart: the
+/// editor cannot be imported from here without an import cycle through the
+/// home shell).
 final addSourcePrefillProvider = Provider<AddSourcePrefill?>(
   (ref) => null,
   name: 'addSourcePrefillProvider',

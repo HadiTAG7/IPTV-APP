@@ -274,7 +274,9 @@ final syncRunnerProvider = Provider<SyncRunner>(
   (ref) => const IsolateSyncRunner(),
 );
 
-/// Called after each successful sync (the EPG service hooks in here).
+/// Called after each successful sync. The guide schedule
+/// (`epgAutoRefreshProvider`) follows [SyncService.syncedSources] instead,
+/// so this is free for other listeners.
 final onSourceSyncedProvider = Provider<void Function(int sourceId)?>(
   (ref) => null,
 );

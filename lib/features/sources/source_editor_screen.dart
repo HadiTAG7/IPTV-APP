@@ -31,16 +31,24 @@ import 'widgets/tv_buttons.dart';
 /// Opens the source editor as a full-screen route: a new source, or the
 /// saved source [sourceId]. With [onboarding] the first-run flow keeps
 /// onboarding on screen (see [onboardingHoldProvider]) until the import is
-/// over.
+/// over. A new source can start as an M3U link with [initialUrl] and
+/// [initialName] filled in (Help's "Add as source"); the user still reviews
+/// and saves it.
 Future<void> openSourceEditor(
   BuildContext context, {
   int? sourceId,
   bool onboarding = false,
+  String? initialUrl,
+  String? initialName,
 }) => Navigator.of(context).push<void>(
   MaterialPageRoute<void>(
     settings: const RouteSettings(name: '/source-editor'),
-    builder: (_) =>
-        SourceEditorScreen(sourceId: sourceId, onboarding: onboarding),
+    builder: (_) => SourceEditorScreen(
+      sourceId: sourceId,
+      onboarding: onboarding,
+      initialUrl: initialUrl,
+      initialName: initialName,
+    ),
   ),
 );
 
@@ -53,13 +61,26 @@ Future<void> openSourceEditor(
 /// it, imports its catalog on [ImportProgressScreen], makes it the active
 /// source and returns to the home screen (the route stack is cleared).
 class SourceEditorScreen extends ConsumerStatefulWidget {
-  const SourceEditorScreen({super.key, this.sourceId, this.onboarding = false});
+  const SourceEditorScreen({
+    super.key,
+    this.sourceId,
+    this.onboarding = false,
+    this.initialUrl,
+    this.initialName,
+  });
 
   /// The saved source to edit; null adds a new one.
   final int? sourceId;
 
   /// Opened from the first-run flow.
   final bool onboarding;
+
+  /// A new source: the M3U link to start with (nothing is saved until Test
+  /// & save). Ignored when editing [sourceId].
+  final String? initialUrl;
+
+  /// A new source: the name to start with.
+  final String? initialName;
 
   @override
   ConsumerState<SourceEditorScreen> createState() => _SourceEditorScreenState();
@@ -134,7 +155,22 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
   @override
   void initState() {
     super.initState();
-    if (_loading) unawaited(_load());
+    if (_loading) {
+      unawaited(_load());
+    } else {
+      _prefill();
+    }
+  }
+
+  /// A new source offered by Help: an M3U link with its suggested name.
+  void _prefill() {
+    final url = widget.initialUrl?.trim() ?? '';
+    final name = widget.initialName?.trim() ?? '';
+    if (url.isEmpty && name.isEmpty) return;
+    _kind = SourceKind.m3uUrl;
+    _url.text = url;
+    _name.text = name;
+    _link = _detectLink();
   }
 
   @override

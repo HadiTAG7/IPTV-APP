@@ -14,6 +14,7 @@ import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/log/ring_log.dart';
 import 'package:iptv_player/core/platform/device_caps.dart';
+import 'package:iptv_player/epg/epg_providers.dart';
 import 'package:iptv_player/features/help/help_screen.dart';
 import 'package:iptv_player/features/help/providers.dart';
 import 'package:iptv_player/features/settings/providers.dart';
@@ -22,6 +23,8 @@ import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/sources/models.dart';
 import 'package:iptv_player/tv/dpad_shortcuts.dart';
 import 'package:iptv_player/tv/key_repeat.dart';
+
+import '../../support/fake_epg_service.dart';
 
 const tvCaps = DeviceCaps(uiModeTv: true, leanback: true, touch: false);
 const phoneCaps = DeviceCaps();
@@ -132,6 +135,8 @@ Future<SettingsHarness> pumpSettingsApp(
         ),
         ringLogProvider.overrideWithValue(h.log),
         autoSyncOnStartProvider.overrideWithValue(false),
+        // No guide downloads: the schedule in IptvApp is always alive.
+        epgServiceProvider.overrideWithValue(FakeEpgService()),
         targetPlatformProvider.overrideWithValue(platform),
         appVersionProvider.overrideWith((ref) async => version),
         refreshGuideActionProvider.overrideWithValue(

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/home_shell.dart';
 import '../../app/providers.dart';
+import '../../epg/epg_providers.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../../sources/models.dart';
 import '../../theme/tokens.dart';
@@ -103,6 +104,15 @@ class LiveViewState extends ConsumerState<LiveView> {
       load: (keys, now) => ref.read(epgDaoProvider).nowNext(_id, keys, now),
       clock: ref.read(clockProvider),
     );
+    // New guide data: the now/next on screen is read again.
+    ref.listenManual<GuideRefreshStatus>(guideRefreshProvider(_id), (
+      previous,
+      next,
+    ) {
+      if (next is GuideRefreshDone && previous is! GuideRefreshDone) {
+        unawaited(_store.reload());
+      }
+    });
     unawaited(_init());
   }
 

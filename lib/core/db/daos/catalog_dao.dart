@@ -714,23 +714,31 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
     return [for (final r in rows) r.toRow()];
   }
 
-  /// All movies ordered by name.
+  /// All movies, newest added first (the panel's `added` time; titles
+  /// without one come last), then by name in natural order (`Movie 2`
+  /// before `Movie 10`).
   Future<List<MovieRow>> allMoviesPage(
     int sourceId,
     int offset,
     int limit,
   ) async => [
-    for (final r in await _allByName(db.movies, sourceId, offset, limit))
+    for (final r in await _allInOrder(
+      db.movies,
+      sourceId,
+      offset,
+      limit,
+      newestFirst: true,
+    ))
       r.toRow(),
   ];
 
-  /// All series ordered by name.
+  /// All series by name in natural order (`Season 2` before `Season 10`).
   Future<List<SeriesRow>> allSeriesPage(
     int sourceId,
     int offset,
     int limit,
   ) async => [
-    for (final r in await _allByName(db.series, sourceId, offset, limit))
+    for (final r in await _allInOrder(db.series, sourceId, offset, limit))
       r.toRow(),
   ];
 
@@ -970,25 +978,54 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
     return [for (final r in rows) await table.map(r.data)];
   }
 
-  Future<List<D>> _allByName<D>(
+  /// A page of every committed item of [table], by name in natural order;
+  /// with [newestFirst], items with a later `added_at` come first.
+  ///
+  /// The order needs a sort (no index holds it): only the keys are sorted,
+  /// which keeps the sorter small on deep pages (it holds offset + limit
+  /// entries), then the page's rows are read by key.
+  Future<List<D>> _allInOrder<D>(
     TableInfo<Table, D> table,
     int sourceId,
     int offset,
-    int limit,
-  ) async {
+    int limit, {
+    bool newestFirst = false,
+  }) async {
     if (limit <= 0) return const [];
-    final rows = await customSelect(
-      'SELECT * FROM ${table.actualTableName} WHERE source_id = ?1 '
-      'AND first_gen <= (SELECT generation FROM sources WHERE id = ?1) '
-      'ORDER BY name_norm, "key" LIMIT ?2 OFFSET ?3',
-      variables: [
-        Variable.withInt(sourceId),
-        Variable.withInt(limit),
-        Variable.withInt(_nonNeg(offset)),
-      ],
-      readsFrom: {table, db.sources},
-    ).get();
-    return [for (final r in rows) await table.map(r.data)];
+    final name = table.actualTableName;
+    final newest = newestFirst ? 'added_at IS NULL, added_at DESC, ' : '';
+    final keys = [
+      for (final r in await customSelect(
+        'SELECT "key" FROM $name WHERE source_id = ?1 '
+        'AND first_gen <= (SELECT generation FROM sources WHERE id = ?1) '
+        'ORDER BY $newest${naturalOrderSql('name_norm')}, "key" '
+        'LIMIT ?2 OFFSET ?3',
+        variables: [
+          Variable.withInt(sourceId),
+          Variable.withInt(limit),
+          Variable.withInt(_nonNeg(offset)),
+        ],
+        readsFrom: {table, db.sources},
+      ).get())
+        r.read<String>('key'),
+    ];
+    final byKey = <String, D>{};
+    for (final part in chunked(keys)) {
+      final rows = await customSelect(
+        'SELECT * FROM $name WHERE source_id = ?1 '
+        'AND "key" IN (${sqlParams(part.length, 2)})',
+        variables: [
+          Variable.withInt(sourceId),
+          for (final k in part) Variable.withString(k),
+        ],
+        readsFrom: {table},
+      ).get();
+      for (final r in rows) {
+        byKey[r.read<String>('key')] = await table.map(r.data);
+      }
+    }
+    // A sync committing between the two reads may have removed some.
+    return [for (final k in keys) ?byKey[k]];
   }
 
   Future<List<D>> _search<D>(

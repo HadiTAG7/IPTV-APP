@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/epg/epg_providers.dart';
 import 'package:iptv_player/player/engine/player_engine.dart';
 import 'package:iptv_player/player/ui/player_screen.dart';
 import 'package:iptv_player/sources/models.dart';
 
+import '../support/fake_epg_service.dart';
 import 'support/player_harness.dart';
 
 void main() {
@@ -84,12 +87,73 @@ void main() {
         'aspect',
         'favorite',
         'switchPlayer',
+        'guide',
         'stats',
       ]) {
         expect(find.byKey(ValueKey('player-osd-$b')), findsOneWidget);
       }
-      // Not opened from a home tab: no Guide button.
-      expect(find.byKey(const ValueKey('player-osd-guide')), findsNothing);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('outside a home tab Guide just closes the player; '
+        'fullscreen playback is reported while it is open', (tester) async {
+      final rig = PlayerRig()..autoPlay();
+      final id = await seedLive(rig);
+      await pumpPlayerApp(tester, rig);
+      final container = ProviderScope.containerOf(
+        tester.element(find.byKey(launcherKey)),
+      );
+      expect(container.read(fullscreenPlaybackProvider), isFalse);
+      await openPlayerFor(tester, liveRequest(id));
+      expect(container.read(fullscreenPlaybackProvider), isTrue);
+
+      await tester.sendKeyEvent(
+        LogicalKeyboardKey.guide,
+        physicalKey: PhysicalKeyboardKey.f1,
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(PlayerScreen), findsNothing);
+      expect(find.byKey(launcherKey), findsOneWidget);
+      expect(rig.engine.calls, contains('stop'));
+      expect(container.read(fullscreenPlaybackProvider), isFalse);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('a finished guide refresh brings new now/next to the OSD', (
+      tester,
+    ) async {
+      final rig = PlayerRig()..autoPlay();
+      final id = await seedLive(rig);
+      final epg = FakeEpgService();
+      await pumpPlayerApp(
+        tester,
+        rig,
+        overrides: [epgServiceProvider.overrideWithValue(epg)],
+      );
+      final container = ProviderScope.containerOf(
+        tester.element(find.byKey(launcherKey)),
+      );
+      await openPlayerFor(tester, liveRequest(id));
+      await press(tester, LogicalKeyboardKey.enter);
+      final osd = find.byKey(const ValueKey('player-osd'));
+      expect(
+        find.descendant(of: osd, matching: find.textContaining('Evening')),
+        findsNothing,
+      );
+
+      // A refresh imports the guide (written here) and ends.
+      container.read(guideRefreshProvider(id).notifier).refresh();
+      await seedGuide(rig, id);
+      await epg.finish(id);
+      await settle(tester);
+      expect(
+        find.descendant(of: osd, matching: find.textContaining('Evening News')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: osd, matching: find.textContaining('Late Show')),
+        findsOneWidget,
+      );
       await disposeRig(tester, rig);
     });
 

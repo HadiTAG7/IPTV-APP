@@ -8,6 +8,7 @@ import 'package:iptv_player/app/home_shell.dart';
 import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/app/shell_phone.dart';
 import 'package:iptv_player/app/shell_tv.dart';
+import 'package:iptv_player/epg/epg_providers.dart';
 import 'package:iptv_player/features/diagnostics/providers.dart';
 import 'package:iptv_player/player/player_providers.dart';
 import 'package:iptv_player/player/ui/play_request.dart';
@@ -17,6 +18,7 @@ import 'package:iptv_player/tv/dpad_shortcuts.dart';
 import 'package:iptv_player/tv/key_repeat.dart';
 import 'package:iptv_player/tv/tv_focusable.dart';
 
+import '../support/fake_epg_service.dart';
 import 'support/player_harness.dart';
 
 /// A Live tab whose only item opens the player for [request].
@@ -63,6 +65,8 @@ Future<void> _pumpShell(
         ringLogProvider.overrideWithValue(rig.log),
         clockProvider.overrideWithValue(rig.clock),
         autoSyncOnStartProvider.overrideWithValue(false),
+        // No guide downloads: the schedule in IptvApp is always alive.
+        epgServiceProvider.overrideWithValue(FakeEpgService()),
         engineFactoryBuilderProvider.overrideWithValue((_) => rig.engines.call),
         playerWakelockProvider.overrideWithValue(rig.wakelock.add),
         appVersionProvider.overrideWith((ref) async => '0.1.0+1'),
@@ -133,6 +137,46 @@ void main() {
     expect(find.byType(PlayerScreen), findsNothing);
     final shell = tester.state<PhoneShellState>(find.byType(PhoneShell));
     expect(shell.current, HomeTab.guide);
+    await disposeRig(tester, rig);
+  });
+
+  testWidgets('phone: the layout changed while the player was open; Guide '
+      'still shows the Guide tab, in both layouts', (tester) async {
+    final rig = PlayerRig()..autoPlay();
+    final id = await seedLive(rig);
+    await _pumpShell(tester, rig, liveRequest(id), tv: false);
+    await tester.tap(find.byKey(const ValueKey('open-player')));
+    await settle(tester);
+    expect(find.byType(PlayerScreen), findsOneWidget);
+
+    // Held in landscape, a large phone gets the large layout under the
+    // player: the phone shell the player was opened from is gone.
+    tester.view.physicalSize = const Size(960, 450) * 2;
+    await settle(tester);
+    expect(find.byType(PhoneShell, skipOffstage: false), findsNothing);
+    expect(find.byType(TvShell, skipOffstage: false), findsOneWidget);
+    // The rail built under the player leaves the player its focus.
+    expect(focusedIn(const ValueKey('rail-live')), isFalse);
+
+    await tester.sendKeyEvent(
+      LogicalKeyboardKey.guide,
+      physicalKey: PhysicalKeyboardKey.f1,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(PlayerScreen), findsNothing);
+    expect(
+      tester.state<TvShellState>(find.byType(TvShell)).current,
+      HomeTab.guide,
+    );
+
+    // Back in portrait the bar shows the Guide tab too.
+    tester.view.physicalSize = const Size(390, 800) * 2;
+    await tester.pumpAndSettle();
+    expect(
+      tester.state<PhoneShellState>(find.byType(PhoneShell)).current,
+      HomeTab.guide,
+    );
+    expect(find.text('page:guide'), findsOneWidget);
     await disposeRig(tester, rig);
   });
 }

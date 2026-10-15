@@ -1,5 +1,7 @@
 // Unit tests for the Live data layer: list sources, the pager, the now/next
 // store and the extra queries.
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/core/db/app_db.dart';
@@ -279,6 +281,41 @@ void main() {
         store.dispose();
         async.elapse(const Duration(minutes: 5));
         expect(calls.length, before + 1);
+      });
+    });
+
+    test('reload re-reads the rows on screen and pinned, drops the rest, '
+        'and keeps the shown values until the new ones arrive', () {
+      fakeAsync((async) {
+        var title = 'Old';
+        final calls = <List<String>>[];
+        final store = NowNextStore(
+          clock: FakeClock(testNow),
+          load: (keys, now) async {
+            calls.add(keys);
+            return {
+              for (final k in keys)
+                k: (now: p('$title $k', now, 30), next: null),
+            };
+          },
+        );
+        store.showing(['a', 'b']);
+        async.elapse(const Duration(milliseconds: 200));
+        store.showing(['c']);
+        async.elapse(const Duration(milliseconds: 200));
+        store.pin('a');
+        expect(store['b']?.now?.title, 'Old b');
+
+        // A guide refresh imported new programmes.
+        title = 'New';
+        unawaited(store.reload());
+        expect(store['a']?.now?.title, 'Old a', reason: 'until read again');
+        expect(store.has('b'), isFalse, reason: 'neither visible nor pinned');
+        async.flushMicrotasks();
+        expect(calls.last.toSet(), {'a', 'c'});
+        expect(store['a']?.now?.title, 'New a');
+        expect(store['c']?.now?.title, 'New c');
+        store.dispose();
       });
     });
 

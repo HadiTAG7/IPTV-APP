@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../app/home_shell.dart';
-import '../../app/shell_phone.dart';
-import '../../app/shell_tv.dart';
 import 'play_request.dart';
 import 'player_screen.dart';
 
@@ -13,7 +11,8 @@ const kPlayerRouteName = '/player';
 /// closed.
 ///
 /// When [context] is inside a home tab, the player's Guide button closes the
-/// player and shows the Guide tab ([PlayerGuideScope]).
+/// player and shows the Guide tab ([PlayerGuideScope]); elsewhere it just
+/// closes the player.
 Future<void> openPlayer(BuildContext context, PlayRequest request) {
   final openGuide = guideOpenerFor(context);
   return Navigator.of(context).push<void>(
@@ -29,21 +28,14 @@ Future<void> openPlayer(BuildContext context, PlayRequest request) {
 }
 
 /// Shows the Guide tab of the home shell around [context], or null when
-/// [context] is not inside a home tab (e.g. a pushed page).
+/// [context] is not inside a home tab (e.g. a pushed page). It goes through
+/// [HomeShellState.showTab], so it still works when the layout changed while
+/// the player was open (a phone held in landscape swaps in the large
+/// layout).
 VoidCallback? guideOpenerFor(BuildContext context) {
-  final tv = context.findAncestorStateOfType<TvShellState>();
-  if (tv != null) {
-    return () {
-      if (tv.mounted) tv.select(HomeTab.guide, enter: true);
-    };
-  }
-  final phone = context.findAncestorStateOfType<PhoneShellState>();
-  if (phone != null) {
-    return () {
-      if (phone.mounted) phone.select(HomeTab.guide);
-    };
-  }
-  return null;
+  final shell = HomeShell.maybeOf(context);
+  if (shell == null) return null;
+  return () => shell.showTab(HomeTab.guide, enter: true);
 }
 
 /// Tells the player how to reach the Guide tab after it closes.
@@ -54,7 +46,8 @@ class PlayerGuideScope extends InheritedWidget {
     required super.child,
   });
 
-  /// Shows the Guide tab; null hides the player's Guide button.
+  /// Shows the Guide tab; null when the player was not opened from a home
+  /// tab (its Guide button then just closes the player).
   final VoidCallback? openGuide;
 
   static VoidCallback? maybeOf(BuildContext context) =>

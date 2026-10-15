@@ -1,18 +1,12 @@
-// How Favorites and Search open a movie or a series.
-//
-// The movie and series detail screens belong to another feature. Screens
-// here go through [vodDetailNavigatorProvider], which integration
-// overrides to push those detail screens. Until then the default plays a
-// movie at once (resuming saved progress) and does nothing for a series.
+// How Favorites and Search open a movie or a series: through
+// [vodDetailNavigatorProvider], which pushes the movie and series detail
+// pages (tests replace it to record what was opened).
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../app/providers.dart';
 import '../../core/db/app_db.dart';
-import '../../player/session/progress_saver.dart';
-import '../../player/ui/play_request.dart';
 import '../../sources/models.dart';
-import '../live/live_actions.dart';
+import '../vod_common/vod_navigation.dart';
 
 /// A movie or series to open.
 @immutable
@@ -44,45 +38,27 @@ class VodTarget {
   String toString() => 'VodTarget(${kind.name} $key)';
 }
 
-/// Opens [target] (a detail screen, or playback). Completes when the user
-/// comes back.
+/// Opens [target]'s detail page. Completes when the user comes back.
 typedef VodDetailNavigator = Future<void> Function(
   BuildContext context,
   WidgetRef ref,
   VodTarget target,
 );
 
-/// How Favorites and Search open movies and series. Override it at
-/// integration to push the detail screens; see [defaultVodDetailNavigator].
+/// How Favorites and Search open movies and series: the detail pages
+/// ([defaultVodDetailNavigator]).
 final vodDetailNavigatorProvider = Provider<VodDetailNavigator>(
   (ref) => defaultVodDetailNavigator,
 );
 
-/// Plays a movie right away, from its saved position when the resume rule
-/// applies (`ProgressSaver.shouldOfferResume`); does nothing for a series
-/// (it needs the series detail screen).
+/// Pushes the movie detail page ([openMovieDetail]) or the series detail
+/// page with its seasons and episodes ([openSeriesDetail]), the same pages
+/// the Movies and Series grids open. Resume and playback start there.
 Future<void> defaultVodDetailNavigator(
   BuildContext context,
   WidgetRef ref,
   VodTarget target,
-) async {
-  final movie = target.movie;
-  if (movie == null) return;
-  final progress = await ref
-      .read(progressDaoProvider)
-      .progressFor(target.sourceId, PlayableKind.movie, movie.key);
-  if (!context.mounted) return;
-  final resume =
-      progress != null &&
-          ProgressSaver.shouldOfferResume(progress.position, progress.duration)
-      ? progress.position
-      : null;
-  await ref.read(playerLauncherProvider)(
-    context,
-    PlayRequest(
-      sourceId: target.sourceId,
-      item: movie.toPlayable(),
-      startAt: resume,
-    ),
-  );
-}
+) => switch (target.kind) {
+  ContentKind.series => openSeriesDetail(context, target.sourceId, target.key),
+  _ => openMovieDetail(context, target.sourceId, target.key),
+};

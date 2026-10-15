@@ -78,24 +78,17 @@ void main() {
     expect(ar12, contains('م'));
     expect(ar12, isNot(contains('\u0668')));
 
-    // Flutter's `ar` date symbols (now loaded) print Arabic-Indic digits;
-    // dates and the generated "Guide updated" message are brought back.
+    // Flutter's `ar` date symbols (now loaded) default to Arabic-Indic
+    // digits; with `useWesternDigits` (bootstrap, flutter_test_config) the
+    // dates and the generated "Guide updated" message keep Western ones.
     final eastern = RegExp('[\u0660-\u0669]');
     final date = guideDayLabel(ar, 'ar', at(9, 0, 17), at(18, 47));
     expect(date, contains('17'));
     expect(date, isNot(matches(eastern)));
-    expect(ar.guideUpdated(at(9, 0, 17)), matches(eastern));
+    expect(ar.guideUpdated(at(9, 0, 17)), isNot(matches(eastern)));
     final updated = guideUpdatedText(ar, at(9, 0, 17));
     expect(updated, contains('2026'));
     expect(updated, isNot(matches(eastern)));
-  });
-
-  test('westernDigits', () {
-    expect(
-      westernDigits('\u0662\u0660\u0662\u0666/\u0661\u0660 \u06f1\u06f5 42'),
-      '2026/10 15 42',
-    );
-    expect(westernDigits('Oct 15'), 'Oct 15');
   });
 
   test('day labels', () {

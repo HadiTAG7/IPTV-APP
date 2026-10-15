@@ -1,13 +1,13 @@
 // Riverpod wiring of the guide pipeline: the one EpgService of the app,
 // per-source refresh status for the UI and the background refresh schedule.
 //
-// Integration: keep the schedule alive for the app's lifetime with one line
-// in `IptvApp.build` (or `HomeShell.build`):
-//   ref.listen(epgAutoRefreshProvider, (_, _) {});
-// The guide screen does the same, so it already runs once the Guide tab
-// has been opened. The fullscreen player reports itself, so Lite devices
-// hold guide imports while it plays (one call on open, one on close):
-//   ref.read(fullscreenPlaybackProvider.notifier).set(true / false);
+// Wiring: `IptvApp.build` keeps the schedule alive for the app's lifetime
+// (`ref.listen(epgAutoRefreshProvider, (_, _) {})`; the guide screen does
+// the same). The fullscreen player reports itself through
+// [fullscreenPlaybackProvider], so Lite devices hold guide imports while it
+// plays. Settings' "Refresh guide" and the player, Live, Favorites and
+// Search screens use [guideRefreshProvider] (a finished run makes them read
+// now/next again).
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -124,13 +124,35 @@ class GuideRefreshController extends Notifier<GuideRefreshStatus> {
   StreamSubscription<EpgProgress>? _sub;
   bool _again = false;
 
+  /// Callers of [run] waiting for the run to end.
+  final _waiters = <Completer<GuideRefreshStatus>>[];
+
   @override
   GuideRefreshStatus build() {
     ref.onDispose(() {
       unawaited(_sub?.cancel());
       _sub = null;
+      _completeWaiters(const GuideRefreshFailed(cancelled: true));
     });
     return const GuideRefreshIdle();
+  }
+
+  /// [refresh], completing with the status the run ends in: done, failed
+  /// or cancelled (also when it is cancelled to pause imports).
+  Future<GuideRefreshStatus> run({bool force = false}) {
+    refresh(force: force);
+    if (!state.isRunning) return Future.value(state);
+    final waiter = Completer<GuideRefreshStatus>();
+    _waiters.add(waiter);
+    return waiter.future;
+  }
+
+  void _completeWaiters(GuideRefreshStatus status) {
+    final waiters = List.of(_waiters);
+    _waiters.clear();
+    for (final waiter in waiters) {
+      if (!waiter.isCompleted) waiter.complete(status);
+    }
   }
 
   /// Starts a refresh, or joins the running one (see [EpgService.refresh]).
@@ -194,6 +216,7 @@ class GuideRefreshController extends Notifier<GuideRefreshStatus> {
         return;
     }
     _sub = null;
+    _completeWaiters(state);
     if (_again) {
       _again = false;
       // Not from inside the event handler of the run that just ended.
@@ -207,9 +230,9 @@ class GuideRefreshController extends Notifier<GuideRefreshStatus> {
 // ---------------------------------------------------------------------------
 // Background schedule.
 
-/// Whether the fullscreen player is playing. The player sets it (see the
-/// integration note at the top of this file); nothing else reads it to
-/// decide anything but guide imports.
+/// Whether the fullscreen player is playing. The player screen sets it
+/// while it is open; nothing else reads it to decide anything but guide
+/// imports.
 final fullscreenPlaybackProvider = NotifierProvider<FullscreenPlayback, bool>(
   FullscreenPlayback.new,
 );
@@ -218,8 +241,11 @@ class FullscreenPlayback extends Notifier<bool> {
   @override
   bool build() => false;
 
-  /// Fullscreen playback started ([active]) or ended.
-  void set(bool active) => state = active;
+  /// Fullscreen playback started ([active]) or ended. Ignored once the
+  /// app is shutting down.
+  void set(bool active) {
+    if (ref.mounted) state = active;
+  }
 }
 
 /// Whether guide imports wait: fullscreen playback on a Lite device, where
@@ -234,8 +260,8 @@ final epgAutoRefreshIntervalProvider = Provider<Duration?>(
   (ref) => const Duration(hours: 1),
 );
 
-/// Keeps guides fresh in the background while it is alive (see the
-/// integration note at the top of this file):
+/// Keeps guides fresh in the background while it is alive (`IptvApp`
+/// keeps it alive for the app's lifetime):
 ///
 /// * after every successful catalog sync of any source
 ///   ([SyncService.syncedSources]): [GuideRefreshController.refreshAfterSync];
@@ -407,13 +433,17 @@ class EpgAutoRefresh {
   }
 
   Future<void> _periodic() async {
-    if (_paused) return;
+    bool busy(int id) =>
+        _paused ||
+        _ref.read(syncServiceProvider).isRunning(id) ||
+        _ref.read(guideRefreshProvider(id)).isRunning;
     final id = _ref.read(activeSourceIdProvider);
-    if (id == null || !_checked.contains(id)) return;
-    if (_ref.read(syncServiceProvider).isRunning(id)) return;
-    if (_ref.read(guideRefreshProvider(id)).isRunning) return;
+    if (id == null || !_checked.contains(id) || busy(id)) return;
     try {
-      if (await _isDue(id) && !_disposed) _start(id, _Held.refresh);
+      final due = await _isDue(id);
+      // Checked again: another check (the timer, the end of a pause) may
+      // have started a refresh while this one read the guide state.
+      if (due && !_disposed && !busy(id)) _start(id, _Held.refresh);
     } on Object catch (e, st) {
       if (!_disposed) {
         _ref.read(ringLogProvider).error('Guide check failed', e, st);

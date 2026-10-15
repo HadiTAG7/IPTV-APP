@@ -9,10 +9,11 @@ import 'package:iptv_player/sources/models.dart';
 
 import 'db_test_utils.dart';
 
-/// Remembers the last SELECT reaching SQLite.
+/// Remembers the SELECTs reaching SQLite (the last one apart).
 class _LastSelect extends QueryInterceptor {
   String? sql;
   List<Object?> args = const [];
+  final all = <(String, List<Object?>)>[];
 
   @override
   Future<List<Map<String, Object?>>> runSelect(
@@ -22,6 +23,7 @@ class _LastSelect extends QueryInterceptor {
   ) {
     sql = statement;
     this.args = args;
+    all.add((statement, args));
     return super.runSelect(executor, statement, args);
   }
 }
@@ -75,15 +77,27 @@ void main() {
     expect(channels, contains('channels_num'));
     expect(channels, isNot(contains('TEMP B-TREE')));
 
-    await db.catalogDao.allMoviesPage(src, 10, 5);
-    final movies = await planOfLastSelect();
-    expect(movies, contains('movies_name'));
-    expect(movies, isNot(contains('TEMP B-TREE')));
-
-    await db.catalogDao.allSeriesPage(src, 10, 5);
-    final series = await planOfLastSelect();
-    expect(series, contains('series_name'));
-    expect(series, isNot(contains('TEMP B-TREE')));
+    // All movies and series are sorted newest first and in natural name
+    // order, which no index holds: the keys of the source's rows (an index
+    // search, not a table scan) are sorted, then the page's rows are read
+    // by key (see the 50k bench in catalog_bench_test.dart).
+    for (final (page, table) in [
+      (() => db.catalogDao.allMoviesPage(src, 10, 5), 'movies'),
+      (() => db.catalogDao.allSeriesPage(src, 10, 5), 'series'),
+    ]) {
+      last.all.clear();
+      expect(await page(), hasLength(5));
+      final queries = List.of(last.all);
+      final plans = [for (final (sql, args) in queries) await plan(sql, args)];
+      expect(plans, hasLength(2));
+      final (keys, rows) = (plans.first, plans.last);
+      expect(keys, contains('SEARCH $table USING'));
+      expect(keys, contains('INDEX'));
+      expect(keys, isNot(contains('SCAN $table')));
+      expect(rows, contains('SEARCH $table USING INDEX'));
+      expect(rows, contains('key=?'));
+      expect(rows, isNot(contains('TEMP B-TREE')));
+    }
 
     await db.catalogDao.channelsPage(src, 'news', 10, 5);
     expect(await planOfLastSelect(), isNot(contains('SCAN')));

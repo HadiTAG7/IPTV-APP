@@ -174,6 +174,72 @@ void main() {
     expect((await catalog.seriesByKey(src, 's1'))?.name, 'Echo');
   });
 
+  test('All movies: newest added first, then natural name order', () async {
+    final day = DateTime.utc(2026, 3);
+    MovieData m(String key, String name, [int? addedDay]) => MovieData(
+      key: key,
+      name: name,
+      categoryKeys: const ['films'],
+      addedAt: addedDay == null ? null : day.add(Duration(days: addedDay)),
+    );
+    await syncCatalog(
+      db,
+      src,
+      categories: [
+        category(ContentKind.movie, 'films'),
+        category(ContentKind.series, 'shows'),
+      ],
+      movies: [
+        m('a', 'Movie 10'),
+        m('b', 'Movie 2'),
+        m('c', 'movie 1'),
+        m('d', 'Movie'),
+        m('e', '21 Jump Street'),
+        m('f', '2012'),
+        m('g', 'Zulu', 1),
+        m('h', 'Alpha 10', 5),
+        m('i', 'Alpha 9', 5),
+        m('j', 'فيلم ٣'),
+        m('k', 'فيلم 12'),
+      ],
+      seriesList: [
+        series('s1', name: 'Show 10'),
+        series('s2', name: 'Show 9'),
+        series('s3', name: 'Show'),
+        series('s4', name: 'Another 1'),
+      ],
+    );
+    final movies = await catalog.allMoviesPage(src, 0, 20);
+    expect(movies.map((m) => m.name), [
+      // Newest first; a tie by natural name.
+      'Alpha 9',
+      'Alpha 10',
+      'Zulu',
+      // No added time: natural name order (digits before letters, the
+      // number compared as a number, Arabic-Indic digits folded).
+      '21 Jump Street',
+      '2012',
+      'Movie',
+      'movie 1',
+      'Movie 2',
+      'Movie 10',
+      'فيلم ٣',
+      'فيلم 12',
+    ]);
+    // Pages follow the same order.
+    expect((await catalog.allMoviesPage(src, 4, 3)).map((m) => m.key), [
+      'f',
+      'd',
+      'c',
+    ]);
+    expect((await catalog.allSeriesPage(src, 0, 10)).map((s) => s.name), [
+      'Another 1',
+      'Show',
+      'Show 9',
+      'Show 10',
+    ]);
+  });
+
   test('episodes are ordered by season and number', () async {
     await syncCatalog(
       db,

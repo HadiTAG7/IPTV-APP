@@ -4,6 +4,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../app/providers.dart';
 import '../../core/db/app_db.dart';
+import '../../epg/epg_providers.dart';
 
 /// Re-downloads the guide of a source. [force] downloads every guide in full
 /// (the "Refresh guide" button and a changed offset); without it only guides
@@ -17,15 +18,15 @@ typedef RefreshGuideAction = Future<void> Function(
   required bool force,
 });
 
-/// What Settings calls to refresh a source's guide. The default does
-/// nothing; the app wires it to the EPG service, for example
-/// `epgService.refresh(id, force: force, refreshHours: ..., lite: ...)`.
+/// What Settings calls to refresh a source's guide: a run of the source's
+/// [guideRefreshProvider] (the Guide screen shows the same run), with the
+/// Settings refresh interval and Lite mode. Completes when the run ends.
 final refreshGuideActionProvider = Provider<RefreshGuideAction>(
-  (ref) => _noRefresh,
+  (ref) =>
+      (sourceId, {required force}) =>
+          ref.read(guideRefreshProvider(sourceId).notifier).run(force: force),
   name: 'refreshGuideActionProvider',
 );
-
-Future<void> _noRefresh(int sourceId, {required bool force}) async {}
 
 /// Guide URLs of a source in priority order, updated on every change.
 final epgSourcesProvider = StreamProvider.autoDispose

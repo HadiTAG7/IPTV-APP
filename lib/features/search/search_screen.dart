@@ -7,6 +7,7 @@ import '../../app/home_shell.dart';
 import '../../app/providers.dart';
 import '../../core/db/app_db.dart';
 import '../../core/text/normalize.dart';
+import '../../epg/epg_providers.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../../player/ui/play_request.dart';
 import '../../sources/models.dart';
@@ -99,6 +100,15 @@ class SearchViewState extends ConsumerState<SearchView> {
       load: (keys, now) => ref.read(epgDaoProvider).nowNext(_id, keys, now),
       clock: ref.read(clockProvider),
     );
+    // New guide data: the now/next on screen is read again.
+    ref.listenManual<GuideRefreshStatus>(guideRefreshProvider(_id), (
+      previous,
+      next,
+    ) {
+      if (next is GuideRefreshDone && previous is! GuideRefreshDone) {
+        unawaited(_store.reload());
+      }
+    });
   }
 
   @override

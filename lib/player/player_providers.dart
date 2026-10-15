@@ -106,12 +106,24 @@ typedef ChannelPlayedCallback = Future<void> Function(
   String channelKey,
 );
 
-/// Marks a live channel as played. A no-op until the Live feature connects
-/// its "recent channels" action here.
-final onChannelPlayedProvider = Provider<ChannelPlayedCallback>(
-  (ref) => (_, _) async {},
-  name: 'onChannelPlayedProvider',
-);
+/// Records a played live channel: it moves to the top of the Recent list
+/// (and becomes the channel the Live list opens on). The player calls it
+/// for every channel it tunes, zaps included; the Live, Favorites and
+/// Search screens reach the same action through `markChannelPlayedProvider`.
+///
+/// Never throws; failures are logged without the key (M3U keys are URLs
+/// that may hold credentials).
+final onChannelPlayedProvider = Provider<ChannelPlayedCallback>((ref) {
+  final recent = ref.watch(recentDaoProvider);
+  final log = ref.watch(ringLogProvider);
+  return (sourceId, key) async {
+    try {
+      await recent.markRecent(sourceId, key);
+    } on Object catch (e) {
+      log.warn('Saving the recent channel failed: ${e.runtimeType}');
+    }
+  };
+}, name: 'onChannelPlayedProvider');
 
 /// Keeps the screen on while something plays ([WakelockPlus]); failures
 /// (no plugin, desktop without a session bus) are logged and ignored.
@@ -126,8 +138,8 @@ final playerWakelockProvider = Provider<ValueChanged<bool>>((ref) {
 }, name: 'playerWakelockProvider');
 
 /// Network availability for the player (true = online). While offline the
-/// reconnect watchdog waits instead of burning attempts. Null: not wired
-/// (the app-level connectivity listener can provide it).
+/// reconnect watchdog waits instead of burning attempts. Bootstrap provides
+/// it from its connectivity listener; null (tests) means always online.
 final playerOnlineProvider = Provider<Stream<bool>?>(
   (ref) => null,
   name: 'playerOnlineProvider',

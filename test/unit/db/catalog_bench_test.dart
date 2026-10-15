@@ -103,4 +103,48 @@ void main() {
       expect(v, lessThan(const Duration(seconds: 2)));
     }
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('All movies pages of 50k titles in natural order', () async {
+    const count = 50000;
+    final db = openTestDb();
+    addTearDown(db.close);
+    final src = await addSource(db);
+    final catalog = db.catalogDao;
+    final gen = await catalog.beginGeneration(src);
+    await catalog.upsertCategories(src, gen, const [
+      CategoryData(kind: ContentKind.movie, key: 'films', name: 'Films'),
+    ]);
+    final added = DateTime.utc(2026);
+    for (var start = 0; start < count; start += _batch) {
+      await catalog.upsertMovies(src, gen, [
+        for (var i = start; i < start + _batch; i++)
+          MovieData(
+            key: '$i',
+            name: i.isEven ? 'Movie $i (2020)' : 'فيلم رقم $i',
+            categoryKeys: const ['films'],
+            // A third without an added time (M3U style), the rest in
+            // batches sharing one time.
+            addedAt: i % 3 == 0 ? null : added.add(Duration(hours: i ~/ 100)),
+          ),
+      ]);
+    }
+    await catalog.commitGeneration(src, gen);
+
+    final reads = <String, Duration>{
+      'first page': await _timed(() => catalog.allMoviesPage(src, 0, 200)),
+      'middle page': await _timed(
+        () => catalog.allMoviesPage(src, count ~/ 2, 200),
+      ),
+      'last page': await _timed(
+        () => catalog.allMoviesPage(src, count - 200, 200),
+      ),
+    };
+    reads.forEach(
+      (k, v) => debugPrint('all movies $k: ${v.inMilliseconds} ms'),
+    );
+    expect(await catalog.allMoviesPage(src, count - 200, 200), hasLength(200));
+    for (final v in reads.values) {
+      expect(v, lessThan(const Duration(seconds: 2)));
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
 }

@@ -8,6 +8,7 @@ import '../../app/providers.dart';
 import '../../core/db/app_db.dart';
 import '../../player/engine/engine_policy.dart';
 import '../../player/engine/player_engine.dart';
+import '../../player/player_providers.dart';
 import '../../player/ui/play_request.dart';
 import '../../player/ui/player_route.dart';
 import '../../sources/models.dart';
@@ -21,22 +22,15 @@ enum LiveCategoryAction { hide, showHidden }
 /// Records that a live channel was played: it moves to the top of the
 /// Recent list (and becomes the channel the Live list opens on).
 ///
-/// Never throws; failures are logged without the key (M3U keys are URLs
-/// that may hold credentials). For code that has a [Ref] instead of a
-/// [WidgetRef] (a notifier in the player), read this provider:
+/// The same action the player runs for every channel it tunes
+/// ([onChannelPlayedProvider]), so a channel opened here and the channels
+/// zapped to in the player all reach Recent. Never throws. For code that
+/// has a [Ref] instead of a [WidgetRef], read this provider:
 /// `ref.read(markChannelPlayedProvider)(sourceId, key)`.
 final markChannelPlayedProvider =
-    Provider<Future<void> Function(int sourceId, String key)>((ref) {
-      final recent = ref.watch(recentDaoProvider);
-      final log = ref.watch(ringLogProvider);
-      return (sourceId, key) async {
-        try {
-          await recent.markRecent(sourceId, key);
-        } on Object catch (e) {
-          log.warn('Saving the recent channel failed: ${e.runtimeType}');
-        }
-      };
-    });
+    Provider<Future<void> Function(int sourceId, String key)>(
+      (ref) => ref.watch(onChannelPlayedProvider),
+    );
 
 /// Records that the channel [key] of [sourceId] was played; see
 /// [markChannelPlayedProvider]. The player calls it on every zap.
