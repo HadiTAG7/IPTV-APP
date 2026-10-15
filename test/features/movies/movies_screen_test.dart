@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/time/clock.dart';
 import 'package:iptv_player/features/movies/movie_detail_screen.dart';
@@ -142,7 +143,12 @@ void main() {
 
   testWidgets('TV grid: 6 columns, pages read on demand', (tester) async {
     final (db, _) = await seed();
-    await pumpVodApp(tester, db: db);
+    final spy = SpyCatalogDao(db);
+    await pumpVodApp(
+      tester,
+      db: db,
+      overrides: [catalogDaoProvider.overrideWithValue(spy)],
+    );
     await openTabFromRail(tester, 2, rtl: false);
     await press(tester, LogicalKeyboardKey.arrowDown); // Continue watching
     await press(tester, LogicalKeyboardKey.arrowDown); // Action
@@ -167,8 +173,9 @@ void main() {
     await press(tester, LogicalKeyboardKey.arrowDown);
     expect(focusedIn(_grid(7)), isTrue);
 
-    // Far rows are not loaded until scrolled to.
-    expect(find.textContaining('Movie 2'), findsNothing);
+    // Far rows are not loaded until scrolled to: only the first page of
+    // Action was read.
+    expect(spy.movieOffsets('action'), [0]);
     final scrollable = tester.state<ScrollableState>(
       find
           .ancestor(of: find.byKey(_grid(0)), matching: find.byType(Scrollable))
@@ -176,8 +183,9 @@ void main() {
     );
     scrollable.position.jumpTo(38 * (size.height + 12));
     await settle(tester);
-    // The second page arrived (built cards past index 200 have their
-    // titles); the third was never asked for.
+    // The second page was read and arrived (built cards past index 200
+    // have their titles); the third was never asked for.
+    expect(spy.movieOffsets('action'), [0, 200]);
     final second = [
       for (final e in find.byType(PosterCard).evaluate())
         if (_index(e.widget) >= 200) e.widget as PosterCard,
@@ -186,7 +194,6 @@ void main() {
     for (final c in second) {
       expect(c.title, 'Movie ${_index(c).toString().padLeft(3, '0')}');
     }
-    expect(find.textContaining('Movie 4'), findsNothing);
     // The focused poster scrolled away: focus moved to a built one.
     final focused = FocusManager.instance.primaryFocus?.context;
     expect(focused, isNotNull);
@@ -285,6 +292,165 @@ void main() {
     await resync([...dramas, ...movies(2, category: 'drama', prefix: 'x')]);
     expect(find.byKey(_grid(4)), findsOneWidget);
     expect(focusedIn(_grid(0)), isTrue, reason: describeFocus());
+
+    await disposeVodApp(tester, db);
+  });
+
+  for (final rtl in [false, true]) {
+    testWidgets('${rtl ? 'ar' : 'en'} TV: a sync that moves the shown '
+        'category keeps it for Back', (tester) async {
+      final db = openVodDb(clock);
+      final id = await addM3uSource(db);
+      const action = CategoryData(
+        kind: ContentKind.movie,
+        key: 'action',
+        name: 'Action',
+      );
+      const drama = CategoryData(
+        kind: ContentKind.movie,
+        key: 'drama',
+        name: 'Drama',
+        sortIndex: 2,
+      );
+      await seedCatalog(
+        db,
+        id,
+        categories: const [action, drama],
+        movies: [
+          ...movies(10),
+          ...movies(3, category: 'drama', prefix: 'd', name: 'Drama'),
+        ],
+      );
+      await pumpVodApp(tester, db: db, rtl: rtl);
+      await openTabFromRail(tester, 2, rtl: rtl);
+      await pressN(tester, LogicalKeyboardKey.arrowDown, 2);
+      expect(focusedIn(_drama), isTrue, reason: describeFocus());
+      await press(tester, LogicalKeyboardKey.select);
+      final browser = tester.state<VodBrowserState>(find.byType(VodBrowser));
+      expect(browser.selected, VodBrowserState.categoryId('drama'));
+      expect(focusedIn(_grid(0)), isTrue);
+
+      // A background sync adds a category above Drama.
+      await seedCatalog(
+        db,
+        id,
+        categories: const [
+          action,
+          CategoryData(
+            kind: ContentKind.movie,
+            key: 'new',
+            name: 'New',
+            sortIndex: 1,
+          ),
+          drama,
+        ],
+        movies: [
+          ...movies(10),
+          ...movies(2, category: 'new', prefix: 'n', name: 'New'),
+          ...movies(3, category: 'drama', prefix: 'd', name: 'Drama'),
+        ],
+      );
+      await settle(tester);
+      expect(find.byKey(const ValueKey('vod-cat-c:new')), findsOneWidget);
+      expect(focusedIn(_grid(0)), isTrue, reason: describeFocus());
+
+      // Back lands on Drama, and Drama stays shown.
+      await tester.binding.handlePopRoute();
+      await settle(tester);
+      expect(focusedIn(_drama), isTrue, reason: describeFocus());
+      await settle(tester);
+      expect(browser.selected, VodBrowserState.categoryId('drama'));
+      expect(find.text('Drama 000'), findsWidgets);
+
+      await disposeVodApp(tester, db);
+    });
+  }
+
+  testWidgets('TV: Back reaches the shown category after it scrolled away', (
+    tester,
+  ) async {
+    final db = openVodDb(clock);
+    final id = await addM3uSource(db);
+    List<CategoryData> categories(int count) => [
+      for (var i = 0; i < count; i++)
+        CategoryData(
+          kind: ContentKind.movie,
+          key: 'k$i',
+          name: 'Genre $i',
+          sortIndex: i,
+        ),
+    ];
+    List<MovieData> catalog(int count) => [
+      for (var i = 0; i < count; i++)
+        ...movies(2, category: 'k$i', prefix: 'k${i}_', name: 'Genre $i'),
+    ];
+    await seedCatalog(db, id, categories: categories(30), movies: catalog(30));
+    await pumpVodApp(tester, db: db);
+    await openTabFromRail(tester, 2, rtl: false);
+    // Far down the category pane: All is scrolled out of the list.
+    await pressN(tester, LogicalKeyboardKey.arrowDown, 25);
+    expect(focusedIn(const ValueKey('vod-cat-c:k24')), isTrue);
+    expect(find.byKey(_all), findsNothing);
+    await press(tester, LogicalKeyboardKey.select);
+    expect(focusedIn(_grid(0)), isTrue, reason: describeFocus());
+
+    // A sync drops that category: the grid falls back to All, and Back
+    // brings the pane back to the All entry.
+    await seedCatalog(db, id, categories: categories(20), movies: catalog(20));
+    await settle(tester);
+    await tester.binding.handlePopRoute();
+    await settle(tester);
+    expect(focusedIn(_all), isTrue, reason: describeFocus());
+
+    await disposeVodApp(tester, db);
+  });
+
+  testWidgets('a page that fails to read is retried after a pause, with a '
+      'note', (tester) async {
+    final (db, _) = await seed();
+    final spy = SpyCatalogDao(db)..failMovies = (offset) => offset == 200;
+    await pumpVodApp(
+      tester,
+      db: db,
+      overrides: [catalogDaoProvider.overrideWithValue(spy)],
+    );
+    await openTabFromRail(tester, 2, rtl: false);
+    await pressN(tester, LogicalKeyboardKey.arrowDown, 2);
+    await press(tester, LogicalKeyboardKey.select);
+    expect(focusedIn(_grid(0)), isTrue);
+    final size = tester.getSize(find.byKey(_grid(0)));
+    final scrollable = tester.state<ScrollableState>(
+      find
+          .ancestor(of: find.byKey(_grid(0)), matching: find.byType(Scrollable))
+          .first,
+    );
+    scrollable.position.jumpTo(38 * (size.height + 12));
+    await settle(tester);
+    expect(spy.movieOffsets('action'), [0, 200]);
+    expect(find.byKey(const ValueKey('vod-page-error')), findsOneWidget);
+    expect(find.text(enL10n.vod_pageLoadFailed), findsOneWidget);
+
+    // The failed page is not read again on every rebuild...
+    await settle(tester, frames: 20);
+    expect(spy.movieOffsets('action'), [0, 200]);
+    // ...but once the pause is over, while it is on screen.
+    await tester.pump(const Duration(seconds: 2));
+    await settle(tester);
+    expect(spy.movieOffsets('action'), [0, 200, 200]);
+    expect(find.byKey(const ValueKey('vod-page-error')), findsOneWidget);
+
+    // The next try succeeds: titles appear and the note goes away.
+    spy.failMovies = null;
+    await tester.pump(const Duration(seconds: 4));
+    await settle(tester);
+    expect(spy.movieOffsets('action'), [0, 200, 200, 200]);
+    expect(find.byKey(const ValueKey('vod-page-error')), findsNothing);
+    final titled = [
+      for (final e in find.byType(PosterCard).evaluate())
+        if (_index(e.widget) >= 200) e.widget as PosterCard,
+    ];
+    expect(titled, isNotEmpty);
+    expect(titled.every((c) => c.title.startsWith('Movie')), isTrue);
 
     await disposeVodApp(tester, db);
   });

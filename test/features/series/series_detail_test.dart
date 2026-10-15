@@ -7,6 +7,7 @@ import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/time/clock.dart';
 import 'package:iptv_player/features/series/providers.dart';
 import 'package:iptv_player/features/series/series_detail_screen.dart';
+import 'package:iptv_player/features/vod_common/vod_widgets.dart';
 import 'package:iptv_player/sources/models.dart';
 import 'package:iptv_player/widgets/states.dart';
 
@@ -362,6 +363,221 @@ void main() {
       await disposeVodApp(tester, db);
     });
   }
+
+  /// A long show: [seasons] seasons of three episodes (`e<season>_<n>`).
+  Future<(AppDatabase, int)> seedLongShow({int seasons = 15}) async {
+    final db = openVodDb(clock);
+    final id = await addM3uSource(db);
+    await seedCatalog(
+      db,
+      id,
+      categories: const [
+        CategoryData(kind: ContentKind.series, key: 'shows', name: 'Shows'),
+      ],
+      series: const [
+        SeriesData(key: 's1', name: 'Long Show', categoryKeys: ['shows']),
+      ],
+      episodes: [
+        for (var season = 1; season <= seasons; season++)
+          for (var n = 1; n <= 3; n++)
+            EpisodeData(
+              seriesKey: 's1',
+              key: 'e${season}_$n',
+              season: season,
+              number: n,
+              title: 'S$season E$n',
+              ext: 'mp4',
+            ),
+      ],
+    );
+    return (db, id);
+  }
+
+  for (final rtl in [false, true]) {
+    testWidgets('${rtl ? 'ar' : 'en'} TV: a far season stays selected and '
+        'is saved once focus rests', (tester) async {
+      final (db, id) = await seedLongShow();
+      // Watching season 14.
+      await db.progressDao.saveProgress(
+        id,
+        PlayableKind.episode,
+        'e14_2',
+        10 * 60 * 1000,
+        45 * 60 * 1000,
+      );
+      await pumpVodApp(tester, db: db, rtl: rtl);
+      await openTabFromRail(tester, 3, rtl: rtl);
+      await press(tester, toEnd(rtl)); // the continue card
+      await press(tester, LogicalKeyboardKey.select);
+      expect(find.byType(SeriesDetailScreen), findsOneWidget);
+
+      // The page opens on season 14, and the Seasons pane shows it.
+      expect(find.byKey(_episode('e14_1')), findsOneWidget);
+      expect(find.byKey(_season(14)), findsOneWidget);
+      expect(find.byKey(_season(1)), findsNothing);
+
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(focusedIn(_episode('e14_1')), isTrue, reason: describeFocus());
+      // Toward the start lands on season 14 itself.
+      await press(tester, toStart(rtl));
+      expect(focusedIn(_season(14)), isTrue, reason: describeFocus());
+      expect(find.byKey(_episode('e14_1')), findsOneWidget);
+      await settle(tester, frames: 16);
+      expect(await loadLastSeason(db.settingsDao, id, 's1'), isNull);
+
+      // Passing seasons quickly saves only where focus rests.
+      for (var i = 0; i < 3; i++) {
+        await press(tester, LogicalKeyboardKey.arrowUp, frames: 1);
+      }
+      expect(focusedIn(_season(11)), isTrue, reason: describeFocus());
+      expect(find.byKey(_episode('e11_1')), findsOneWidget);
+      expect(await loadLastSeason(db.settingsDao, id, 's1'), isNull);
+      await tester.pump(SeriesDetailScreen.rememberDelay);
+      await settle(tester);
+      expect(await loadLastSeason(db.settingsDao, id, 's1'), 11);
+
+      // Next time the page opens on season 11, ready for the D-pad.
+      await tester.binding.handlePopRoute();
+      await settle(tester, frames: 16);
+      await press(tester, LogicalKeyboardKey.select);
+      expect(find.byType(SeriesDetailScreen), findsOneWidget);
+      expect(find.byKey(_episode('e11_1')), findsOneWidget);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      await press(tester, toStart(rtl));
+      expect(focusedIn(_season(11)), isTrue, reason: describeFocus());
+
+      await disposeVodApp(tester, db);
+    });
+  }
+
+  testWidgets('a season passed just before closing is still remembered', (
+    tester,
+  ) async {
+    final (db, id) = await seedLongShow(seasons: 3);
+    await pumpVodApp(tester, db: db);
+    await openFromGrid(tester, rtl: false);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    await press(tester, LogicalKeyboardKey.arrowLeft);
+    expect(focusedIn(_season(1)), isTrue, reason: describeFocus());
+    await press(tester, LogicalKeyboardKey.arrowDown, frames: 1);
+    expect(focusedIn(_season(2)), isTrue);
+    await back(tester);
+    expect(find.byType(SeriesDetailScreen), findsNothing);
+    expect(await loadLastSeason(db.settingsDao, id, 's1'), 2);
+    await disposeVodApp(tester, db);
+  });
+
+  testWidgets('TV: a refresh that adds an episode above keeps focus', (
+    tester,
+  ) async {
+    final (db, id) = await seed();
+    List<EpisodeData> from(int first) => [
+      for (var n = first; n <= 6; n++)
+        EpisodeData(
+          seriesKey: 's1',
+          key: 'e$n',
+          season: 1,
+          number: n,
+          title: 'Part $n',
+          ext: 'mp4',
+        ),
+    ];
+    await db.catalogDao.saveFetchedEpisodes(id, 's1', from(2));
+    final pending = Completer<SeriesDetail>();
+    final adapter = FakeVodAdapter(onSeries: (_) => pending.future);
+    await pumpVodApp(tester, db: db, adapter: adapter);
+    await openFromGrid(tester, rtl: false);
+    await pressN(tester, LogicalKeyboardKey.arrowDown, 3);
+    expect(focusedIn(_episode('e4')), isTrue, reason: describeFocus());
+
+    pending.complete(SeriesDetail(key: 's1', episodes: from(1)));
+    await settle(tester);
+    expect(find.byKey(_episode('e1')), findsOneWidget);
+    expect(focusedIn(_episode('e4')), isTrue, reason: describeFocus());
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(focusedIn(_episode('e5')), isTrue, reason: describeFocus());
+
+    await disposeVodApp(tester, db);
+  });
+
+  for (final rtl in [false, true]) {
+    testWidgets('${rtl ? 'ar' : 'en'} phone: details arriving keep the '
+        'scroll position', (tester) async {
+      final (db, id) = await seed();
+      final episodes = [
+        for (var n = 1; n <= 20; n++)
+          EpisodeData(
+            seriesKey: 's1',
+            key: 'p$n',
+            season: 1,
+            number: n,
+            title: 'Part $n',
+            ext: 'mp4',
+          ),
+      ];
+      await db.catalogDao.saveFetchedEpisodes(id, 's1', episodes);
+      final pending = Completer<SeriesDetail>();
+      final adapter = FakeVodAdapter(onSeries: (_) => pending.future);
+      await pumpVodApp(tester, db: db, tv: false, rtl: rtl, adapter: adapter);
+      await tester.tap(find.byKey(const ValueKey('nav-series')));
+      await settle(tester);
+      await tester.tap(find.byKey(const ValueKey('vod-grid-0')));
+      await settle(tester);
+      expect(find.byType(SeriesDetailScreen), findsOneWidget);
+
+      ScrollPosition position() => tester
+          .state<ScrollableState>(
+            find
+                .descendant(
+                  of: find.byType(SeriesDetailScreen),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          )
+          .position;
+      final before = position()..jumpTo(600);
+      await settle(tester);
+
+      pending.complete(
+        SeriesDetail(
+          key: 's1',
+          plot: 'A long plot.',
+          backdrop: 'http://127.0.0.1:9/backdrop.jpg',
+          episodes: episodes,
+        ),
+      );
+      await settle(tester);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('vod-detail-backdrop')),
+          matching: find.byType(VodImage),
+        ),
+        findsOneWidget,
+      );
+      expect(identical(position(), before), isTrue);
+      expect(position().pixels, 600);
+
+      await disposeVodApp(tester, db);
+    });
+  }
+
+  testWidgets('desktop: the page has a Back button for the mouse', (
+    tester,
+  ) async {
+    final (db, _) = await seed(xtream: false);
+    await pumpVodApp(tester, db: db, desktop: true);
+    await tester.tap(find.byKey(const ValueKey('rail-series')));
+    await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('vod-grid-0')));
+    await settle(tester);
+    expect(find.byType(SeriesDetailScreen), findsOneWidget);
+    expect(find.byKey(_season(2)), findsOneWidget);
+    expect(find.byType(BackButton), findsOneWidget);
+    await tester.tap(find.byType(BackButton));
+    await settle(tester, frames: 16);
+    expect(find.byType(SeriesDetailScreen), findsNothing);
+    await disposeVodApp(tester, db);
+  });
 
   test('remembered seasons are capped, newest kept', () async {
     final db = openVodDb(clock);

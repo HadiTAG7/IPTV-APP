@@ -7,6 +7,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/app/app.dart';
 import 'package:iptv_player/app/providers.dart';
@@ -96,6 +97,51 @@ List<MovieData> movies(
     ),
 ];
 
+/// Records the pages the browser grids read, and can fail some of them.
+class SpyCatalogDao extends CatalogDao {
+  SpyCatalogDao(super.attachedDatabase);
+
+  /// Offsets read by category (null: All).
+  final movieReads = <(String?, int)>[];
+
+  /// Throws for these offsets while set.
+  bool Function(int offset)? failMovies;
+
+  void _record(String? category, int offset) {
+    movieReads.add((category, offset));
+    if (failMovies?.call(offset) ?? false) {
+      throw StateError('disk I/O error');
+    }
+  }
+
+  /// Offsets read in [category] (null: All).
+  List<int> movieOffsets(String? category) => [
+    for (final (c, o) in movieReads)
+      if (c == category) o,
+  ];
+
+  @override
+  Future<List<MovieRow>> moviesPage(
+    int sourceId,
+    String categoryKey,
+    int offset,
+    int limit,
+  ) async {
+    _record(categoryKey, offset);
+    return super.moviesPage(sourceId, categoryKey, offset, limit);
+  }
+
+  @override
+  Future<List<MovieRow>> allMoviesPage(
+    int sourceId,
+    int offset,
+    int limit,
+  ) async {
+    _record(null, offset);
+    return super.allMoviesPage(sourceId, offset, limit);
+  }
+}
+
 /// Records what the screens ask the player to play.
 class PlayRecorder {
   final requests = <PlayRequest>[];
@@ -155,20 +201,30 @@ class FakeVodAdapter implements SourceAdapter {
 }
 
 /// Pumps the real app (shells, routes) on [db] with the VOD seams faked.
+///
+/// [desktop] runs it as a Windows window (large layout, mouse).
 Future<void> pumpVodApp(
   WidgetTester tester, {
   required AppDatabase db,
   bool tv = true,
+  bool desktop = false,
   bool rtl = false,
   Size? phoneSize,
   PlayRecorder? player,
   FakeVodAdapter? adapter,
+  List<Override> overrides = const [],
 }) async {
-  final size = tv ? const Size(960, 540) : (phoneSize ?? const Size(390, 800));
+  final isTv = tv && !desktop;
+  final size = isTv
+      ? const Size(960, 540)
+      : desktop
+      ? const Size(1280, 800)
+      : (phoneSize ?? const Size(390, 800));
   tester.view.physicalSize = size * 2;
   tester.view.devicePixelRatio = 2;
   addTearDown(tester.view.reset);
   addTearDown(() => applyFocusHighlightStrategy(tv: false));
+  final caps = isTv ? tvCaps : phoneCaps;
   KeyRepeatThrottle.instance = KeyRepeatThrottle();
   FailedImageCache.clear();
   await tester.pumpWidget(
@@ -176,7 +232,7 @@ Future<void> pumpVodApp(
       retry: (_, _) => null,
       overrides: [
         databaseProvider.overrideWithValue(db),
-        deviceCapsProvider.overrideWithValue(tv ? tvCaps : phoneCaps),
+        deviceCapsProvider.overrideWithValue(caps),
         initialSettingsProvider.overrideWithValue(
           AppSettings(locale: rtl ? AppLocaleSetting.ar : AppLocaleSetting.en),
         ),
@@ -190,6 +246,9 @@ Future<void> pumpVodApp(
           if (a == null) throw StateError('no adapter expected');
           return a;
         }),
+        if (desktop)
+          targetPlatformProvider.overrideWithValue(TargetPlatform.windows),
+        ...overrides,
       ],
       child: const IptvApp(),
     ),

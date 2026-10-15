@@ -267,5 +267,6 @@
   "vod_cast": "البطولة: \u2068{names}\u2069",
   "vod_director": "الإخراج: \u2068{name}\u2069",
   "vod_playEpisode": "تشغيل الموسم {season} الحلقة {episode}",
-  "vod_resumeEpisode": "استكمال الموسم {season} الحلقة {episode}"
+  "vod_resumeEpisode": "استكمال الموسم {season} الحلقة {episode}",
+  "vod_pageLoadFailed": "تعذّر تحميل بعض العناوين. ستُعاد المحاولة بعد قليل."
 }

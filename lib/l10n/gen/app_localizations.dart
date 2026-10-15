@@ -1597,6 +1597,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Resume S{season} E{episode}'**
   String vod_resumeEpisode(int season, int episode);
+
+  /// No description provided for @vod_pageLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Some titles couldn\'t be loaded. Trying again shortly.'**
+  String get vod_pageLoadFailed;
 }
 
 class _AppLocalizationsDelegate

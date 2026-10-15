@@ -58,6 +58,15 @@ class VodBrowserState extends ConsumerState<VodBrowser> {
 
   final _categoriesPane = GlobalKey<PaneScopeState>();
   final _gridPane = GlobalKey<PaneScopeState>();
+  final _categoriesScroll = ScrollController();
+
+  /// Focus nodes of the category pane by entry id. They outlive the tiles,
+  /// so the shown category can be focused again after a sync moved it or
+  /// after it scrolled out of the list.
+  final _categoryNodes = <String, FocusNode>{};
+
+  /// Row height of the category pane.
+  static const double _categoryExtent = 44;
   String _selected = allId;
   String? _pending;
   Timer? _focusTimer;
@@ -66,14 +75,27 @@ class VodBrowserState extends ConsumerState<VodBrowser> {
   /// The last item count shown, kept while a sync's new count is read.
   int? _lastTotal;
 
+  /// The entry shown by the last build and the entry ids in list order.
+  String _shownId = allId;
+  List<String> _entryIds = const [];
+
   /// The entry the grid shows.
   String get selected => _selected;
 
   @override
   void dispose() {
     _focusTimer?.cancel();
+    _categoriesScroll.dispose();
+    for (final node in _categoryNodes.values) {
+      node.dispose();
+    }
     super.dispose();
   }
+
+  FocusNode _categoryNode(String id) => _categoryNodes.putIfAbsent(
+    id,
+    () => FocusNode(debugLabel: 'vod-cat-$id'),
+  );
 
   void _select(String id) {
     _focusTimer?.cancel();
@@ -113,7 +135,31 @@ class VodBrowserState extends ConsumerState<VodBrowser> {
       ..ensureVisualUpdate();
   }
 
-  void _focusCategories() => _categoriesPane.currentState?.requestFocus();
+  /// Focuses the category the grid shows, scrolling the pane to it first
+  /// when its tile is not built.
+  void _focusCategories() {
+    final id = _shownId;
+    if (_focusEntry(id)) return;
+    final index = _entryIds.indexOf(id);
+    if (index >= 0 && _categoriesScroll.hasClients) {
+      final position = _categoriesScroll.position;
+      final offset =
+          Spacing.xs +
+          index * _categoryExtent -
+          (position.viewportDimension - _categoryExtent) / 2;
+      position.jumpTo(
+        offset.clamp(position.minScrollExtent, position.maxScrollExtent),
+      );
+    }
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (!mounted || _focusEntry(id)) return;
+        _categoriesPane.currentState?.requestFocus();
+      })
+      ..ensureVisualUpdate();
+  }
+
+  bool _focusEntry(String id) => focusIfMounted(_categoryNodes[id]);
 
   bool _onBack() {
     if (_gridPane.currentState?.hasFocus ?? false) {
@@ -256,6 +302,17 @@ class VodBrowserState extends ConsumerState<VodBrowser> {
     final current =
         entries.where((e) => e.id == _selected).firstOrNull ?? entries.first;
     final large = isLargeLayout(context);
+    _shownId = current.id;
+    _entryIds = [for (final e in entries) e.id];
+    // Tiles are matched by id, so a sync that adds or removes categories
+    // above one moves its tile (and focus) instead of rebuilding it.
+    final indexById = {for (final (i, e) in entries.indexed) e.id: i};
+    int? indexOfKey(Key key, String prefix) {
+      if (key is! ValueKey<String> || !key.value.startsWith(prefix)) {
+        return null;
+      }
+      return indexById[key.value.substring(prefix.length)];
+    }
 
     final Widget grid;
     if (current.id == continueId) {
@@ -301,20 +358,25 @@ class VodBrowserState extends ConsumerState<VodBrowser> {
                   child: KeyRepeatGuard(
                     child: ListView.builder(
                       key: const ValueKey('vod-categories'),
+                      controller: _categoriesScroll,
                       padding: const EdgeInsets.symmetric(
                         horizontal: Spacing.xs,
                         vertical: Spacing.xs,
                       ),
-                      itemExtent: 44,
+                      itemExtent: _categoryExtent,
                       itemCount: entries.length,
+                      findChildIndexCallback: (key) =>
+                          indexOfKey(key, _rowKeyPrefix),
                       itemBuilder: (context, i) {
                         final e = entries[i];
                         return Padding(
+                          key: ValueKey('$_rowKeyPrefix${e.id}'),
                           padding: const EdgeInsets.symmetric(
                             vertical: Spacing.xxs,
                           ),
                           child: VodCategoryTile(
-                            key: ValueKey('vod-cat-${e.id}'),
+                            key: ValueKey('$_tileKeyPrefix${e.id}'),
+                            focusNode: _categoryNode(e.id),
                             label: e.label,
                             count: e.count,
                             icon: e.icon,
@@ -372,11 +434,13 @@ class VodBrowserState extends ConsumerState<VodBrowser> {
                     vertical: Spacing.sm,
                   ),
                   itemCount: entries.length,
+                  findItemIndexCallback: (key) =>
+                      indexOfKey(key, _tileKeyPrefix),
                   separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
                   itemBuilder: (context, i) {
                     final e = entries[i];
                     return VodCategoryTile(
-                      key: ValueKey('vod-cat-${e.id}'),
+                      key: ValueKey('$_tileKeyPrefix${e.id}'),
                       chip: true,
                       label: e.label,
                       icon: e.icon,
@@ -392,6 +456,9 @@ class VodBrowserState extends ConsumerState<VodBrowser> {
     return HomeTabBackHandler(onBack: _onBack, child: body);
   }
 }
+
+const _rowKeyPrefix = 'vod-cat-row-';
+const _tileKeyPrefix = 'vod-cat-';
 
 class _Entry {
   const _Entry(this.id, this.label, this.count, this.icon);
@@ -464,7 +531,7 @@ class _PagedGridState extends State<_PagedGrid> {
             if (_items.error != null && _items.isEmpty) {
               return ErrorView(autofocusRetry: false, onRetry: _items.retry);
             }
-            return KeyRepeatGuard(
+            final grid = KeyRepeatGuard(
               child: CustomScrollView(
                 slivers: [
                   if (header != null)
@@ -493,9 +560,53 @@ class _PagedGridState extends State<_PagedGrid> {
                 ],
               ),
             );
+            // A later page failed: say so under the grid; it is read again
+            // after a short wait (PagedItems.retryBackoff) while on screen.
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: grid),
+                if (_items.error != null) const _PageErrorNote(),
+              ],
+            );
           },
         );
       },
+    );
+  }
+}
+
+/// A short note under the grid while some titles could not be read.
+class _PageErrorNote extends StatelessWidget {
+  const _PageErrorNote();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context).textTheme;
+    return Padding(
+      key: const ValueKey('vod-page-error'),
+      padding: const EdgeInsetsDirectional.symmetric(
+        horizontal: VodGridLayout.padding,
+        vertical: Spacing.xs,
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.error_outline_rounded,
+            size: 18,
+            color: AppColors.textSecondary,
+          ),
+          const SizedBox(width: Spacing.sm),
+          Expanded(
+            child: Text(
+              AppLocalizations.of(context).vod_pageLoadFailed,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.bodySmall,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

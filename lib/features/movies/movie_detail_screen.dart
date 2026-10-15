@@ -102,7 +102,10 @@ class _MovieDetailScreenState extends ConsumerState<MovieDetailScreen> {
             .value ??
         false;
 
-    if (!rowAsync.hasValue || !progressAsync.hasValue) {
+    // A progress read that fails counts as no progress: the page still
+    // offers Play instead of waiting forever.
+    final progressPending = !progressAsync.hasValue && !progressAsync.hasError;
+    if (!rowAsync.hasValue || progressPending) {
       return VodDetailFrame(
         title: '',
         child: rowAsync.hasError

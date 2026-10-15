@@ -381,5 +381,6 @@
   "@vod_resumeEpisode": {
     "description": "Series page button that resumes a partly watched episode, e.g. Resume S1 E3.",
     "placeholders": {"season": {"type": "int"}, "episode": {"type": "int"}}
-  }
+  },
+  "vod_pageLoadFailed": "Some titles couldn't be loaded. Trying again shortly."
 }

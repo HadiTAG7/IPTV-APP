@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/time/clock.dart';
 import 'package:iptv_player/features/movies/movie_detail_screen.dart';
+import 'package:iptv_player/features/movies/providers.dart';
+import 'package:iptv_player/features/vod_common/vod_widgets.dart';
 import 'package:iptv_player/sources/models.dart';
 
 import 'vod_harness.dart';
@@ -216,6 +218,103 @@ void main() {
     expect(find.text('Updated.'), findsOneWidget);
     expect(adapter.movieCalls, ['m1', 'm1']);
 
+    await disposeVodApp(tester, db);
+  });
+
+  for (final rtl in [false, true]) {
+    testWidgets('${rtl ? 'ar' : 'en'} TV: details arriving with a backdrop '
+        'keep focus and the page', (tester) async {
+      final (db, id) = await seed(xtream: true);
+      final pending = Completer<MovieDetail?>();
+      final adapter = FakeVodAdapter(onMovie: (_) => pending.future);
+      final player = PlayRecorder();
+      await pumpVodApp(
+        tester,
+        db: db,
+        rtl: rtl,
+        adapter: adapter,
+        player: player,
+      );
+
+      await openFromGrid(tester, rtl: rtl);
+      expect(focusedIn(_play), isTrue);
+      await press(tester, toEnd(rtl));
+      expect(focusedIn(_favorite), isTrue, reason: describeFocus());
+      final title = find.descendant(
+        of: find.byType(MovieDetailScreen),
+        matching: find.text('The Long Road'),
+      );
+      final titleElement = tester.element(title);
+
+      pending.complete(
+        const MovieDetail(
+          key: 'm1',
+          plot: 'A slow trip across the desert.',
+          backdrop: 'http://127.0.0.1:9/backdrop.jpg',
+        ),
+      );
+      await settle(tester);
+      expect(find.text('A slow trip across the desert.'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('vod-detail-backdrop')),
+          matching: find.byType(VodImage),
+        ),
+        findsOneWidget,
+      );
+      // Same page, same focus: OK now toggles the favourite.
+      expect(identical(tester.element(title), titleElement), isTrue);
+      expect(titleElement.mounted, isTrue);
+      expect(focusedIn(_favorite), isTrue, reason: describeFocus());
+      await press(tester, LogicalKeyboardKey.select);
+      expect(player.requests, isEmpty);
+      expect(
+        await db.favoritesDao.isFavorite(id, ContentKind.movie, 'm1'),
+        isTrue,
+      );
+
+      await disposeVodApp(tester, db);
+    });
+  }
+
+  testWidgets('a failed progress read still offers Play', (tester) async {
+    final (db, _) = await seed();
+    final player = PlayRecorder();
+    await pumpVodApp(
+      tester,
+      db: db,
+      player: player,
+      overrides: [
+        movieProgressProvider.overrideWith(
+          (ref, item) => Stream.error(StateError('disk I/O error')),
+        ),
+      ],
+    );
+    await openFromGrid(tester, rtl: false);
+    expect(find.text(enL10n.vodPlay), findsOneWidget);
+    expect(find.byKey(_startOver), findsNothing);
+    expect(focusedIn(_play), isTrue, reason: describeFocus());
+    await press(tester, LogicalKeyboardKey.select);
+    expect(player.last.item.key, 'm1');
+    expect(player.last.startAt, isNull);
+    await disposeVodApp(tester, db);
+  });
+
+  testWidgets('desktop: the page has a Back button for the mouse', (
+    tester,
+  ) async {
+    final (db, _) = await seed();
+    await pumpVodApp(tester, db: db, desktop: true);
+    await tester.tap(find.byKey(const ValueKey('rail-movies')));
+    await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('vod-grid-0')));
+    await settle(tester);
+    expect(find.byType(MovieDetailScreen), findsOneWidget);
+    // The large layout keeps the title in the page header.
+    expect(find.byType(BackButton), findsOneWidget);
+    await tester.tap(find.byType(BackButton));
+    await settle(tester, frames: 16);
+    expect(find.byType(MovieDetailScreen), findsNothing);
     await disposeVodApp(tester, db);
   });
 

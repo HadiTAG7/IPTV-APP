@@ -15,6 +15,21 @@ import '../../widgets/poster_card.dart';
 import '../../widgets/section_header.dart';
 import 'vod_format.dart';
 
+/// Focuses [node] when its widget is in the tree and returns true. Nodes
+/// kept in a State outlive the tiles of lazy lists, and a node keeps its
+/// last context after its tile was disposed, so that alone proves nothing.
+bool focusIfMounted(FocusNode? node) {
+  final context = node?.context;
+  if (node == null ||
+      context == null ||
+      !context.mounted ||
+      !node.canRequestFocus) {
+    return false;
+  }
+  node.requestFocus();
+  return true;
+}
+
 /// Poster grid geometry for a given width: 6 columns on the large layout
 /// (more on wide desktop windows), 3 on phones (more in a wide window).
 class VodGridLayout {
@@ -382,7 +397,12 @@ String continueTitle(ContinueWatchingItem item) =>
     item.seriesName ?? item.title ?? item.key;
 
 /// Detail page frame: a dimmed backdrop (skipped in Lite mode), overscan
-/// margins on TV and an app bar with Back on phones.
+/// margins on TV and an app bar with Back everywhere else (phones, tablets
+/// and desktop windows, where a mouse needs a way back).
+///
+/// The tree keeps the same shape whether or not there is a backdrop, so a
+/// backdrop arriving with the lazy details (or Lite mode changing) never
+/// remounts the page: focus and scroll positions stay.
 class VodDetailFrame extends ConsumerWidget {
   const VodDetailFrame({
     super.key,
@@ -397,41 +417,48 @@ class VodDetailFrame extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final formFactor = FormFactorScope.of(context);
+    final tv = formFactor == FormFactor.tv;
+    // The large layouts show the title in the page header.
     final large = isLargeLayout(context);
     final lite = ref.watch(liteModeProvider);
     final backdrop = this.backdrop;
+    final showBackdrop = backdrop != null && backdrop.isNotEmpty && !lite;
     return Scaffold(
-      appBar: large ? null : AppBar(title: BidiText(title)),
+      appBar: tv ? null : AppBar(title: large ? null : BidiText(title)),
       body: Stack(
         children: [
-          if (backdrop != null && backdrop.isNotEmpty && !lite)
-            Positioned.fill(
-              child: ExcludeSemantics(
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    VodImage(
-                      url: backdrop,
-                      icon: Icons.image_outlined,
-                      maxCacheWidth: 1280,
-                    ),
-                    const DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: AlignmentDirectional.centerStart,
-                          end: AlignmentDirectional.centerEnd,
-                          colors: [Color(0xF20B0E13), Color(0xB30B0E13)],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
           Positioned.fill(
+            key: const ValueKey('vod-detail-backdrop'),
+            child: showBackdrop
+                ? ExcludeSemantics(
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        VodImage(
+                          url: backdrop,
+                          icon: Icons.image_outlined,
+                          maxCacheWidth: 1280,
+                        ),
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: AlignmentDirectional.centerStart,
+                              end: AlignmentDirectional.centerEnd,
+                              colors: [Color(0xF20B0E13), Color(0xB30B0E13)],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+          Positioned.fill(
+            key: const ValueKey('vod-detail-content'),
             child: SafeArea(
-              top: large,
-              minimum: overscanPadding(FormFactorScope.of(context)),
+              // Below an app bar the Scaffold already removed the top inset.
+              minimum: overscanPadding(formFactor),
               child: child,
             ),
           ),

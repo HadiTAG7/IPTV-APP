@@ -916,4 +916,8 @@ class AppLocalizationsAr extends AppLocalizations {
   String vod_resumeEpisode(int season, int episode) {
     return 'استكمال الموسم $season الحلقة $episode';
   }
+
+  @override
+  String get vod_pageLoadFailed =>
+      'تعذّر تحميل بعض العناوين. ستُعاد المحاولة بعد قليل.';
 }

@@ -123,6 +123,83 @@ void main() {
       });
     });
 
+    test('a failed later page waits before it is read again', () {
+      fakeAsync((async) {
+        var broken = true;
+        final (items, reads) = paged(100, fail: (o) => broken && o == 50);
+        var notified = 0;
+        items.addListener(() => notified++);
+        async.flushMicrotasks();
+        expect(items.itemAt(55), isNull);
+        async.elapse(items.debounce);
+        expect(reads, [0, 50]);
+        expect(items.error, isA<StateError>());
+        expect(items.isEmpty, isFalse);
+
+        // Rebuilds keep asking for the item: no read until the backoff.
+        final before = notified;
+        for (var i = 0; i < 10; i++) {
+          expect(items.itemAt(55), isNull);
+          async.elapse(items.debounce);
+        }
+        expect(reads, [0, 50]);
+        expect(items.itemAt(5), 5);
+        async.elapse(items.retryBackoff - items.debounce * 10);
+        // Listeners hear that the page may be asked for again.
+        expect(notified, before + 1);
+        expect(items.itemAt(55), isNull);
+        async.elapse(items.debounce);
+        expect(reads, [0, 50, 50]);
+
+        // A second failure in a row waits twice as long.
+        for (var i = 0; i < 30; i++) {
+          items.itemAt(55);
+          async.elapse(items.debounce);
+        }
+        expect(reads, [0, 50, 50]);
+        async.elapse(items.retryBackoff * 2);
+        items.itemAt(55);
+        async.elapse(items.debounce);
+        expect(reads, [0, 50, 50, 50]);
+        expect(items.error, isNotNull);
+
+        // Retry reads at once; the error clears once the page is read.
+        broken = false;
+        items.retry();
+        expect(items.itemAt(55), isNull);
+        async.elapse(items.debounce);
+        expect(reads, [0, 50, 50, 50, 50]);
+        expect(items.itemAt(55), 55);
+        expect(items.error, isNull);
+        items.dispose();
+      });
+    });
+
+    test('the error stays until every failed page was read', () {
+      fakeAsync((async) {
+        var broken = true;
+        final (items, _) = paged(100, fail: (o) => broken && o != 0);
+        async.flushMicrotasks();
+        items
+          ..itemAt(15)
+          ..itemAt(35);
+        async.elapse(items.debounce);
+        expect(items.error, isNotNull);
+        broken = false;
+        async.elapse(items.retryBackoff);
+        items.itemAt(15);
+        async.elapse(items.debounce);
+        expect(items.itemAt(15), 15);
+        // Page 3 is still missing.
+        expect(items.error, isNotNull);
+        items.itemAt(35);
+        async.elapse(items.debounce);
+        expect(items.itemAt(35), 35);
+        expect(items.error, isNull);
+        items.dispose();
+      });
+    });
+
     test('refresh re-reads loaded pages and keeps items meanwhile', () {
       fakeAsync((async) {
         var version = 0;

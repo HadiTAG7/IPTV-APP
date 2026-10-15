@@ -895,4 +895,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String vod_resumeEpisode(int season, int episode) {
     return 'Resume S$season E$episode';
   }
+
+  @override
+  String get vod_pageLoadFailed =>
+      'Some titles couldn\'t be loaded. Trying again shortly.';
 }

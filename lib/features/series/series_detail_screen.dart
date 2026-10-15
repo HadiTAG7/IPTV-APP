@@ -34,7 +34,10 @@ import 'providers.dart';
 ///   up from a pane's top reaches the header buttons. Focusing a season
 ///   shows its episodes. Phone: one scrolling page with season chips.
 /// * The selected season is remembered per series ([saveLastSeason]); else
-///   the page opens on the season of the last watched episode.
+///   the page opens on the season of the last watched episode. The Seasons
+///   pane opens scrolled to it, and Left from the episodes lands on it even
+///   in long shows. Seasons merely passed with the D-pad are saved once
+///   focus rests ([rememberDelay]); OK, a tap or playing saves at once.
 /// * OK on an episode plays it, resuming past 30 s of progress; Menu (long
 ///   press) offers Start over.
 class SeriesDetailScreen extends ConsumerStatefulWidget {
@@ -46,6 +49,10 @@ class SeriesDetailScreen extends ConsumerStatefulWidget {
 
   final int sourceId;
   final String seriesKey;
+
+  /// How long a season focused on TV must stay selected before it is saved
+  /// as the remembered one.
+  static const rememberDelay = Duration(milliseconds: 500);
 
   @override
   ConsumerState<SeriesDetailScreen> createState() => _SeriesDetailScreenState();
@@ -60,7 +67,23 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
   final _seasonsPane = GlobalKey<PaneScopeState>();
   final _episodesPane = GlobalKey<PaneScopeState>();
   final _seasonNodes = <int, FocusNode>{};
+  final _seasonsScroll = ScrollController();
   FocusWatchdogState? _watchdog;
+  late final SettingsDao _settings = ref.read(settingsDaoProvider);
+
+  /// Row height of the Seasons pane.
+  static const double _seasonExtent = 48;
+
+  /// A season waiting for [SeriesDetailScreen.rememberDelay] to be saved.
+  Timer? _rememberTimer;
+  int? _rememberPending;
+
+  /// The season shown by the last build and the seasons in list order.
+  int? _shownSeason;
+  List<int> _seasonOrder = const [];
+
+  /// The season the Seasons pane was last scrolled to.
+  int? _revealedSeason;
 
   /// The season picked on this page (null: the remembered or default one).
   int? _season;
@@ -79,7 +102,7 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
     int? season;
     try {
       season = await loadLastSeason(
-        ref.read(settingsDaoProvider),
+        _settings,
         widget.sourceId,
         widget.seriesKey,
       );
@@ -105,8 +128,13 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
 
   @override
   void dispose() {
+    // A season passed just before closing is still remembered.
+    final pending = _rememberPending;
+    _rememberTimer?.cancel();
+    if (pending != null) unawaited(_save(pending));
     _watchdog?.unregister(_primary);
     _primary.dispose();
+    _seasonsScroll.dispose();
     for (final node in _seasonNodes.values) {
       node.dispose();
     }
@@ -118,16 +146,34 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
     () => FocusNode(debugLabel: 'season-$season'),
   );
 
-  void _selectSeason(int season, int current) {
-    if (season == current) return;
-    setState(() => _season = season);
-    unawaited(_remember(season));
+  /// Shows [season]. Saved at once when [now] (OK, a tap), else once the
+  /// selection rests, so holding a key over the seasons does not write the
+  /// settings for each one.
+  void _selectSeason(int season, int current, {bool now = false}) {
+    if (season != current) setState(() => _season = season);
+    if (now) {
+      _rememberNow(season);
+    } else if (season != current) {
+      _rememberPending = season;
+      _rememberTimer?.cancel();
+      _rememberTimer = Timer(SeriesDetailScreen.rememberDelay, () {
+        final pending = _rememberPending;
+        if (pending != null && mounted) _rememberNow(pending);
+      });
+    }
   }
 
-  Future<void> _remember(int season) async {
+  void _rememberNow(int season) {
+    _rememberTimer?.cancel();
+    _rememberTimer = null;
+    _rememberPending = null;
+    unawaited(_save(season));
+  }
+
+  Future<void> _save(int season) async {
     try {
       await saveLastSeason(
-        ref.read(settingsDaoProvider),
+        _settings,
         widget.sourceId,
         widget.seriesKey,
         season,
@@ -139,13 +185,33 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
 
   void _focusHeader() => _headerPane.currentState?.requestFocus();
 
+  bool _focusSeason(int season) => focusIfMounted(_seasonNodes[season]);
+
+  /// Scrolls the Seasons pane so [season] is in view (its tile and focus
+  /// node are then built).
+  void _revealSeason(int season) {
+    final index = _seasonOrder.indexOf(season);
+    if (index < 0 || !_seasonsScroll.hasClients) return;
+    final position = _seasonsScroll.position;
+    final offset =
+        Spacing.xs +
+        index * _seasonExtent -
+        (position.viewportDimension - _seasonExtent) / 2;
+    position.jumpTo(
+      offset.clamp(position.minScrollExtent, position.maxScrollExtent),
+    );
+  }
+
+  /// Focuses the tile of [season], which the Seasons pane may first have to
+  /// scroll to. Never falls back to another season: focusing one selects it.
   void _focusSeasons(int season) {
-    final node = _seasonNodes[season];
-    if (node != null && node.context != null && node.canRequestFocus) {
-      node.requestFocus();
-    } else {
-      _seasonsPane.currentState?.requestFocus();
-    }
+    if (_focusSeason(season)) return;
+    _revealSeason(season);
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (mounted) _focusSeason(season);
+      })
+      ..ensureVisualUpdate();
   }
 
   void _enterEpisodes() {
@@ -153,7 +219,22 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
       ..addPostFrameCallback((_) {
         if (!mounted) return;
         final entered = _episodesPane.currentState?.requestFocus() ?? false;
-        if (!entered) _seasonsPane.currentState?.requestFocus();
+        final season = _shownSeason;
+        if (!entered && season != null) _focusSeasons(season);
+      })
+      ..ensureVisualUpdate();
+  }
+
+  /// After a build that changed the season while the Seasons pane does not
+  /// have focus (opening the page, the remembered season loading), scrolls
+  /// the pane to it. Moving through the pane scrolls it by itself.
+  void _revealAfterBuild(int season) {
+    if (season == _revealedSeason) return;
+    _revealedSeason = season;
+    if (_seasonsPane.currentState?.hasFocus ?? false) return;
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (mounted) _revealSeason(season);
       })
       ..ensureVisualUpdate();
   }
@@ -180,7 +261,7 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
     );
     unawaited(ref.read(vodPlayerLauncherProvider)(context, request));
     // The next visit opens on this season; this one stays where it is.
-    unawaited(_remember(episode.season));
+    _rememberNow(episode.season);
   }
 
   Future<void> _episodeOptions(
@@ -294,6 +375,10 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
       for (final e in episodes)
         if (e.season == season) e,
     ];
+    final large = isLargeLayout(context);
+    _shownSeason = season;
+    _seasonOrder = seasons;
+    if (large && ready && seasons.isNotEmpty) _revealAfterBuild(season);
 
     final view = _SeriesView(
       series: series,
@@ -317,7 +402,7 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
     return VodDetailFrame(
       title: series.name,
       backdrop: detail?.backdrop,
-      child: isLargeLayout(context) ? view.large(context) : view.phone(context),
+      child: large ? view.large(context) : view.phone(context),
     );
   }
 
@@ -515,6 +600,26 @@ class _SeriesView {
     );
   }
 
+  /// Finds an episode tile by key, so a refresh that adds or removes
+  /// episodes above the focused one moves its tile instead of rebuilding it.
+  ChildIndexGetter _episodeIndexOf() {
+    final indexByKey = {
+      for (final (i, e) in episodes.indexed) _episodeKey(e): i,
+    };
+    return (key) => indexByKey[key];
+  }
+
+  ChildIndexGetter _seasonIndexOf() {
+    final indexByKey = {
+      for (final (i, s) in seasons.indexed)
+        ValueKey('vod-season-row-${s.number}'): i,
+    };
+    return (key) => indexByKey[key];
+  }
+
+  static ValueKey<String> _episodeKey(EpisodeRow e) =>
+      ValueKey('vod-ep-${e.key}');
+
   _EpisodeTile _episodeTile(EpisodeRow e) {
     final p = progress[e.key];
     final resumeAt =
@@ -522,7 +627,7 @@ class _SeriesView {
         ? p.position
         : null;
     return _EpisodeTile(
-      key: ValueKey('vod-ep-${e.key}'),
+      key: _episodeKey(e),
       episode: e,
       progress: p,
       onSelect: () => state._play(series, e, resumeAt),
@@ -599,12 +704,17 @@ class _SeriesView {
                               debugLabel: 'series-seasons',
                               onExitEnd: state._enterEpisodes,
                               onExitUp: state._focusHeader,
-                              child: ListView.builder(
-                                key: const ValueKey('vod-seasons'),
-                                padding: const EdgeInsets.all(Spacing.xs),
-                                itemExtent: 48,
-                                itemCount: seasons.length,
-                                itemBuilder: (context, i) => _seasonTile(i),
+                              child: KeyRepeatGuard(
+                                child: ListView.builder(
+                                  key: const ValueKey('vod-seasons'),
+                                  controller: state._seasonsScroll,
+                                  padding: const EdgeInsets.all(Spacing.xs),
+                                  itemExtent:
+                                      _SeriesDetailScreenState._seasonExtent,
+                                  itemCount: seasons.length,
+                                  findChildIndexCallback: _seasonIndexOf(),
+                                  itemBuilder: (context, i) => _seasonTile(i),
+                                ),
                               ),
                             ),
                           ),
@@ -632,6 +742,7 @@ class _SeriesView {
                                   padding: const EdgeInsets.all(Spacing.xs),
                                   itemExtent: _EpisodeTile.extent,
                                   itemCount: episodes.length,
+                                  findChildIndexCallback: _episodeIndexOf(),
                                   itemBuilder: (context, i) =>
                                       _episodeTile(episodes[i]),
                                 ),
@@ -651,6 +762,7 @@ class _SeriesView {
   Widget _seasonTile(int i, {bool chip = false}) {
     final s = seasons[i];
     return Padding(
+      key: ValueKey('vod-season-row-${s.number}'),
       padding: const EdgeInsets.symmetric(vertical: Spacing.xxs),
       child: VodCategoryTile(
         key: ValueKey('vod-season-${s.number}'),
@@ -665,7 +777,7 @@ class _SeriesView {
                 if (focused) state._selectSeason(s.number, season);
               },
         onSelect: () {
-          state._selectSeason(s.number, season);
+          state._selectSeason(s.number, season, now: true);
           if (!chip) state._enterEpisodes();
         },
       ),
@@ -722,6 +834,7 @@ class _SeriesView {
               delegate: SliverChildBuilderDelegate(
                 (context, i) => _episodeTile(episodes[i]),
                 childCount: episodes.length,
+                findChildIndexCallback: _episodeIndexOf(),
               ),
             ),
           ),
