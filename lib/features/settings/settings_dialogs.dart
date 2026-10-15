@@ -153,6 +153,33 @@ Future<bool> showConfirmDialog(
   return confirmed ?? false;
 }
 
+/// Reading-order traversal where Down from one of [from] goes straight to
+/// [primary] (a dialog's main button).
+///
+/// Dialog buttons sit at the end of the action row, so the nearest button
+/// below a centred control or a full-width field is Cancel. A remote user
+/// who adjusts a value and presses Down, then OK, means to save it.
+/// While [primary] cannot take focus (a disabled button), Down moves as
+/// usual.
+class PrimaryBelowTraversalPolicy extends ReadingOrderTraversalPolicy {
+  PrimaryBelowTraversalPolicy({required this.from, required this.primary});
+
+  final List<FocusNode> from;
+  final FocusNode primary;
+
+  @override
+  bool inDirection(FocusNode currentNode, TraversalDirection direction) {
+    if (direction == TraversalDirection.down &&
+        from.contains(currentNode) &&
+        primary.context != null &&
+        primary.canRequestFocus) {
+      primary.requestFocus();
+      return true;
+    }
+    return super.inDirection(currentNode, direction);
+  }
+}
+
 /// Edits a source's guide offset in [kEpgOffsetStepMin] steps between
 /// [kMinEpgOffsetMin] and [kMaxEpgOffsetMin]; pops the new value on Save.
 class EpgOffsetDialog extends StatefulWidget {
@@ -166,11 +193,26 @@ class EpgOffsetDialog extends StatefulWidget {
 
 class _EpgOffsetDialogState extends State<EpgOffsetDialog> {
   late int _value = stepEpgOffset(widget.initial, 0);
+  final _stepperNode = FocusNode(debugLabel: 'offset stepper');
+  final _saveNode = FocusNode(debugLabel: 'offset save');
+  late final _policy = PrimaryBelowTraversalPolicy(
+    from: [_stepperNode],
+    primary: _saveNode,
+  );
+
+  @override
+  void dispose() {
+    _stepperNode.dispose();
+    _saveNode.dispose();
+    super.dispose();
+  }
+
+  void _save() => Navigator.of(context).pop(_value);
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    return AlertDialog(
+    final dialog = AlertDialog(
       title: Text(l10n.settingsEpgOffset),
       content: SizedBox(
         width: 420,
@@ -186,9 +228,12 @@ class _EpgOffsetDialogState extends State<EpgOffsetDialog> {
             Center(
               child: OffsetStepper(
                 key: const ValueKey('offset-stepper'),
+                focusNode: _stepperNode,
                 value: _value,
                 autofocus: true,
                 onChanged: (v) => setState(() => _value = v),
+                // OK on the value saves it, like Save.
+                onSubmit: _save,
               ),
             ),
           ],
@@ -202,11 +247,13 @@ class _EpgOffsetDialogState extends State<EpgOffsetDialog> {
         ),
         FilledButton(
           key: const ValueKey('offset-save'),
-          onPressed: () => Navigator.of(context).pop(_value),
+          focusNode: _saveNode,
+          onPressed: _save,
           child: Text(l10n.commonSave),
         ),
       ],
     );
+    return FocusTraversalGroup(policy: _policy, child: dialog);
   }
 }
 
@@ -214,30 +261,61 @@ class _EpgOffsetDialogState extends State<EpgOffsetDialog> {
 ///
 /// One focus stop: Left/Right step the value (mirrored in RTL, so the arrow
 /// toward the + button always adds), held keys repeat and speed up via
-/// [KeyRepeatThrottle]; Up/Down move focus as usual. Touch uses the buttons.
+/// [KeyRepeatThrottle]; Up/Down move focus as usual and OK calls
+/// [onSubmit]. Touch uses the buttons.
 class OffsetStepper extends StatefulWidget {
   const OffsetStepper({
     super.key,
     required this.value,
     required this.onChanged,
+    this.onSubmit,
     this.autofocus = false,
+    this.focusNode,
   });
 
   final int value;
   final ValueChanged<int> onChanged;
+
+  /// Called by OK (or Enter) while the stepper has focus.
+  final VoidCallback? onSubmit;
   final bool autofocus;
+
+  /// Optional external node; otherwise one is kept in this widget's state.
+  final FocusNode? focusNode;
 
   @override
   State<OffsetStepper> createState() => _OffsetStepperState();
 }
 
 class _OffsetStepperState extends State<OffsetStepper> {
-  final _node = FocusNode(debugLabel: 'offset stepper');
+  FocusNode? _ownNode;
   bool _focused = false;
+
+  late final Map<Type, Action<Intent>> _actions = {
+    ActivateIntent: CallbackAction<ActivateIntent>(
+      onInvoke: (_) {
+        widget.onSubmit?.call();
+        return null;
+      },
+    ),
+  };
+
+  FocusNode get _node =>
+      widget.focusNode ??
+      (_ownNode ??= FocusNode(debugLabel: 'offset stepper'));
+
+  @override
+  void didUpdateWidget(OffsetStepper oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusNode != null && _ownNode != null) {
+      _ownNode!.dispose();
+      _ownNode = null;
+    }
+  }
 
   @override
   void dispose() {
-    _node.dispose();
+    _ownNode?.dispose();
     super.dispose();
   }
 
@@ -274,52 +352,57 @@ class _OffsetStepperState extends State<OffsetStepper> {
       decreasedValue: formatEpgOffset(stepEpgOffset(value, -1)),
       onIncrease: () => _step(1),
       onDecrease: () => _step(-1),
-      child: Focus(
-        focusNode: _node,
-        autofocus: widget.autofocus,
-        onKeyEvent: _onKey,
-        onFocusChange: (f) => setState(() => _focused = f),
-        child: AnimatedContainer(
-          duration: FocusTokens.animation,
-          padding: const EdgeInsets.all(Spacing.xs),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: Radii.mdAll,
-            border: Border.all(
-              color: _focused ? FocusTokens.borderColor : AppColors.outline,
-              width: _focused ? FocusTokens.borderWidth : 1,
+      child: Actions(
+        actions: _actions,
+        child: Focus(
+          focusNode: _node,
+          autofocus: widget.autofocus,
+          onKeyEvent: _onKey,
+          onFocusChange: (f) => setState(() => _focused = f),
+          child: AnimatedContainer(
+            duration: FocusTokens.animation,
+            padding: const EdgeInsets.all(Spacing.xs),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: Radii.mdAll,
+              border: Border.all(
+                color: _focused ? FocusTokens.borderColor : AppColors.outline,
+                width: _focused ? FocusTokens.borderWidth : 1,
+              ),
             ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ExcludeFocus(
-                child: IconButton(
-                  key: const ValueKey('offset-earlier'),
-                  tooltip: l10n.settings_epgOffsetEarlier,
-                  onPressed: value > kMinEpgOffsetMin ? () => _step(-1) : null,
-                  icon: const Icon(Icons.remove),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ExcludeFocus(
+                  child: IconButton(
+                    key: const ValueKey('offset-earlier'),
+                    tooltip: l10n.settings_epgOffsetEarlier,
+                    onPressed: value > kMinEpgOffsetMin
+                        ? () => _step(-1)
+                        : null,
+                    icon: const Icon(Icons.remove),
+                  ),
                 ),
-              ),
-              SizedBox(
-                width: 112,
-                child: Text(
-                  formatEpgOffset(value),
-                  key: const ValueKey('offset-value'),
-                  textAlign: TextAlign.center,
-                  textDirection: TextDirection.ltr,
-                  style: theme.headlineSmall,
+                SizedBox(
+                  width: 112,
+                  child: Text(
+                    formatEpgOffset(value),
+                    key: const ValueKey('offset-value'),
+                    textAlign: TextAlign.center,
+                    textDirection: TextDirection.ltr,
+                    style: theme.headlineSmall,
+                  ),
                 ),
-              ),
-              ExcludeFocus(
-                child: IconButton(
-                  key: const ValueKey('offset-later'),
-                  tooltip: l10n.settings_epgOffsetLater,
-                  onPressed: value < kMaxEpgOffsetMin ? () => _step(1) : null,
-                  icon: const Icon(Icons.add),
+                ExcludeFocus(
+                  child: IconButton(
+                    key: const ValueKey('offset-later'),
+                    tooltip: l10n.settings_epgOffsetLater,
+                    onPressed: value < kMaxEpgOffsetMin ? () => _step(1) : null,
+                    icon: const Icon(Icons.add),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -327,12 +410,29 @@ class _OffsetStepperState extends State<OffsetStepper> {
   }
 }
 
-/// Asks for a guide URL. [onAdd] stores a valid http(s) URL and returns an
-/// error message to show, or null on success (the dialog then pops true).
+/// What [AddEpgUrlDialog.onAdd] did with a URL.
+enum AddEpgUrlResult {
+  /// Saved; the dialog closes.
+  added,
+
+  /// The source already lists this URL.
+  exists,
+
+  /// Saving failed (already logged).
+  failed,
+}
+
+/// Asks for a guide URL. [onAdd] stores a valid http(s) URL; the dialog
+/// pops true once it is added and otherwise shows why not. Down from the
+/// field goes to Add.
+///
+/// [onAdd] must not depend on the page that opened the dialog: that page
+/// can be gone by the time the user presses Add (for example a large phone
+/// rotated to portrait drops the Settings tab).
 class AddEpgUrlDialog extends StatefulWidget {
   const AddEpgUrlDialog({super.key, required this.onAdd});
 
-  final Future<String?> Function(String url) onAdd;
+  final Future<AddEpgUrlResult> Function(String url) onAdd;
 
   @override
   State<AddEpgUrlDialog> createState() => _AddEpgUrlDialogState();
@@ -340,49 +440,65 @@ class AddEpgUrlDialog extends StatefulWidget {
 
 class _AddEpgUrlDialogState extends State<AddEpgUrlDialog> {
   final _controller = TextEditingController();
+  final _fieldNode = FocusNode(debugLabel: 'epg url field');
+  final _addNode = FocusNode(debugLabel: 'epg url add');
+  late final _policy = PrimaryBelowTraversalPolicy(
+    from: [_fieldNode],
+    primary: _addNode,
+  );
   String? _error;
   bool _busy = false;
 
   @override
   void dispose() {
     _controller.dispose();
+    _fieldNode.dispose();
+    _addNode.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     if (_busy) return;
-    final l10n = AppLocalizations.of(context);
     final url = parseGuideUrl(_controller.text);
     if (url == null) {
-      setState(() => _error = l10n.errorInvalidUrl);
+      setState(() => _error = AppLocalizations.of(context).errorInvalidUrl);
       return;
     }
     setState(() {
       _busy = true;
       _error = null;
     });
-    final error = await widget.onAdd(url);
+    AddEpgUrlResult result;
+    try {
+      result = await widget.onAdd(url);
+    } on Object {
+      result = AddEpgUrlResult.failed;
+    }
     if (!mounted) return;
-    if (error == null) {
+    if (result == AddEpgUrlResult.added) {
       Navigator.of(context).pop(true);
       return;
     }
+    final l10n = AppLocalizations.of(context);
     setState(() {
       _busy = false;
-      _error = error;
+      _error = result == AddEpgUrlResult.exists
+          ? l10n.settings_epgUrlExists
+          : l10n.settings_saveFailed;
     });
   }
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    return AlertDialog(
+    final dialog = AlertDialog(
       title: Text(l10n.settings_addEpgUrl),
       content: SizedBox(
         width: 460,
         child: TvTextField(
           key: const ValueKey('epg-url-field'),
           controller: _controller,
+          focusNode: _fieldNode,
           autofocus: true,
           textInputAction: TextInputAction.done,
           keyboardType: TextInputType.url,
@@ -409,10 +525,12 @@ class _AddEpgUrlDialogState extends State<AddEpgUrlDialog> {
         ),
         FilledButton(
           key: const ValueKey('epg-url-add'),
+          focusNode: _addNode,
           onPressed: _busy ? null : _submit,
           child: Text(l10n.commonAdd),
         ),
       ],
     );
+    return FocusTraversalGroup(policy: _policy, child: dialog);
   }
 }

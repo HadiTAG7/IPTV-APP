@@ -1,5 +1,10 @@
 // Pure helpers behind the Settings screen: guide offset stepping and
-// formatting, refresh intervals, language choices and URL checks.
+// formatting, refresh intervals, language and device-mode choices and URL
+// checks.
+import 'package:flutter/widgets.dart';
+
+import '../../app/form_factor.dart';
+import '../../core/platform/device_caps.dart';
 
 /// Earliest guide offset: 12 hours back.
 const kMinEpgOffsetMin = -12 * 60;
@@ -61,4 +66,25 @@ String? parseGuideUrl(String input) {
   final scheme = uri.scheme.toLowerCase();
   if (scheme != 'http' && scheme != 'https') return null;
   return text;
+}
+
+/// Device modes offered on [platform]: Phone only where it changes the
+/// layout ([resolveFormFactor] keeps desktops a desktop), or when it is the
+/// saved [current] value.
+List<FormFactorOverride> deviceModeChoices(
+  TargetPlatform platform,
+  FormFactorOverride current,
+) {
+  final phoneWorks =
+      resolveFormFactor(
+        const DeviceCaps(),
+        FormFactorOverride.phone,
+        Size.zero,
+        platform,
+      ) ==
+      FormFactor.phone;
+  return [
+    for (final v in FormFactorOverride.values)
+      if (v != FormFactorOverride.phone || phoneWorks || v == current) v,
+  ];
 }

@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/app/form_factor.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/db/queries/settings_help_queries.dart';
 import 'package:iptv_player/features/settings/settings_format.dart';
@@ -49,6 +51,24 @@ void main() {
   test('language choices keep a saved other code', () {
     expect(languageChoicesWith('ar'), kPreferredLanguageCodes);
     expect(languageChoicesWith('de'), [...kPreferredLanguageCodes, 'de']);
+  });
+
+  test('device modes: no Phone on desktops unless saved', () {
+    const all = FormFactorOverride.values;
+    for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+      expect(deviceModeChoices(platform, FormFactorOverride.auto), all);
+    }
+    for (final platform in [
+      TargetPlatform.windows,
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+    ]) {
+      expect(deviceModeChoices(platform, FormFactorOverride.auto), [
+        FormFactorOverride.auto,
+        FormFactorOverride.tv,
+      ]);
+      expect(deviceModeChoices(platform, FormFactorOverride.phone), all);
+    }
   });
 
   test('guide URLs must be absolute http(s) URLs', () {

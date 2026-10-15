@@ -50,6 +50,9 @@ class SettingsHarness {
 
   final AppDatabase db;
   final int sourceId;
+
+  /// The app's log.
+  final log = RingLog();
   final refreshCalls = <RefreshCall>[];
   final prefillCalls = <PrefillCall>[];
 
@@ -127,7 +130,7 @@ Future<SettingsHarness> pumpSettingsApp(
               ? settings.copyWith(locale: language)
               : settings,
         ),
-        ringLogProvider.overrideWithValue(RingLog()),
+        ringLogProvider.overrideWithValue(h.log),
         autoSyncOnStartProvider.overrideWithValue(false),
         targetPlatformProvider.overrideWithValue(platform),
         appVersionProvider.overrideWith((ref) async => version),

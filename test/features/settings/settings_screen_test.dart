@@ -6,6 +6,7 @@ import 'package:iptv_player/app/home_shell.dart';
 import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/core/platform/device_caps.dart';
 import 'package:iptv_player/features/help/help_screen.dart';
+import 'package:iptv_player/features/help/licenses_page.dart';
 import 'package:iptv_player/features/settings/settings_dialogs.dart';
 import 'package:iptv_player/features/settings/settings_screen.dart';
 import 'package:iptv_player/player/engine/player_engine.dart';
@@ -347,6 +348,61 @@ void main() {
     await h.dispose(tester);
   });
 
+  testWidgets('desktop offers no Phone device mode unless it is saved', (
+    tester,
+  ) async {
+    Future<void> openDeviceMode() async {
+      await openSettingsTv(tester);
+      await moveTo(tester, const ValueKey('settings-deviceMode'));
+      await press(tester, LogicalKeyboardKey.select);
+      expect(find.byType(ChoiceDialog<FormFactorOverride>), findsOneWidget);
+    }
+
+    var h = await pumpSettingsApp(
+      tester,
+      platform: TargetPlatform.windows,
+      caps: const DeviceCaps.desktop(),
+    );
+    await openDeviceMode();
+    expect(find.byKey(choiceKey(FormFactorOverride.auto)), findsOneWidget);
+    expect(find.byKey(choiceKey(FormFactorOverride.tv)), findsOneWidget);
+    expect(find.byKey(choiceKey(FormFactorOverride.phone)), findsNothing);
+    await _back(tester);
+    await h.dispose(tester);
+
+    // A Phone saved earlier is still shown as the current value.
+    h = await pumpSettingsApp(
+      tester,
+      platform: TargetPlatform.windows,
+      caps: const DeviceCaps.desktop(),
+      settings: const AppSettings(formFactor: FormFactorOverride.phone),
+    );
+    await openDeviceMode();
+    expect(_inRow('settings-deviceMode', en.deviceModePhone), findsOneWidget);
+    expect(find.byKey(choiceKey(FormFactorOverride.phone)), findsOneWidget);
+    expect(focusedIn(choiceKey(FormFactorOverride.phone)), isTrue);
+    await moveTo(
+      tester,
+      choiceKey(FormFactorOverride.auto),
+      arrow: LogicalKeyboardKey.arrowUp,
+    );
+    await press(tester, LogicalKeyboardKey.select);
+    expect(
+      h.container(tester).read(settingsProvider).formFactor,
+      FormFactorOverride.auto,
+    );
+    await h.dispose(tester);
+
+    // Android keeps all three.
+    h = await pumpSettingsApp(tester);
+    await openDeviceMode();
+    for (final v in FormFactorOverride.values) {
+      expect(find.byKey(choiceKey(v)), findsOneWidget, reason: v.name);
+    }
+    await _back(tester);
+    await h.dispose(tester);
+  });
+
   testWidgets('Lite mode Auto shows the value detected on the device', (
     tester,
   ) async {
@@ -433,9 +489,10 @@ void main() {
     );
     await moveTo(tester, const ValueKey('settings-licenses'));
     await press(tester, LogicalKeyboardKey.select);
-    expect(find.byType(LicensePage), findsOneWidget);
+    // On TV the licences open in a page a remote can scroll.
+    expect(find.byType(TvLicensePage), findsOneWidget);
     await _back(tester);
-    expect(find.byType(LicensePage), findsNothing);
+    expect(find.byType(TvLicensePage), findsNothing);
     expect(focusedIn(const ValueKey('settings-licenses')), isTrue);
     await h.dispose(tester);
   });

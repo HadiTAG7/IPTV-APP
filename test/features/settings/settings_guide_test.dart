@@ -4,10 +4,12 @@ import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/secure/secret_store.dart';
 import 'package:iptv_player/epg/epg_progress.dart';
 import 'package:iptv_player/features/settings/settings_dialogs.dart';
+import 'package:iptv_player/features/settings/settings_screen.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/sources/models.dart';
 
@@ -175,6 +177,7 @@ void main() {
       await settle(tester);
       expect(await h.db.epgDao.epgSourceById(_manualId), isNotNull);
       expect(focusedIn(_deleteKey(_manualId)), isTrue);
+      expect(h.refreshCalls, isEmpty);
 
       // OK deletes it; focus moves to Add instead of the top of the page.
       await press(tester, LogicalKeyboardKey.select);
@@ -186,6 +189,8 @@ void main() {
         _xtreamId,
         _playlistId,
       ]);
+      // The channels it covered move to the remaining guides at once.
+      expect(h.refreshCalls, [(sourceId: h.sourceId, force: false)]);
       await h.dispose(tester);
     });
 
@@ -233,12 +238,13 @@ void main() {
       expect(shown(), '-12:00');
       expect(focusedIn(const ValueKey('offset-stepper')), isTrue);
 
-      // Down leaves the stepper for the buttons; Save stores the offset.
+      // Down goes to Save, not to the nearer Cancel; OK stores the offset.
       await press(tester, LogicalKeyboardKey.arrowDown);
-      if (focusedIn(const ValueKey('offset-cancel'))) {
-        await press(tester, toEnd(rtl));
-      }
-      expect(focusedIn(const ValueKey('offset-save')), isTrue);
+      expect(
+        focusedIn(const ValueKey('offset-save')),
+        isTrue,
+        reason: focusDescription(),
+      );
       await press(tester, LogicalKeyboardKey.select);
       expect(find.byType(EpgOffsetDialog), findsNothing);
       expect((await h.source()).epgOffsetMin, -12 * 60);
@@ -261,6 +267,84 @@ void main() {
       expect(h.refreshCalls, hasLength(1));
       await h.dispose(tester);
     });
+
+    testWidgets('$lang TV: OK on the guide offset saves it; Cancel stays '
+        'one step from Save', (tester) async {
+      final h = await pumpSettingsApp(tester, locale: locale);
+      await openSettingsTv(tester);
+      const row = ValueKey('settings-epgOffset');
+      await moveTo(tester, row);
+      await press(tester, LogicalKeyboardKey.select);
+      String shown() =>
+          tester.widget<Text>(find.byKey(const ValueKey('offset-value'))).data!;
+      await press(tester, toEnd(rtl));
+      await press(tester, toEnd(rtl));
+      expect(shown(), '+1:00');
+      // OK on the value saves it.
+      await press(tester, LogicalKeyboardKey.select);
+      expect(find.byType(EpgOffsetDialog), findsNothing);
+      expect((await h.source()).epgOffsetMin, 60);
+      expect(h.refreshCalls, [(sourceId: h.sourceId, force: true)]);
+      expect(focusedIn(row), isTrue, reason: focusDescription());
+
+      // Cancel is next to Save and discards the change.
+      await press(tester, LogicalKeyboardKey.select);
+      expect(shown(), '+1:00');
+      await press(tester, toEnd(rtl));
+      expect(shown(), '+1:30');
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(focusedIn(const ValueKey('offset-save')), isTrue);
+      await press(tester, toStart(rtl));
+      expect(focusedIn(const ValueKey('offset-cancel')), isTrue);
+      await press(tester, LogicalKeyboardKey.arrowUp);
+      expect(focusedIn(const ValueKey('offset-stepper')), isTrue);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(focusedIn(const ValueKey('offset-save')), isTrue);
+      await press(tester, toStart(rtl));
+      await press(tester, LogicalKeyboardKey.select);
+      expect(find.byType(EpgOffsetDialog), findsNothing);
+      expect((await h.source()).epgOffsetMin, 60);
+      expect(h.refreshCalls, hasLength(1));
+      expect(focusedIn(row), isTrue);
+      await h.dispose(tester);
+    });
+
+    testWidgets('$lang TV: Down from the guide URL goes to Add', (
+      tester,
+    ) async {
+      final h = await pumpSettingsApp(tester, locale: locale);
+      await openSettingsTv(tester);
+      await moveTo(tester, const ValueKey('settings-epgAdd'));
+      await press(tester, LogicalKeyboardKey.select);
+      expect(focusedIn(const ValueKey('epg-url-field')), isTrue);
+      await tester.enterText(
+        find.byKey(const ValueKey('epg-url-field')),
+        'https://example.com/guide.xml',
+      );
+      await settle(tester);
+
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(
+        focusedIn(const ValueKey('epg-url-add')),
+        isTrue,
+        reason: focusDescription(),
+      );
+      // Cancel is one step toward the start; Up returns to the field.
+      await press(tester, toStart(rtl));
+      expect(focusedIn(const ValueKey('epg-url-cancel')), isTrue);
+      await press(tester, LogicalKeyboardKey.arrowUp);
+      expect(focusedIn(const ValueKey('epg-url-field')), isTrue);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(focusedIn(const ValueKey('epg-url-add')), isTrue);
+
+      await press(tester, LogicalKeyboardKey.select);
+      expect(find.byType(AddEpgUrlDialog), findsNothing);
+      final rows = await h.db.epgDao.epgSources(h.sourceId);
+      expect(rows.map((r) => r.url), ['https://example.com/guide.xml']);
+      expect(h.refreshCalls, [(sourceId: h.sourceId, force: false)]);
+      expect(focusedIn(const ValueKey('settings-epgAdd')), isTrue);
+      await h.dispose(tester);
+    });
   }
 
   testWidgets('TV: OK switches a guide URL off and on', (tester) async {
@@ -272,14 +356,18 @@ void main() {
     await press(tester, LogicalKeyboardKey.select);
     expect((await h.db.epgDao.epgSourceById(_playlistId))!.enabled, isFalse);
     expect(_rowText(row, en.commonOff), findsOneWidget);
-    expect(h.refreshCalls, isEmpty);
+    // The channels this guide covered move to the other guides at once.
+    expect(h.refreshCalls, [(sourceId: h.sourceId, force: false)]);
     expect(focusedIn(row), isTrue);
 
     await press(tester, LogicalKeyboardKey.select);
     expect((await h.db.epgDao.epgSourceById(_playlistId))!.enabled, isTrue);
     expect(_rowText(row, en.settings_epgStatusOk), findsOneWidget);
     // Switching a guide on fetches what it is missing.
-    expect(h.refreshCalls, [(sourceId: h.sourceId, force: false)]);
+    expect(h.refreshCalls, [
+      (sourceId: h.sourceId, force: false),
+      (sourceId: h.sourceId, force: false),
+    ]);
     expect(focusedIn(row), isTrue);
     await h.dispose(tester);
   });
@@ -415,7 +503,9 @@ void main() {
   testWidgets('a failing guide refresh is logged, not thrown', (tester) async {
     final h = await pumpSettingsApp(
       tester,
-      refresh: (id, {required force}) async => throw StateError('offline'),
+      refresh: (id, {required force}) async => throw StateError(
+        'offline: http://127.0.0.1:9/xmltv.php?username=alice&password=s3cret',
+      ),
     );
     await openSettingsTv(tester);
     await moveTo(tester, const ValueKey('settings-epgRefresh'));
@@ -428,6 +518,16 @@ void main() {
       ),
       findsNothing,
     );
+    final lines = h.log.lines;
+    expect(
+      lines.where((l) => l.contains('Guide refresh failed')),
+      hasLength(1),
+    );
+    expect(lines.any((l) => l.contains('offline')), isTrue);
+    for (final line in lines) {
+      expect(line, isNot(contains('s3cret')));
+      expect(line, isNot(contains('alice')));
+    }
     await h.dispose(tester);
   });
 
@@ -462,6 +562,125 @@ void main() {
     await settle(tester);
     expect(await h.db.epgDao.epgSourceById(_manualId), isNull);
     expect(find.byKey(row), findsNothing);
+    await h.dispose(tester);
+  });
+
+  testWidgets('the Add guide URL dialog keeps working after Settings is '
+      'gone', (tester) async {
+    final h = await pumpSettingsApp(tester, tv: false);
+    // A large phone in landscape gets the rail, with a Settings tab.
+    tester.view.physicalSize = const Size(915, 412) * 2;
+    await settle(tester);
+    await tester.tap(find.byKey(settingsRail));
+    await settle(tester);
+    expect(find.byType(SettingsScreen), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('settings-epgAdd')),
+      100,
+      scrollable: find
+          .descendant(
+            of: find.byType(SettingsScreen),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.tap(find.byKey(const ValueKey('settings-epgAdd')));
+    await settle(tester);
+    expect(find.byType(AddEpgUrlDialog), findsOneWidget);
+
+    // Portrait: the phone shell has no Settings tab, so the page is gone
+    // while the dialog stays.
+    tester.view.physicalSize = const Size(412, 915) * 2;
+    await settle(tester);
+    expect(find.byType(SettingsScreen), findsNothing);
+    expect(find.byType(AddEpgUrlDialog), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('epg-url-field')),
+      'https://example.com/a.xml',
+    );
+    await tester.tap(find.byKey(const ValueKey('epg-url-add')));
+    await settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(find.byType(AddEpgUrlDialog), findsNothing);
+    final rows = await h.db.epgDao.epgSources(h.sourceId);
+    expect(rows.map((r) => r.url), ['https://example.com/a.xml']);
+    expect(rows.single.origin, EpgOrigin.manual);
+    expect(h.refreshCalls, [(sourceId: h.sourceId, force: false)]);
+    await h.dispose(tester);
+  });
+
+  testWidgets('TV: a running guide refresh only busies its own source', (
+    tester,
+  ) async {
+    final pending = Completer<void>();
+    final calls = <RefreshCall>[];
+    late int homeId;
+    late int otherId;
+    final h = await pumpSettingsApp(
+      tester,
+      seed: (db, id) async {
+        homeId = id;
+        otherId = await db.sourcesDao.create(
+          const SourceConfig(
+            kind: SourceKind.m3uUrl,
+            url: 'http://127.0.0.1:9/other.m3u',
+            name: 'Other',
+          ),
+        );
+        await db.sourcesDao.markSynced(otherId, DateTime.now());
+      },
+      refresh: (id, {required force}) {
+        calls.add((sourceId: id, force: force));
+        return id == homeId ? pending.future : Future<void>.value();
+      },
+    );
+    await openSettingsTv(tester);
+    expect(find.text(en.settings_guideFor('Home')), findsOneWidget);
+    const row = ValueKey('settings-epgRefresh');
+    Finder spinner() => find.descendant(
+      of: find.byKey(row),
+      matching: find.byType(CircularProgressIndicator),
+    );
+    await moveTo(tester, row);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(calls, [(sourceId: homeId, force: true)]);
+    expect(spinner(), findsOneWidget);
+
+    // Another source becomes active while Home's refresh runs.
+    await h
+        .container(tester)
+        .read(activeSourceIdProvider.notifier)
+        .select(otherId);
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text(en.settings_guideFor('Other')), findsOneWidget);
+    expect(spinner(), findsNothing);
+    expect(focusedIn(row), isTrue, reason: focusDescription());
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(calls, [
+      (sourceId: homeId, force: true),
+      (sourceId: otherId, force: true),
+    ]);
+
+    // Back on Home, its refresh is still running.
+    await h
+        .container(tester)
+        .read(activeSourceIdProvider.notifier)
+        .select(homeId);
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(spinner(), findsOneWidget);
+    pending.complete();
+    await settle(tester);
+    expect(spinner(), findsNothing);
     await h.dispose(tester);
   });
 }

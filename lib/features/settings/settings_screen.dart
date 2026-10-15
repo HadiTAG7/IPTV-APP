@@ -8,6 +8,7 @@ import '../../app/home_shell.dart';
 import '../../app/providers.dart';
 import '../../core/db/app_db.dart';
 import '../../core/db/queries/settings_help_queries.dart';
+import '../../core/log/ring_log.dart';
 import '../../core/net/redact.dart';
 import '../../epg/epg_progress.dart';
 import '../../l10n/gen/app_localizations.dart';
@@ -16,6 +17,7 @@ import '../../sources/models.dart';
 import '../../theme/tokens.dart';
 import '../../tv/focus_watchdog.dart';
 import '../../tv/tv_focusable.dart';
+import '../help/licenses_page.dart';
 import 'providers.dart';
 import 'settings_dialogs.dart';
 import 'settings_format.dart';
@@ -41,7 +43,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _firstNode = FocusNode(debugLabel: 'settings:first');
   final _addEpgNode = FocusNode(debugLabel: 'settings:addEpg');
   FocusWatchdogState? _watchdog;
-  bool _refreshing = false;
+
+  /// Sources whose "Refresh guide" is running. Per source: the tab stays
+  /// mounted while the active source changes.
+  final _refreshing = <int>{};
 
   /// Whether this page is a home-shell tab (not a pushed page).
   bool get _inTab => HomeBackScope.maybeOf(context) != null;
@@ -117,16 +122,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _refreshNow(int sourceId) async {
-    if (_refreshing) return;
+    if (_refreshing.contains(sourceId)) return;
     final refresh = _refresher;
-    setState(() => _refreshing = true);
+    setState(() => _refreshing.add(sourceId));
     ScaffoldMessenger.maybeOf(context)
       ?..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(content: Text(AppLocalizations.of(context).guideUpdating)),
       );
     await refresh(sourceId, force: true);
-    if (mounted) setState(() => _refreshing = false);
+    if (mounted) setState(() => _refreshing.remove(sourceId));
   }
 
   Future<void> _toggleEpg(int sourceId, EpgSourceRow row) async {
@@ -134,41 +139,49 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final dao = ref.read(epgDaoProvider);
     final refresh = _refresher;
     final ok = await _write(() => dao.setEpgSourceEnabled(row.id, enable));
-    // A guide switched on may never have been downloaded.
-    if (ok && enable) unawaited(refresh(sourceId, force: false));
+    // A guide switched on may never have been downloaded. One switched off
+    // hands its channels to the remaining guides, which link and fetch
+    // them on the next refresh: run it now so they keep their programmes.
+    if (ok) unawaited(refresh(sourceId, force: false));
   }
 
   Future<void> _addEpgUrl(int sourceId) async {
+    // The dialog can outlive this page (a large phone rotated to portrait
+    // drops the Settings tab), so everything it uses is read up front and
+    // it never touches this State.
     final refresh = _refresher;
+    final db = ref.read(databaseProvider);
+    final log = ref.read(ringLogProvider);
     final added = await showDialog<bool>(
       context: context,
       builder: (_) =>
-          AddEpgUrlDialog(onAdd: (url) => _storeEpgUrl(sourceId, url)),
+          AddEpgUrlDialog(onAdd: (url) => _storeEpgUrl(db, log, sourceId, url)),
     );
     if (added ?? false) unawaited(refresh(sourceId, force: false));
   }
 
-  /// Saves a typed guide URL; returns an error message or null.
-  Future<String?> _storeEpgUrl(int sourceId, String url) async {
-    final l10n = AppLocalizations.of(context);
-    final db = ref.read(databaseProvider);
-    final log = ref.read(ringLogProvider);
+  /// Saves a typed guide URL unless the source already lists it.
+  static Future<AddEpgUrlResult> _storeEpgUrl(
+    AppDatabase db,
+    RingLog log,
+    int sourceId,
+    String url,
+  ) async {
     try {
       final masked = redact(url);
       final existing = await db.epgDao.epgSources(sourceId);
-      if (existing.any((r) => r.url == masked)) {
-        return l10n.settings_epgUrlExists;
-      }
+      if (existing.any((r) => r.url == masked)) return AddEpgUrlResult.exists;
       await db.addManualEpgSource(sourceId, url);
-      return null;
+      return AddEpgUrlResult.added;
     } on Object catch (e, st) {
       log.error('Adding a guide URL failed', e, st);
-      return l10n.settings_saveFailed;
+      return AddEpgUrlResult.failed;
     }
   }
 
-  Future<void> _deleteEpg(EpgSourceRow row) async {
+  Future<void> _deleteEpg(int sourceId, EpgSourceRow row) async {
     final l10n = AppLocalizations.of(context);
+    final refresh = _refresher;
     final confirmed = await showConfirmDialog(
       context,
       title: l10n.settings_deleteEpgUrl,
@@ -179,9 +192,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (!confirmed || !mounted) return;
     final dao = ref.read(epgDaoProvider);
     final ok = await _write(() => dao.deleteEpgSource(row.id));
+    if (!ok) return;
+    // The channels this guide covered move to the remaining guides.
+    unawaited(refresh(sourceId, force: false));
     // The row and its delete button go away: keep focus in the guide list
     // instead of letting it fall back to the top of the page.
-    if (ok && mounted) _addEpgNode.requestFocus();
+    if (mounted) _addEpgNode.requestFocus();
   }
 
   Future<void> _editOffset(SourceRow source) async {
@@ -204,7 +220,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final inTab = _inTab;
     final s = ref.watch(settingsProvider);
     final detectedLite = ref.watch(deviceCapsProvider).lite;
-    final android = ref.watch(targetPlatformProvider) == TargetPlatform.android;
+    final platform = ref.watch(targetPlatformProvider);
+    final android = platform == TargetPlatform.android;
     final source = ref.watch(activeSourceProvider);
     final version = ref.watch(appVersionProvider).value;
     final engines = [
@@ -212,6 +229,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (android) EngineSetting.exo,
       EngineSetting.mpv,
     ];
+    final deviceModes = deviceModeChoices(platform, s.formFactor);
 
     final rows = <Widget>[
       if (large && inTab)
@@ -258,7 +276,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         onSelect: () => _pick(
           l10n.settingsDeviceMode,
           [
-            for (final v in FormFactorOverride.values)
+            for (final v in deviceModes)
               (value: v, label: _deviceModeLabel(l10n, v)),
           ],
           s.formFactor,
@@ -411,10 +429,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         large: large,
         icon: Icons.description_outlined,
         title: l10n.settingsLicenses,
-        onSelect: () => showLicensePage(
-          context: context,
-          applicationName: l10n.appTitle,
-          applicationVersion: version,
+        onSelect: () => unawaited(
+          showAppLicenses(
+            context,
+            applicationName: l10n.appTitle,
+            applicationVersion: version,
+          ),
         ),
       ),
     ];
@@ -454,6 +474,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final guides = epg.value;
     final lastEpgAt = source.lastEpgAt;
     final offset = source.epgOffsetMin;
+    final refreshing = _refreshing.contains(source.id);
     return [
       SettingsSection(
         l10n.settingsGuide,
@@ -484,7 +505,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             large: large,
             onToggle: () => _toggleEpg(source.id, row),
             onDelete: row.origin == EpgOrigin.manual
-                ? () => _deleteEpg(row)
+                ? () => _deleteEpg(source.id, row)
                 : null,
           ),
       SettingsTile(
@@ -514,13 +535,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         subtitle: lastEpgAt == null
             ? l10n.settings_epgRefreshNow
             : l10n.guideUpdated(lastEpgAt.toLocal()),
-        trailing: _refreshing
+        trailing: refreshing
             ? const SizedBox.square(
                 dimension: 18,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             : null,
-        onSelect: _refreshing ? null : () => _refreshNow(source.id),
+        onSelect: refreshing ? null : () => _refreshNow(source.id),
       ),
       SettingsTile(
         key: const ValueKey('settings-epgInterval'),
