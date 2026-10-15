@@ -1,6 +1,6 @@
 // Small local XMLTV server for EpgService tests: a fixed body with optional
-// gzip, ETag / Last-Modified validators answered with 304, a forced status
-// and a stall point. All guide data is synthetic.
+// gzip, ETag / Last-Modified validators answered with 304, a forced status,
+// a stall point and a dropped connection. All guide data is synthetic.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -45,6 +45,10 @@ class GuideServer {
 
   /// When set, the body stops after this many bytes until [release].
   int? stallAfterBytes;
+
+  /// When set, the connection is closed after this many bytes of a body
+  /// announced in full (`Content-Length`).
+  int? dropAfterBytes;
   Completer<void> _release = Completer<void>();
 
   final requests = <GuideRequest>[];
@@ -103,6 +107,15 @@ class GuideServer {
       res.headers.contentType = ContentType('text', 'xml', charset: 'utf-8');
       final bytes = utf8.encode(body);
       final payload = gzipped ? gzip.encode(bytes) : bytes;
+      final drop = dropAfterBytes;
+      if (drop != null && drop < payload.length) {
+        res.contentLength = payload.length;
+        final socket = await res.detachSocket();
+        socket.add(payload.sublist(0, drop));
+        await socket.flush();
+        socket.destroy();
+        return;
+      }
       final stall = stallAfterBytes;
       if (stall != null && stall < payload.length) {
         res.add(payload.sublist(0, stall));

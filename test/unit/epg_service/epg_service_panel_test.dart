@@ -150,7 +150,10 @@ void main() {
     expect(await guideChannelCount(db, guide), panel.catalog.live.length);
 
     final row = await guideRow(db, guide);
-    expect(EpgSourceStatus.parse(row.status), EpgSourceStatus.ok);
+    expect(
+      EpgSourceStatus.parse(row.status),
+      EpgSourceStatus(EpgStatusKind.ok, null, now),
+    );
     expect(row.lastFetchAt, now);
     expect(row.programmeCount, programmes.length);
     expect((await db.sourcesDao.byId(source))!.lastEpgAt, now);
@@ -199,7 +202,12 @@ void main() {
     final first = await storedProgrammes(db, guide);
     final firstLinks = await db.epgDao.linksFor(source);
 
-    final events = await runRefresh(service, source);
+    // xmltv.php sends no validators: a current guide is not fetched again
+    // unless forced.
+    final skipped = await runRefresh(service, source);
+    expect(skipped.whereType<EpgGuideSkipped>(), hasLength(1));
+    expect(panel.stats.requestsByPath['/xmltv.php'], 1);
+    final events = await runRefresh(service, source, force: true);
 
     expect(events.last, isA<EpgRefreshDone>());
     final second = await storedProgrammes(db, guide);
@@ -229,7 +237,7 @@ void main() {
       outside.xmltvId,
     );
     await runRefresh(service, source);
-    await runRefresh(service, source);
+    await runRefresh(service, source, force: true);
 
     final link = await db.epgDao.linkFor(source, '${first.id}');
     expect(link?.kind, EpgMatchKind.manual);

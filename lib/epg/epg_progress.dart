@@ -5,10 +5,11 @@ import '../sources/models.dart';
 
 /// Progress of one `EpgService.refresh` run for a source.
 ///
-/// A run emits, per enabled guide source in priority order, an
-/// [EpgGuideStarted] followed by either [EpgGuideNotModified], or
-/// [EpgChannelsParsed] / [EpgChannelsMatched] / [EpgProgrammesStored]
-/// updates and then [EpgGuideFinished], or [EpgGuideFailed]. Every run ends
+/// A run emits, per enabled guide source in priority order, either an
+/// [EpgGuideSkipped], or an [EpgGuideStarted] followed by either
+/// [EpgGuideNotModified], or [EpgChannelsParsed] / [EpgChannelsMatched] /
+/// [EpgProgrammesStored] updates and then [EpgGuideFinished], or
+/// [EpgGuideFailed]. Every run ends
 /// with exactly one terminal event ([isTerminal]): [EpgRefreshDone],
 /// [EpgRefreshFailed] or [EpgRefreshCancelled]. Errors are reported as
 /// events, never as stream errors.
@@ -19,6 +20,23 @@ sealed class EpgProgress {
 
   /// Whether this is the last event of the run.
   bool get isTerminal => false;
+}
+
+/// One guide source was not downloaded: its last full import (or a 304
+/// check) is more recent than the run's `refreshHours`, and every guide
+/// channel the source's channels link to was kept by that import. The stored
+/// guide is kept.
+final class EpgGuideSkipped extends EpgProgress {
+  const EpgGuideSkipped(
+    super.sourceId, {
+    required this.epgSourceId,
+    required this.matched,
+  });
+
+  final int epgSourceId;
+
+  /// Playlist channels linked to this guide.
+  final int matched;
 }
 
 /// Download of one guide source begins.
@@ -139,6 +157,7 @@ final class EpgRefreshDone extends EpgProgress {
     this.guides = 0,
     this.imported = 0,
     this.notModified = 0,
+    this.skipped = 0,
     this.failed = 0,
     this.matched = 0,
     this.programmes = 0,
@@ -149,6 +168,9 @@ final class EpgRefreshDone extends EpgProgress {
   final int guides;
   final int imported;
   final int notModified;
+
+  /// Guides kept without a download ([EpgGuideSkipped]).
+  final int skipped;
   final int failed;
 
   /// Playlist channels linked to a guide, manual links included.
@@ -162,7 +184,8 @@ final class EpgRefreshDone extends EpgProgress {
 }
 
 /// The run failed as a whole: unknown source, implausible device clock, a
-/// database error, or every guide failed.
+/// database error, or no guide is current (every guide that was not
+/// skipped failed).
 final class EpgRefreshFailed extends EpgProgress {
   const EpgRefreshFailed(super.sourceId, {required this.message});
 
@@ -198,10 +221,14 @@ enum EpgStatusKind {
 
 /// The `epg_sources.status` column, written by `EpgService`.
 ///
-/// Stored as `ok`, `notModified`, `cancelled` or `error: <message>` so the
-/// UI can localise the kind and show the (redacted) message.
+/// Stored as the kind, the attempt time in epoch seconds and, for errors,
+/// the redacted message: `ok@1736510400`, `notModified@1736510400`,
+/// `cancelled@1736510400` or `error@1736510400: HTTP 500 ...`. Rows written
+/// without a time (`ok`, `error: <message>`) still parse. The UI can
+/// localise the kind and show the message; `EpgService.needsRefresh` uses
+/// [at] to wait after a failure and to trust a recent 304.
 class EpgSourceStatus {
-  const EpgSourceStatus(this.kind, [this.message]);
+  const EpgSourceStatus(this.kind, [this.message, this.at]);
 
   static const ok = EpgSourceStatus(EpgStatusKind.ok);
   static const notModified = EpgSourceStatus(EpgStatusKind.notModified);
@@ -212,35 +239,58 @@ class EpgSourceStatus {
   /// Redacted error text for [EpgStatusKind.error].
   final String? message;
 
-  static const _errorPrefix = 'error:';
+  /// When the attempt was made (start of the refresh run, whole seconds),
+  /// or null when unknown.
+  final DateTime? at;
+
+  static final _format = RegExp(
+    r'^(ok|notModified|cancelled|error)(?:@(-?\d{1,12}))?(?::(.*))?$',
+    dotAll: true,
+  );
 
   /// Parses a stored status; null when there is none yet (never attempted).
   /// Unknown text is read as an error message.
   static EpgSourceStatus? parse(String? raw) {
     if (raw == null || raw.isEmpty) return null;
-    for (final kind in EpgStatusKind.values) {
-      if (kind != EpgStatusKind.error && raw == kind.name) {
-        return EpgSourceStatus(kind);
-      }
+    final m = _format.firstMatch(raw);
+    if (m == null) return EpgSourceStatus(EpgStatusKind.error, raw);
+    final kind = EpgStatusKind.values.byName(m[1]!);
+    final message = m[3];
+    if (kind != EpgStatusKind.error && message != null) {
+      return EpgSourceStatus(EpgStatusKind.error, raw);
     }
-    final message = raw.startsWith(_errorPrefix)
-        ? raw.substring(_errorPrefix.length).trim()
-        : raw;
-    return EpgSourceStatus(EpgStatusKind.error, message);
+    final seconds = m[2];
+    return EpgSourceStatus(
+      kind,
+      message?.trim(),
+      seconds == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(
+              int.parse(seconds) * 1000,
+              isUtc: true,
+            ),
+    );
   }
 
-  String encode() => kind == EpgStatusKind.error
-      ? '$_errorPrefix ${message ?? ''}'.trimRight()
-      : kind.name;
+  String encode() {
+    final time = at;
+    final head = time == null
+        ? kind.name
+        : '${kind.name}@${time.millisecondsSinceEpoch ~/ 1000}';
+    return kind == EpgStatusKind.error && message != null
+        ? '$head: $message'
+        : head;
+  }
 
   @override
   bool operator ==(Object other) =>
       other is EpgSourceStatus &&
       other.kind == kind &&
-      other.message == message;
+      other.message == message &&
+      other.at == at;
 
   @override
-  int get hashCode => Object.hash(kind, message);
+  int get hashCode => Object.hash(kind, message, at);
 
   @override
   String toString() => encode();

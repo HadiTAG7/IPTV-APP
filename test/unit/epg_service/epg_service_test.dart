@@ -12,6 +12,7 @@ import 'package:iptv_player/core/time/clock.dart';
 import 'package:iptv_player/epg/epg_models.dart';
 import 'package:iptv_player/epg/epg_progress.dart';
 import 'package:iptv_player/epg/epg_service.dart';
+import 'package:iptv_player/epg/xmltv_parser.dart';
 import 'package:iptv_player/sources/models.dart';
 
 import '../../support/real_http.dart';
@@ -41,17 +42,56 @@ const _playlist = [
   ChannelData(key: 'd', name: 'Delta', categoryKeys: ['all']),
 ];
 
-/// Hourly programmes from now-20h for 5 days on each guide channel.
-List<String> _standardGuide() {
-  final from = _now.subtract(const Duration(hours: 20));
+/// Hourly programmes from now-20h (plus [shift]) for 5 days on each guide
+/// channel; [extra] adds guide channels (id -> name).
+List<String> _standardGuide({
+  Map<String, String> extra = const {},
+  Duration shift = Duration.zero,
+}) {
+  final from = _now.subtract(const Duration(hours: 20)).add(shift);
+  final names = {
+    'alpha.tv': 'Alpha',
+    'beta.id': 'Beta HD',
+    'gamma.id': 'Gamma Plus',
+    'other.tv': 'Other',
+    ...extra,
+  };
   return [
-    channelXml('alpha.tv', ['Alpha']),
-    channelXml('beta.id', ['Beta HD']),
-    channelXml('gamma.id', ['Gamma Plus']),
-    channelXml('other.tv', ['Other']),
-    for (final id in ['alpha.tv', 'beta.id', 'gamma.id', 'other.tv'])
-      ...hourly(id, from, 5 * 24),
+    for (final MapEntry(:key, :value) in names.entries)
+      channelXml(key, [value]),
+    for (final id in names.keys) ...hourly(id, from, 5 * 24),
   ];
+}
+
+/// Records the id filter of every parse.
+class _SpyParser extends XmltvParser {
+  _SpyParser();
+
+  final filters = <Set<String>?>[];
+
+  @override
+  Stream<XmltvBatch> parse(
+    Stream<List<int>> bytes, {
+    Set<String>? wantedChannelIds,
+    DateTime? windowStart,
+    DateTime? windowEnd,
+    int batchSize = 5000,
+    int Function(String channelId)? shiftMinutesFor,
+    int offsetMinutes = 0,
+    List<String> preferredLangs = const ['ar', 'en'],
+  }) {
+    filters.add(wantedChannelIds);
+    return super.parse(
+      bytes,
+      wantedChannelIds: wantedChannelIds,
+      windowStart: windowStart,
+      windowEnd: windowEnd,
+      batchSize: batchSize,
+      shiftMinutesFor: shiftMinutesFor,
+      offsetMinutes: offsetMinutes,
+      preferredLangs: preferredLangs,
+    );
+  }
 }
 
 /// Programmes per channel inside now-12h .. now+3d for [_standardGuide].
@@ -352,16 +392,34 @@ void main() {
       expect(after, hasLength(before.length - 3 * 13));
       expect(await db.epgDao.linksFor(source), links);
       final row = await guideRow(db, guide);
-      expect(EpgSourceStatus.parse(row.status), EpgSourceStatus.notModified);
+      final checkedAt = _now.add(const Duration(hours: 13));
+      expect(
+        EpgSourceStatus.parse(row.status),
+        EpgSourceStatus(EpgStatusKind.notModified, null, checkedAt),
+      );
       expect(row.lastFetchAt, _now);
       expect(row.programmeCount, after.length);
-      // The data is still from the first import: due again.
+
+      // The 304 counts as a check: not due, and a refresh skips the guide,
+      // until the stored window gets too short (a day after the import).
+      clock.advance(const Duration(hours: 1));
+      expect(await service.needsRefresh(source), isFalse);
+      final skipped = await runRefresh(service, source);
+      expect(skipped.whereType<EpgGuideSkipped>().single.matched, 3);
+      expect((skipped.last as EpgRefreshDone).skipped, 1);
+      expect(server.requests, hasLength(2));
+      clock.advance(const Duration(hours: 9, minutes: 59));
+      expect(await service.needsRefresh(source), isFalse);
+      clock.advance(const Duration(minutes: 1));
       expect(await service.needsRefresh(source), isTrue);
+      await runRefresh(service, source);
+      expect(server.requests.last.isConditional, isFalse);
     });
 
     test('Last-Modified is sent back as If-Modified-Since', () async {
       server.lastModified = 'Sat, 10 Jan 2026 09:00:00 GMT';
       await runRefresh(service, source);
+      clock.advance(const Duration(hours: 12));
 
       final events = await runRefresh(service, source);
 
@@ -393,7 +451,11 @@ void main() {
       expect(await storedIds(db, guide), contains('other.tv'));
       expect((await db.epgDao.linkFor(source, 'o'))?.xmltvId, 'other.tv');
 
-      // Unchanged since: conditional again.
+      // Unchanged since: skipped while current, then conditional again.
+      final skipped = await runRefresh(service, source);
+      expect(skipped.whereType<EpgGuideSkipped>(), hasLength(1));
+      expect(server.requests, hasLength(4));
+      clock.advance(const Duration(hours: 12));
       await runRefresh(service, source);
       expect(server.requests.last.ifNoneMatch, '"v1"');
     });
@@ -475,19 +537,26 @@ void main() {
 
       await service.setManualMapping(source, 'd', guide, 'other.tv');
 
-      expect((await guideRow(db, guide)).etag, isNull);
       await runRefresh(service, source);
+      expect(server.requests, hasLength(2));
       expect(server.requests.last.isConditional, isFalse);
       final link = await db.epgDao.linkFor(source, 'd');
       expect(link?.kind, EpgMatchKind.manual);
       expect(await storedIds(db, guide), contains('other.tv'));
 
-      // Linking to an id that already has programmes keeps the validators.
+      // Linking to an id that already has programmes needs no download.
       await service.setManualMapping(source, 'b', guide, 'alpha.tv');
-      expect((await guideRow(db, guide)).etag, '"v1"');
-      final events = await runRefresh(service, source);
+      var events = await runRefresh(service, source);
+      expect(events.whereType<EpgGuideSkipped>(), hasLength(1));
+      expect(server.requests, hasLength(2));
+      clock.advance(const Duration(hours: 12));
+      events = await runRefresh(service, source);
+      expect(server.requests.last.ifNoneMatch, '"v1"');
       expect(events.whereType<EpgGuideNotModified>(), hasLength(1));
       expect((await db.epgDao.linkFor(source, 'b'))?.xmltvId, 'alpha.tv');
+      final nowNext = await db.epgDao.nowNext(source, ['b', 'd'], clock.now());
+      expect(nowNext['b']?.now?.channelId, 'alpha.tv');
+      expect(nowNext['d']?.now?.channelId, 'other.tv');
     });
 
     test(
@@ -565,7 +634,10 @@ void main() {
       expect(events.where((e) => e.isTerminal), hasLength(1));
       expect(service.isRefreshing(source), isFalse);
       final row = await guideRow(db, guide);
-      expect(EpgSourceStatus.parse(row.status), EpgSourceStatus.cancelled);
+      expect(
+        EpgSourceStatus.parse(row.status),
+        EpgSourceStatus(EpgStatusKind.cancelled, null, _now),
+      );
       // Partial data: no validators, no import time.
       expect(row.etag, isNull);
       expect(row.lastFetchAt, isNull);
@@ -596,7 +668,8 @@ void main() {
     test('a second refresh joins the running one', () async {
       server.stallAfterBytes = 10;
       final first = runRefresh(service, source);
-      final second = runRefresh(service, source, force: true);
+      // A Lite request is covered by a full-window run.
+      final second = runRefresh(service, source, lite: true);
       await _until(() => server.requests.isNotEmpty);
       expect(service.isRefreshing(source), isTrue);
       // Joining late starts with the latest event.
@@ -613,7 +686,7 @@ void main() {
       expect(service.isRefreshing(source), isFalse);
 
       // Finished runs are not joined.
-      final third = await runRefresh(service, source);
+      final third = await runRefresh(service, source, force: true);
       expect(third.first, isA<EpgGuideStarted>());
       expect(server.requests, hasLength(2));
     });
@@ -628,10 +701,308 @@ void main() {
       expect(service.isRefreshing(source), isFalse);
       expect(() => service.refresh(source), throwsStateError);
       expect(
-        EpgSourceStatus.parse((await guideRow(db, guide)).status),
-        EpgSourceStatus.cancelled,
+        EpgSourceStatus.parse((await guideRow(db, guide)).status)?.kind,
+        EpgStatusKind.cancelled,
       );
     });
+  });
+
+  group('kept ids', () {
+    test('a guide failing after a sync does not link new channels to ids '
+        'it never stored', () async {
+      server.etag = '"v1"';
+      await runRefresh(service, source);
+      clock.advance(const Duration(hours: 1));
+      // The new channel matches the stored guide channel "Other".
+      await syncChannels(db, source, [
+        ..._playlist,
+        const ChannelData(key: 'o', name: 'Other', categoryKeys: ['all']),
+      ]);
+
+      server.status = 500;
+      final failed = await runRefresh(service, source);
+
+      expect(failed.last, isA<EpgRefreshFailed>());
+      expect(server.requests.last.isConditional, isFalse);
+      expect(await db.epgDao.linkFor(source, 'o'), isNull);
+      expect(
+        (await db.epgDao.linksFor(source)).keys,
+        unorderedEquals(['a', 'b', 'c']),
+      );
+
+      // Back up half an hour later: the guide is downloaded in full.
+      server.status = 200;
+      clock.advance(const Duration(minutes: 30));
+      final events = await runRefresh(service, source);
+      expect(server.requests.last.isConditional, isFalse);
+      expect(events.whereType<EpgGuideFinished>(), hasLength(1));
+      final nowNext = await db.epgDao.nowNext(source, ['o'], clock.now());
+      expect(nowNext['o']?.now?.channelId, 'other.tv');
+    });
+
+    test('a manual link set while a refresh runs is fetched by the next '
+        'refresh', () async {
+      server.etag = '"v1"';
+      await runRefresh(service, source);
+      clock.advance(const Duration(minutes: 10));
+      server.stallAfterBytes = 10;
+      final run = runRefresh(service, source, force: true);
+      await _until(() => server.requests.length == 2);
+
+      await service.setManualMapping(source, 'd', guide, 'other.tv');
+      server.release();
+
+      expect((await run).last, isA<EpgRefreshDone>());
+      // That run did not know the link and stored the validators again.
+      expect((await guideRow(db, guide)).etag, '"v1"');
+      expect(await storedIds(db, guide), isNot(contains('other.tv')));
+
+      clock.advance(const Duration(minutes: 10));
+      server.stallAfterBytes = null;
+      final events = await runRefresh(service, source);
+      expect(server.requests, hasLength(3));
+      expect(server.requests.last.isConditional, isFalse);
+      expect(events.whereType<EpgGuideFinished>(), hasLength(1));
+      final nowNext = await db.epgDao.nowNext(source, ['d'], clock.now());
+      expect(nowNext['d']?.now?.channelId, 'other.tv');
+    });
+  });
+
+  group('scheduling', () {
+    test('a dead guide neither keeps needsRefresh true nor makes refresh '
+        'download the current guide again', () async {
+      final dead = await db.epgDao.addEpgSource(
+        source,
+        'http://127.0.0.1:1/dead.xml',
+        EpgOrigin.manual,
+      );
+      final first = await runRefresh(service, source);
+      expect((first.last as EpgRefreshDone).failed, 1);
+      expect(server.requests, hasLength(1));
+
+      clock.advance(const Duration(minutes: 5));
+      expect(await service.needsRefresh(source), isFalse);
+
+      // An explicit refresh retries the dead guide only.
+      final second = await runRefresh(service, source);
+      expect(
+        [for (final e in second.whereType<EpgGuideSkipped>()) e.epgSourceId],
+        [guide],
+      );
+      expect(
+        [for (final e in second.whereType<EpgGuideFailed>()) e.epgSourceId],
+        [dead],
+      );
+      final done = second.last as EpgRefreshDone;
+      expect((done.imported, done.skipped, done.failed), (0, 1, 1));
+      expect(done.matched, 3);
+      expect(server.requests, hasLength(1));
+      final status = EpgSourceStatus.parse((await guideRow(db, dead)).status)!;
+      expect(status.kind, EpgStatusKind.error);
+      expect(status.at, _now.add(const Duration(minutes: 5)));
+      // Links and data of the skipped guide are kept.
+      expect((await db.epgDao.linksFor(source)).keys, hasLength(3));
+      expect(await storedProgrammes(db, guide), hasLength(3 * _perChannel));
+
+      // The failed guide is due again an hour after its last attempt.
+      clock.advance(const Duration(minutes: 59));
+      expect(await service.needsRefresh(source), isFalse);
+      clock.advance(const Duration(minutes: 1));
+      expect(await service.needsRefresh(source), isTrue);
+    });
+
+    test('needsRefresh is false while the device clock is unset', () async {
+      clock.current = DateTime.utc(2000, 1, 1);
+      expect(await service.needsRefresh(source), isFalse);
+    });
+
+    test('a forced refresh during a running one runs after it', () async {
+      server.etag = '"v1"';
+      await runRefresh(service, source);
+      clock.advance(const Duration(hours: 13));
+
+      final first = runRefresh(service, source);
+      final forced = runRefresh(service, source, force: true);
+      final joined = runRefresh(service, source);
+      expect(service.isRefreshing(source), isTrue);
+
+      final a = await first;
+      final b = await forced;
+      final c = await joined;
+      expect(server.requests, hasLength(3));
+      expect(server.requests[1].isConditional, isTrue);
+      expect(server.requests[2].isConditional, isFalse);
+      expect((a.last as EpgRefreshDone).notModified, 1);
+      expect(c, a);
+      expect(b.first, isA<EpgGuideStarted>());
+      expect((b.last as EpgRefreshDone).imported, 1);
+      expect(service.isRefreshing(source), isFalse);
+      expect(
+        (await guideRow(db, guide)).lastFetchAt,
+        _now.add(const Duration(hours: 13)),
+      );
+    });
+
+    test('cancel also drops a queued follow-up', () async {
+      server.stallAfterBytes = 10;
+      final first = runRefresh(service, source);
+      final forced = runRefresh(service, source, force: true);
+      await _until(() => server.requests.isNotEmpty);
+
+      await service.cancel(source);
+
+      expect((await first).last, isA<EpgRefreshCancelled>());
+      expect(await forced, [isA<EpgRefreshCancelled>()]);
+      expect(service.isRefreshing(source), isFalse);
+      expect(server.requests, hasLength(1));
+    });
+  });
+
+  group('writes', () {
+    test('the guide stays readable during an import and after a dropped '
+        'download', () async {
+      server.etag = '"v1"';
+      service = newService(batchSize: 4);
+      await runRefresh(service, source);
+      final before = await storedProgrammes(db, guide);
+      expect(before, hasLength(3 * _perChannel));
+
+      // Stall the next download after some alpha.tv programmes.
+      server.stallAfterBytes = 3000;
+      final stored = Completer<void>();
+      final run = service.refresh(source, force: true).toList();
+      final watch = service.refresh(source, force: true).listen((e) {
+        if (e is EpgProgrammesStored && !stored.isCompleted) stored.complete();
+      });
+      await stored.future;
+      await watch.cancel();
+
+      final during = await db.epgDao.nowNext(source, ['a', 'b', 'c'], _now);
+      expect(during.keys, unorderedEquals(['a', 'b', 'c']));
+      expect(await storedProgrammes(db, guide), hasLength(before.length));
+      server.release();
+      expect((await run).last, isA<EpgRefreshDone>());
+
+      // The connection breaks after the channels and some programmes.
+      server
+        ..stallAfterBytes = null
+        ..dropAfterBytes = 3000;
+      final dropped = await runRefresh(service, source, force: true);
+
+      expect(dropped.whereType<EpgProgrammesStored>(), isNotEmpty);
+      expect(dropped.last, isA<EpgRefreshFailed>());
+      final after = await storedProgrammes(db, guide);
+      expect(
+        [for (final p in after) '${p.xmltvId}@${p.startUtc}'],
+        [for (final p in before) '${p.xmltvId}@${p.startUtc}'],
+      );
+      final nowNext = await db.epgDao.nowNext(source, ['a', 'b', 'c'], _now);
+      expect(nowNext.keys, unorderedEquals(['a', 'b', 'c']));
+      // Part of a new version is stored: no validators, no import time.
+      final row = await guideRow(db, guide);
+      expect(EpgSourceStatus.parse(row.status)?.kind, EpgStatusKind.error);
+      expect(row.etag, isNull);
+      expect(row.lastFetchAt, isNull);
+      // Retried an hour after the failure.
+      expect(await service.needsRefresh(source), isFalse);
+      clock.advance(const Duration(hours: 1));
+      expect(await service.needsRefresh(source), isTrue);
+    });
+
+    test('a changed schedule replaces the old slots', () async {
+      await runRefresh(service, source);
+      server.body = xmltvDoc(
+        _standardGuide(shift: const Duration(minutes: 30)),
+      );
+
+      await runRefresh(service, source, force: true);
+
+      final stored = await storedProgrammes(db, guide);
+      expect(stored, hasLength(3 * (_perChannel + 1)));
+      expect({for (final p in stored) fromSec(p.startUtc).minute}, {30});
+    });
+  });
+
+  group('parser filter', () {
+    test('after the first import the parser only decodes wanted channels; '
+        'a newly linked guide channel restarts the download', () async {
+      final parser = _SpyParser();
+      service = EpgService(
+        db: db,
+        dioFactory: createDio,
+        clock: clock,
+        parser: parser,
+      );
+      await runRefresh(service, source);
+      expect(parser.filters, [null]);
+
+      await runRefresh(service, source, force: true);
+      const known = {'alpha.tv', 'beta.id', 'gamma.id'};
+      expect(parser.filters, [null, known]);
+      expect(server.requests, hasLength(2));
+      expect(await storedProgrammes(db, guide), hasLength(3 * _perChannel));
+
+      // The guide now declares a channel that matches "Delta" by name.
+      server.body = xmltvDoc(_standardGuide(extra: {'delta.tv': 'Delta'}));
+      final events = await runRefresh(service, source, force: true);
+
+      expect(events.last, isA<EpgRefreshDone>());
+      expect(parser.filters.sublist(2), [known, null]);
+      expect(server.requests, hasLength(4));
+      expect((await db.epgDao.linkFor(source, 'd'))?.xmltvId, 'delta.tv');
+      expect(await storedIds(db, guide), {...known, 'delta.tv'});
+      expect(await storedProgrammes(db, guide), hasLength(4 * _perChannel));
+
+      // The stored channels now predict it: one filtered download.
+      await runRefresh(service, source, force: true);
+      expect(server.requests, hasLength(5));
+      expect(parser.filters.last, {...known, 'delta.tv'});
+    });
+  });
+
+  group('background isolate', () {
+    test(
+      'runs the import in an isolate and forwards events and cancel',
+      () async {
+        service = EpgService(
+          db: db,
+          dioFactory: createDio,
+          clock: clock,
+          runInIsolate: true,
+        );
+
+        final events = await runRefresh(service, source);
+
+        expect(events.first, isA<EpgGuideStarted>());
+        expect(events.whereType<EpgGuideFinished>(), hasLength(1));
+        expect((events.last as EpgRefreshDone).matched, 3);
+        expect(await storedIds(db, guide), {'alpha.tv', 'beta.id', 'gamma.id'});
+        expect(
+          (await db.epgDao.linksFor(source)).keys,
+          unorderedEquals(['a', 'b', 'c']),
+        );
+        expect(server.requests.single.userAgent, _agent);
+
+        // One run per source: a second call joins; cancel reaches the isolate.
+        server.stallAfterBytes = 10;
+        final run = runRefresh(service, source, force: true);
+        final joined = runRefresh(service, source, force: true);
+        await _until(() => server.requests.length == 2);
+        expect(service.isRefreshing(source), isTrue);
+
+        await service.cancel(source);
+
+        expect((await run).last, isA<EpgRefreshCancelled>());
+        expect((await joined).last, isA<EpgRefreshCancelled>());
+        expect(service.isRefreshing(source), isFalse);
+        expect(server.requests, hasLength(2));
+        expect(
+          EpgSourceStatus.parse((await guideRow(db, guide)).status)?.kind,
+          EpgStatusKind.cancelled,
+        );
+        expect(await storedIds(db, guide), {'alpha.tv', 'beta.id', 'gamma.id'});
+      },
+    );
   });
 
   group('helpers', () {
@@ -746,14 +1117,31 @@ void main() {
     });
 
     test('EpgSourceStatus round-trips', () {
+      final at = DateTime.utc(2026, 1, 10, 12);
       for (final s in [
         EpgSourceStatus.ok,
         EpgSourceStatus.notModified,
         EpgSourceStatus.cancelled,
         const EpgSourceStatus(EpgStatusKind.error, 'HTTP 500 from x'),
+        EpgSourceStatus(EpgStatusKind.ok, null, at),
+        EpgSourceStatus(EpgStatusKind.notModified, null, at),
+        EpgSourceStatus(EpgStatusKind.error, 'HTTP 500: x@y', at),
+        EpgSourceStatus(EpgStatusKind.error, null, at),
       ]) {
         expect(EpgSourceStatus.parse(s.encode()), s);
       }
+      expect(
+        EpgSourceStatus(EpgStatusKind.error, 'HTTP 500', at).encode(),
+        'error@1768046400: HTTP 500',
+      );
+      expect(
+        EpgSourceStatus.parse('error: HTTP 500'),
+        const EpgSourceStatus(EpgStatusKind.error, 'HTTP 500'),
+      );
+      expect(
+        EpgSourceStatus.parse('ok: odd'),
+        const EpgSourceStatus(EpgStatusKind.error, 'ok: odd'),
+      );
       expect(EpgSourceStatus.parse(null), isNull);
       expect(EpgSourceStatus.parse(''), isNull);
       expect(

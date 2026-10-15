@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:drift/drift.dart';
+import 'package:drift/isolate.dart' show ComputeWithDriftIsolate, DriftIsolate;
 import 'package:xml/xml.dart' show XmlException;
 
 import '../core/db/app_db.dart';
@@ -55,21 +58,46 @@ List<EpgProgramme> shiftProgrammes(
 /// guides, links playlist channels to guide channels and keeps the
 /// programmes of linked channels inside a time window.
 ///
+/// Build one instance per database and keep it for the app's lifetime: it
+/// is the coordinator that allows one refresh per source and cancels runs.
+/// With [runInIsolate], each run's download, parsing and writes happen in a
+/// short-lived background isolate on the same database while the
+/// coordination stays here. Do not build services per call (for example
+/// inside `computeWithDatabase`): separate instances do not see each other's
+/// runs.
+///
+/// **Kept ids**: a guide's last full import kept the programmes of the guide
+/// channels some playlist channel linked to. They are known from the
+/// guide's automatic links (only ever written for kept ids) plus the ids
+/// that have stored programmes. A guide is *covered* when every guide
+/// channel the source's channels would now link to (automatic matches
+/// against its stored guide channels, plus manual links) is kept; it is not
+/// after a sync added channels that match new ids, or after a manual link
+/// to an id without programmes.
+///
 /// **Refresh** ([refresh]): the enabled `epg_sources` of a source are
 /// processed in order (origin xtream, then M3U header, then manual; then
 /// `priority`, then id). For each guide:
-/// 1. The download uses the source's User-Agent and Referer. `If-None-Match`
-///    and `If-Modified-Since` are sent from the stored validators unless
-///    `force` is set, the last import is older than [notModifiedMaxAge] (the
-///    stored window would be too short), or a playlist channel would now
-///    link to a guide channel whose programmes were not kept last time (new
-///    channels after a sync, a cleared manual link). A 304 keeps the stored
-///    guide.
-/// 2. gzip is detected from the bytes, then [XmltvParser] streams the
+/// 1. A covered guide whose last full import, or a 304 answer, is younger
+///    than `refreshHours` is skipped ([EpgGuideSkipped]) unless `force` is
+///    set.
+/// 2. The download uses the source's User-Agent and Referer.
+///    `If-None-Match` and `If-Modified-Since` are sent from the stored
+///    validators only for a covered guide whose last full import is younger
+///    than [notModifiedMaxAge] (a 304 keeps the window stored at that
+///    import), and not with `force`. A 304 keeps the stored guide.
+/// 3. gzip is detected from the bytes, then [XmltvParser] streams the
 ///    document with the source's `epgOffsetMin` applied and only programmes
 ///    overlapping the window (now - [back] .. now + [window], [liteWindow] in
-///    Lite mode, widened for negative `tvg-shift`s) are kept.
-/// 3. Matching: XMLTV lists `<channel>` elements before `<programme>`s, so
+///    Lite mode, widened for negative `tvg-shift`s) are kept. Once a guide
+///    that declares its channels has been imported, the parser also gets the
+///    ids the import is expected to want (links through the stored guide
+///    channels, manual ids and the channels' tvg-ids), so it skips decoding
+///    other channels' programmes. When the downloaded channel list links an
+///    id outside that set, or the filtered parse finds nothing, the download
+///    starts over without the filter (the channel list comes first, so
+///    little is lost).
+/// 4. Matching: XMLTV lists `<channel>` elements before `<programme>`s, so
 ///    the guide channels seen up to the first programme batch are matched
 ///    with [matchChannels] against the source's channels that no earlier
 ///    guide claimed and no manual link covers. Programmes are then kept when
@@ -78,38 +106,40 @@ List<EpgProgramme> shiftProgrammes(
 ///    extra writes: late `<channel>` elements trigger a re-match, ids that
 ///    are never declared become guide channels without names (matched by
 ///    tvg-id at the end), and programmes of ids that end up unlinked are
-///    deleted after the parse.
-/// 4. The guide's old programmes are deleted right before its first new
-///    batch is written, so re-runs never duplicate and a failure before any
-///    data arrives (HTTP error, timeout, not XMLTV) keeps the old guide. A
-///    failure or cancellation after that leaves a partial guide: its
-///    validators and `lastFetchAt` are cleared so the next refresh downloads
-///    it in full.
-/// 5. All guide channels are stored (`epg_channels`) for 304 runs and for
-///    manual assignment ([searchGuideChannels]).
+///    deleted at the end. With a parser filter, undeclared ids outside the
+///    filter are not seen at all.
+/// 5. Writes: batches are upserted over the stored programmes, so readers
+///    keep seeing a complete guide during the import. At the end, one
+///    transaction deletes the guide's rows this import did not write (old
+///    slots, unlinked channels) and stores all guide channels
+///    (`epg_channels`, for matching and [searchGuideChannels]). A failure or
+///    cancellation keeps the old rows next to those already written; once
+///    anything was written, the guide's validators and `lastFetchAt` are
+///    cleared so the next refresh downloads it in full. A failure before
+///    that keeps the guide as it was.
 ///
 /// A playlist channel links to the first guide (in the order above) that
 /// matches it. Manual links always win; only the letter case of their id
-/// follows the guide (reads join on the exact id). After all
-/// guides, the automatic links of the source are replaced, programmes that
-/// ended before now - [back] are pruned, `epg_sources` get their status
-/// ([EpgSourceStatus]), validators, `lastFetchAt` (time of the last full
-/// import, not changed by a 304 or a failure) and `programmeCount`, and
-/// `sources.lastEpgAt` is set when at least one guide is current.
+/// follows the guide (reads join on the exact id). A guide that failed or
+/// was skipped keeps the links to the ids it kept. After all guides, the
+/// automatic links of the source are replaced, programmes that ended before
+/// now - [back] are pruned, and `epg_sources` get their status
+/// ([EpgSourceStatus], with the attempt time), validators, `lastFetchAt`
+/// (time of the last full import; a 304, a skip or a failure does not change
+/// it) and `programmeCount`. `sources.lastEpgAt` is set when at least one
+/// guide was imported or confirmed by a 304.
 ///
 /// **Offsets**: programmes are stored with the source's `epgOffsetMin`
 /// applied and without any channel `tvg-shift`; the DAO adds the shift when
 /// reading, so several playlist channels can share a guide id with
 /// different shifts. After changing `epgOffsetMin`, call
-/// `refresh(sourceId, force: true)` (a 304 would keep the old offset).
+/// `refresh(sourceId, force: true)` (a skip or a 304 would keep the old
+/// offset).
 ///
-/// **Concurrency**: at most one refresh runs per source. A second
-/// [refresh] call while one runs joins it. A run ends only on completion or
-/// [cancel]; cancelling a progress subscription just stops listening.
-///
-/// The class holds no isolate-bound state besides its jobs and the short EPG
-/// cache, so it can also be built inside a background isolate on that
-/// isolate's database connection; [EpgProgress] events are plain values.
+/// **Concurrency**: at most one refresh runs per source. A [refresh] call
+/// while one runs joins it when that run does at least as much, otherwise
+/// it queues one follow-up run. A run ends only on completion or [cancel];
+/// cancelling a progress subscription just stops listening.
 class EpgService {
   EpgService({
     required AppDatabase db,
@@ -121,6 +151,8 @@ class EpgService {
     this.back = const Duration(hours: 12),
     this.batchSize = 5000,
     this.notModifiedMaxAge = const Duration(hours: 24),
+    this.retryAfter = const Duration(hours: 1),
+    this.runInIsolate = false,
     ShortEpgCache? shortEpgCache,
     this._parser = const XmltvParser(),
   }) : assert(batchSize > 0, 'batchSize must be positive'),
@@ -150,6 +182,15 @@ class EpgService {
   /// younger than this: a 304 keeps the window stored at that import.
   final Duration notModifiedMaxAge;
 
+  /// How long [needsRefresh] waits before a failed guide is due again.
+  final Duration retryAfter;
+
+  /// Whether runs execute in a background isolate (see [EpgService]). The
+  /// configuration loader then runs here, while the dio factory, clock and
+  /// parser are sent to the isolate, so they must be sendable (`createDio`,
+  /// [SystemClock] and [XmltvParser] are).
+  final bool runInIsolate;
+
   /// Cache behind [shortEpg].
   final ShortEpgCache shortEpgCache;
 
@@ -159,7 +200,11 @@ class EpgService {
   final Clock _clock;
   final XmltvParser _parser;
 
+  /// Running refresh per source.
   final _jobs = <int, _RefreshJob>{};
+
+  /// Follow-up run per source, started when the running one ends.
+  final _queued = <int, _RefreshJob>{};
   bool _disposed = false;
 
   EpgDao get _epg => _db.epgDao;
@@ -169,35 +214,59 @@ class EpgService {
 
   /// Refreshes the guides of [sourceId] and reports progress.
   ///
+  /// Without [force], guides that are current (see [EpgService]: last
+  /// import or 304 younger than [refreshHours], nothing new to keep) are
+  /// skipped and the others are fetched with a conditional request when
+  /// possible; [force] downloads every guide in full. Pass the same
+  /// [refreshHours] as to [needsRefresh]. [lite] uses [liteWindow].
+  ///
   /// The run starts at once, whether or not the stream is listened to, and
   /// the stream replays every event since this call. When a refresh of this
-  /// source is already running, the call joins it instead (its own `force`
-  /// and `lite` are then ignored) and the stream starts with that run's
-  /// latest event. Use [cancel] to stop a run.
+  /// source is already running and does at least as much (forced if [force],
+  /// not Lite unless [lite], an interval no longer than [refreshHours]), the
+  /// call joins it and the stream starts with that run's latest event.
+  /// Otherwise one follow-up run is queued with the combined flags; it starts
+  /// when the current run ends, and the stream follows it. Use [cancel] to
+  /// stop runs.
   Stream<EpgProgress> refresh(
     int sourceId, {
     bool force = false,
     bool lite = false,
+    int refreshHours = 12,
   }) {
     if (_disposed) throw StateError('EpgService is disposed');
-    final running = _jobs[sourceId];
-    if (running != null) return running.watch();
-    final job = _jobs[sourceId] = _RefreshJob(
-      sourceId,
+    final request = _RunFlags(
       force: force,
       lite: lite,
+      refreshHours: refreshHours,
     );
-    final events = job.watch();
-    unawaited(_run(job));
-    return events;
+    final running = _jobs[sourceId];
+    if (running == null) {
+      final job = _jobs[sourceId] = _RefreshJob(sourceId, request);
+      final events = job.watch();
+      unawaited(_run(job));
+      return events;
+    }
+    if (!running.cancelled && running.flags.covers(request)) {
+      return running.watch();
+    }
+    final queued = _queued[sourceId];
+    if (queued == null) {
+      return (_queued[sourceId] = _RefreshJob(sourceId, request)).watch();
+    }
+    queued.flags = queued.flags.merge(request);
+    return queued.watch();
   }
 
-  /// Whether a refresh of [sourceId] is running.
-  bool isRefreshing(int sourceId) => _jobs.containsKey(sourceId);
+  /// Whether a refresh of [sourceId] is running or queued.
+  bool isRefreshing(int sourceId) =>
+      _jobs.containsKey(sourceId) || _queued.containsKey(sourceId);
 
-  /// Cancels the refresh of [sourceId], if any, and completes once it has
-  /// stopped (its stream then ends with [EpgRefreshCancelled]).
+  /// Cancels the refresh of [sourceId] and its queued follow-up, if any, and
+  /// completes once they have stopped (their streams then end with
+  /// [EpgRefreshCancelled]).
   Future<void> cancel(int sourceId) async {
+    _queued.remove(sourceId)?.finish(EpgRefreshCancelled(sourceId));
     final job = _jobs[sourceId];
     if (job == null) return;
     job.cancel();
@@ -207,6 +276,9 @@ class EpgService {
   /// Cancels every refresh and clears the short EPG cache.
   Future<void> dispose() async {
     _disposed = true;
+    for (final id in _queued.keys.toList()) {
+      _queued.remove(id)!.finish(EpgRefreshCancelled(id));
+    }
     final jobs = _jobs.values.toList();
     for (final job in jobs) {
       job.cancel();
@@ -218,20 +290,21 @@ class EpgService {
   /// Whether a guide fetched at [lastFetchAt] is older than [refreshHours].
   /// Never fetched (null) is stale, and so is a stamp in the future (the
   /// clock went back since).
-  bool isStale(DateTime? lastFetchAt, int refreshHours) {
-    if (lastFetchAt == null) return true;
-    final now = _clock.now();
-    if (lastFetchAt.isAfter(now.add(const Duration(minutes: 5)))) return true;
-    return !now.isBefore(lastFetchAt.add(Duration(hours: refreshHours)));
-  }
+  bool isStale(DateTime? lastFetchAt, int refreshHours) =>
+      _olderThan(lastFetchAt, _clock.now(), Duration(hours: refreshHours));
 
-  /// Whether any enabled guide of [sourceId] [isStale]: never imported, or
-  /// its last full import is older than [refreshHours]. A 304 or a failure
-  /// does not reset the age, so such guides are retried (cheaply) on the
-  /// next check.
+  /// Whether a [refresh] of [sourceId] would fetch something: an enabled
+  /// guide that was never imported, or whose last full import is older than
+  /// [refreshHours]. A guide a 304 confirmed within [refreshHours] (while
+  /// its import is younger than [notModifiedMaxAge]) is not due, and a
+  /// guide that failed is due again only [retryAfter] after the attempt, so
+  /// a dead guide URL does not make every check refresh. Channels added by a
+  /// sync are not considered: refresh after a sync.
   Future<bool> needsRefresh(int sourceId, {int refreshHours = 12}) async {
+    final now = _clock.now();
+    if (now.isBefore(earliestPlausibleNow)) return false;
     final guides = await _epg.epgSources(sourceId, enabledOnly: true);
-    return guides.any((g) => isStale(g.lastFetchAt, refreshHours));
+    return guides.any((g) => _isDue(g, now, refreshHours, backoff: true));
   }
 
   /// The programme window of a refresh started at [now].
@@ -240,23 +313,114 @@ class EpgService {
     bool lite = false,
   }) => (start: now.subtract(back), end: now.add(lite ? liteWindow : window));
 
+  /// Whether [t] is null, more than 5 minutes in the future (the clock went
+  /// back since), or at least [age] before [now].
+  static bool _olderThan(DateTime? t, DateTime now, Duration age) {
+    if (t == null) return true;
+    if (t.isAfter(now.add(const Duration(minutes: 5)))) return true;
+    return !now.isBefore(t.add(age));
+  }
+
+  /// Whether [guide] is due for a download or a 304 check at [now]; with
+  /// [backoff], a failure within [retryAfter] counts as not due.
+  bool _isDue(
+    EpgSourceRow guide,
+    DateTime now,
+    int refreshHours, {
+    required bool backoff,
+  }) {
+    final interval = Duration(hours: refreshHours);
+    final imported = guide.lastFetchAt;
+    if (!_olderThan(imported, now, interval)) return false;
+    final status = EpgSourceStatus.parse(guide.status);
+    final at = status?.at;
+    if (status == null || at == null) return true;
+    return switch (status.kind) {
+      // Confirmed unchanged lately, while the stored window still lasts.
+      EpgStatusKind.notModified =>
+        _olderThan(at, now, interval) ||
+            _olderThan(imported, now, notModifiedMaxAge),
+      EpgStatusKind.error when backoff => _olderThan(at, now, retryAfter),
+      _ => true,
+    };
+  }
+
   Future<void> _run(_RefreshJob job) async {
     EpgProgress terminal;
     try {
-      terminal = await _refreshSource(job);
+      terminal = runInIsolate
+          ? await _runInIsolate(job)
+          : await _refreshSource(job);
     } on Object catch (e) {
       terminal = job.cancelled || e is _Cancelled
           ? EpgRefreshCancelled(job.sourceId)
           : EpgRefreshFailed(job.sourceId, message: _describe(e, job.secrets));
     }
-    // Remove first: a listener that reacts to the terminal event by calling
-    // refresh again must start a new run, not join this one.
-    if (identical(_jobs[job.sourceId], job)) _jobs.remove(job.sourceId);
+    // Hand over first: a listener that reacts to the terminal event by
+    // calling refresh again must not join this finished run.
+    final sourceId = job.sourceId;
+    if (identical(_jobs[sourceId], job)) _jobs.remove(sourceId);
+    final next = _queued.remove(sourceId);
+    if (next != null) {
+      _jobs[sourceId] = next;
+      unawaited(_run(next));
+    }
     job.finish(terminal);
   }
 
-  Future<EpgProgress> _refreshSource(_RefreshJob job) async {
+  /// Runs [job] in a background isolate on this database and forwards its
+  /// events; [cancel] reaches it through a control port.
+  Future<EpgProgress> _runInIsolate(_RefreshJob job) async {
+    job.checkCancelled();
     final sourceId = job.sourceId;
+    final config = await _configLoader(sourceId);
+    if (config == null) {
+      return EpgRefreshFailed(sourceId, message: 'Unknown source $sourceId');
+    }
+    job
+      ..secrets = [?config.password]
+      ..checkCancelled();
+    final events = ReceivePort('EpgService events');
+    events.listen((message) {
+      switch (message) {
+        case final SendPort control:
+          job.attachControl(control);
+        case final EpgProgress event:
+          job.emit(event);
+      }
+    });
+    try {
+      return await _spawnWorker(
+        _WorkerArgs(
+          connection: await _db.serializableConnection(),
+          events: events.sendPort,
+          sourceId: sourceId,
+          flags: job.flags,
+          config: config,
+          dioFactory: _dioFactory,
+          clock: _clock,
+          window: window,
+          liteWindow: liteWindow,
+          back: back,
+          batchSize: batchSize,
+          notModifiedMaxAge: notModifiedMaxAge,
+          retryAfter: retryAfter,
+          parser: _parser,
+        ),
+      );
+    } finally {
+      events.close();
+    }
+  }
+
+  /// Static, so the isolate closure captures nothing but [args].
+  static Future<EpgProgress> _spawnWorker(_WorkerArgs args) =>
+      Isolate.run(() => _workerMain(args), debugName: 'EpgService refresh');
+
+  Future<EpgProgress> _refreshSource(_RefreshJob job) async {
+    job.checkCancelled();
+    final sourceId = job.sourceId;
+    final flags = job.flags;
     final now = _clock.now();
     if (now.isBefore(earliestPlausibleNow)) {
       return EpgRefreshFailed(
@@ -279,6 +443,13 @@ class EpgService {
       for (final MapEntry(:key, :value) in links.entries)
         if (value.kind == EpgMatchKind.manual) key: value,
     };
+    // Automatic links are only written for kept ids (see [EpgService]).
+    final autoLinked = <int, Set<String>>{};
+    for (final link in links.values) {
+      if (link.kind != EpgMatchKind.manual) {
+        (autoLinked[link.epgSourceId] ??= {}).add(link.xmltvId.toLowerCase());
+      }
+    }
     final candidates = [
       for (final c in identities)
         MatchCandidate(
@@ -288,7 +459,7 @@ class EpgService {
           tvgName: c.tvgName,
         ),
     ];
-    final range = windowAt(now, lite: job.lite);
+    final range = windowAt(now, lite: flags.lite);
     // Stored times plus a channel's shift must still cover the window end.
     final end = range.end.add(
       Duration(minutes: -math.min(0, await _minShiftMinutes(sourceId))),
@@ -305,6 +476,7 @@ class EpgService {
     final autoLinks = <String, EpgLink>{};
     var imported = 0;
     var notModified = 0;
+    var skipped = 0;
     var failed = 0;
     String? firstError;
     final dio = _dioFactory(
@@ -329,12 +501,15 @@ class EpgService {
               if (link.epgSourceId == guide.id && link.xmltvId.isNotEmpty)
                 link.xmltvId,
           },
+          autoLinked: autoLinked[guide.id] ?? const {},
         );
         switch (result.outcome) {
           case _Outcome.imported:
             imported++;
           case _Outcome.notModified:
             notModified++;
+          case _Outcome.skipped:
+            skipped++;
           case _Outcome.failed:
             failed++;
             firstError ??= result.message;
@@ -371,19 +546,22 @@ class EpgService {
         EpgSourcesCompanion(programmeCount: Value(count)),
       );
     }
-    if (imported + notModified == 0) {
+    if (imported + notModified + skipped == 0) {
       return EpgRefreshFailed(
         sourceId,
         message: firstError ?? 'No guide could be loaded',
       );
     }
-    await _db.sourcesDao.markEpgFetched(sourceId, now);
+    if (imported + notModified > 0) {
+      await _db.sourcesDao.markEpgFetched(sourceId, now);
+    }
     final keys = {for (final c in identities) c.key};
     return EpgRefreshDone(
       sourceId,
       guides: guides.length,
       imported: imported,
       notModified: notModified,
+      skipped: skipped,
       failed: failed,
       matched:
           autoLinks.length +
@@ -402,8 +580,42 @@ class EpgService {
     int index, {
     required List<MatchCandidate> remaining,
     required Set<String> manualIds,
+    required Set<String> autoLinked,
   }) async {
     final sourceId = job.sourceId;
+    final flags = job.flags;
+    final storedChannels = await _storedGuideChannels(guide.id);
+    final storedMatches = matchChannels(remaining, storedChannels);
+    final matched = storedMatches.length + manualIds.length;
+
+    Set<String>? storedIds;
+    Future<bool> isKept(Iterable<String> ids) async {
+      final missing = {for (final id in ids) id.toLowerCase()}
+        ..removeAll(autoLinked);
+      if (missing.isEmpty) return true;
+      storedIds ??= await _storedProgrammeIds(guide.id);
+      return storedIds!.containsAll(missing);
+    }
+
+    // Links of a guide that brings nothing new: only to ids it kept.
+    Future<Map<String, EpgMatch>> keptMatches() async => {
+      for (final MapEntry(:key, :value) in storedMatches.entries)
+        if (await isKept([value.xmltvId])) key: value,
+    };
+
+    final covered = await isKept([
+      for (final m in storedMatches.values) m.xmltvId,
+      ...manualIds,
+    ]);
+    if (!flags.force &&
+        covered &&
+        !_isDue(guide, plan.now, flags.refreshHours, backoff: false)) {
+      job.emit(
+        EpgGuideSkipped(sourceId, epgSourceId: guide.id, matched: matched),
+      );
+      return _GuideResult(_Outcome.skipped, storedMatches);
+    }
+
     job.emit(
       EpgGuideStarted(
         sourceId,
@@ -414,39 +626,28 @@ class EpgService {
         total: plan.total,
       ),
     );
-
-    List<EpgChannel>? stored;
-    Future<Map<String, EpgMatch>> storedMatches() async => matchChannels(
-      remaining,
-      stored ??= await _storedGuideChannels(guide.id),
-    );
-
-    Map<String, EpgMatch>? unchangedMatches;
     final lastImport = guide.lastFetchAt;
-    if (!job.force &&
+    var conditional =
+        !flags.force &&
+        covered &&
         (guide.etag != null || guide.lastModified != null) &&
         lastImport != null &&
         !plan.now.isBefore(lastImport) &&
-        plan.now.difference(lastImport) < notModifiedMaxAge) {
-      final matches = await storedMatches();
-      final wanted = {
-        for (final m in matches.values) m.xmltvId.toLowerCase(),
-        for (final id in manualIds) id.toLowerCase(),
-      };
-      final kept = {
-        for (final id in await _epg.linkedXmltvIds(guide.id)) id.toLowerCase(),
-      };
-      if (kept.containsAll(wanted)) unchangedMatches = matches;
-    }
+        plan.now.difference(lastImport) < notModifiedMaxAge;
+    // Ids this import is expected to want, for a guide that declares its
+    // channels (undeclared ids have no names).
+    var prefilter = storedChannels.any((c) => c.displayNames.isNotEmpty)
+        ? {
+            for (final m in storedMatches.values) m.xmltvId.toLowerCase(),
+            for (final id in manualIds) id.toLowerCase(),
+            for (final c in remaining)
+              if (c.tvgId?.trim() case final id? when id.isNotEmpty)
+                id.toLowerCase(),
+          }
+        : null;
 
-    final import = _GuideImport(
-      service: this,
-      job: job,
-      plan: plan,
-      guideId: guide.id,
-      remaining: remaining,
-      manualIds: manualIds,
-    );
+    var wrote = false;
+    _GuideImport? import;
     try {
       final url = await _epg.epgSourceUrl(guide.id) ?? guide.url;
       final uri = Uri.tryParse(url.trim());
@@ -455,68 +656,98 @@ class EpgService {
           uri.host.isEmpty) {
         throw const ParseFailure('Unsupported guide address');
       }
-      final response = await dio.getUri<ResponseBody>(
-        uri,
-        cancelToken: job.cancelToken,
-        options: Options(
-          responseType: ResponseType.stream,
-          receiveDataWhenStatusError: false,
-          validateStatus: (s) => s == 304 || (s != null && s >= 200 && s < 300),
-          headers: {
-            if (unchangedMatches != null && guide.etag != null)
-              'If-None-Match': guide.etag,
-            if (unchangedMatches != null && guide.lastModified != null)
-              'If-Modified-Since': guide.lastModified,
-          },
-        ),
-      );
-      final body = response.data;
-      if (body == null) throw const ParseFailure('Empty guide response');
-      if (response.statusCode == 304) {
-        await body.stream.listen(null).cancel();
-        final matches = unchangedMatches ?? await storedMatches();
+      while (true) {
+        final response = await dio.getUri<ResponseBody>(
+          uri,
+          cancelToken: job.cancelToken,
+          options: Options(
+            responseType: ResponseType.stream,
+            receiveDataWhenStatusError: false,
+            validateStatus: (s) =>
+                s == 304 || (s != null && s >= 200 && s < 300),
+            headers: {
+              if (conditional && guide.etag != null)
+                'If-None-Match': guide.etag,
+              if (conditional && guide.lastModified != null)
+                'If-Modified-Since': guide.lastModified,
+            },
+          ),
+        );
+        final body = response.data;
+        if (body == null) throw const ParseFailure('Empty guide response');
+        if (response.statusCode == 304) {
+          await body.stream.listen(null).cancel();
+          final matches = conditional ? storedMatches : await keptMatches();
+          await _writeGuide(
+            guide.id,
+            EpgSourcesCompanion(
+              status: Value(
+                EpgSourceStatus(
+                  EpgStatusKind.notModified,
+                  null,
+                  plan.now,
+                ).encode(),
+              ),
+            ),
+          );
+          job.emit(
+            EpgGuideNotModified(
+              sourceId,
+              epgSourceId: guide.id,
+              matched: matches.length + manualIds.length,
+            ),
+          );
+          return _GuideResult(_Outcome.notModified, matches);
+        }
+
+        final current = import = _GuideImport(
+          service: this,
+          job: job,
+          plan: plan,
+          guideId: guide.id,
+          remaining: remaining,
+          manualIds: manualIds,
+          prefilter: prefilter,
+        );
+        final Map<String, EpgMatch> matches;
+        try {
+          matches = await current.run(body.stream);
+        } on _Restart {
+          // Leaving the parse closed the download; fetch it again in full.
+          wrote = wrote || current.wrote;
+          prefilter = null;
+          conditional = false;
+          continue;
+        }
+        String? header(String name) => response.headers.map[name]?.firstOrNull;
         await _writeGuide(
           guide.id,
           EpgSourcesCompanion(
-            status: Value(EpgSourceStatus.notModified.encode()),
+            status: Value(
+              EpgSourceStatus(EpgStatusKind.ok, null, plan.now).encode(),
+            ),
+            etag: Value(header('etag')),
+            lastModified: Value(header('last-modified')),
+            lastFetchAt: Value(toEpochSec(plan.now)),
           ),
         );
         job.emit(
-          EpgGuideNotModified(
+          EpgGuideFinished(
             sourceId,
             epgSourceId: guide.id,
+            channels: current.channelCount,
             matched: matches.length + manualIds.length,
+            programmes: await _epg.programmeCount(guide.id),
           ),
         );
-        return _GuideResult(_Outcome.notModified, matches);
+        return _GuideResult(
+          _Outcome.imported,
+          matches,
+          respelled: current.respelledManualIds(),
+        );
       }
-
-      final matches = await import.run(body.stream);
-      String? header(String name) => response.headers.map[name]?.firstOrNull;
-      await _writeGuide(
-        guide.id,
-        EpgSourcesCompanion(
-          status: Value(EpgSourceStatus.ok.encode()),
-          etag: Value(header('etag')),
-          lastModified: Value(header('last-modified')),
-          lastFetchAt: Value(toEpochSec(plan.now)),
-        ),
-      );
-      job.emit(
-        EpgGuideFinished(
-          sourceId,
-          epgSourceId: guide.id,
-          channels: import.channelCount,
-          matched: matches.length + manualIds.length,
-          programmes: await _epg.programmeCount(guide.id),
-        ),
-      );
-      return _GuideResult(
-        _Outcome.imported,
-        matches,
-        respelled: import.respelledManualIds(),
-      );
     } on Object catch (e) {
+      wrote = wrote || (import?.wrote ?? false);
       final cancelled =
           job.cancelled ||
           e is _Cancelled ||
@@ -526,28 +757,25 @@ class EpgService {
         guide.id,
         EpgSourcesCompanion(
           status: Value(
-            cancelled
-                ? EpgSourceStatus.cancelled.encode()
-                : EpgSourceStatus(EpgStatusKind.error, message).encode(),
+            EpgSourceStatus(
+              cancelled ? EpgStatusKind.cancelled : EpgStatusKind.error,
+              message,
+              plan.now,
+            ).encode(),
           ),
-          // The old programmes are gone: download in full next time.
-          etag: import.replacedOld ? const Value(null) : const Value.absent(),
-          lastModified: import.replacedOld
-              ? const Value(null)
-              : const Value.absent(),
-          lastFetchAt: import.replacedOld
-              ? const Value(null)
-              : const Value.absent(),
+          // Part of a new version is stored: download in full next time.
+          etag: wrote ? const Value(null) : const Value.absent(),
+          lastModified: wrote ? const Value(null) : const Value.absent(),
+          lastFetchAt: wrote ? const Value(null) : const Value.absent(),
         ),
       );
       if (cancelled) throw const _Cancelled();
       job.emit(
         EpgGuideFailed(sourceId, epgSourceId: guide.id, message: message!),
       );
-      // Keep linking to what an earlier import stored.
       return _GuideResult(
         _Outcome.failed,
-        await storedMatches(),
+        await keptMatches(),
         message: message,
       );
     }
@@ -579,11 +807,36 @@ class EpgService {
     ]);
   }
 
-  /// Replaces the stored guide channels of [epgSourceId].
-  Future<void> _replaceGuideChannels(
+  /// Lower-cased ids with stored programmes in guide [epgSourceId].
+  Future<Set<String>> _storedProgrammeIds(int epgSourceId) async {
+    final id = _db.programmes.xmltvId;
+    final query = _db.selectOnly(_db.programmes, distinct: true)
+      ..addColumns([id])
+      ..where(_db.programmes.epgSourceId.equals(epgSourceId));
+    return {
+      for (final value in await query.map((r) => r.read(id)!).get())
+        value.toLowerCase(),
+    };
+  }
+
+  /// Ends an import in one transaction: keeps only the programmes in [keep]
+  /// (stored id -> start seconds) and replaces the guide channels.
+  Future<void> _finishImport(
     int epgSourceId,
+    Map<String, List<int>> keep,
     List<EpgChannel> channels,
   ) => _db.transaction(() async {
+    await _db.customUpdate(
+      'DELETE FROM programmes WHERE epg_source_id = ?1 '
+      'AND (xmltv_id, start_utc) NOT IN '
+      '(SELECT k.key, s.value FROM json_each(?2) k, json_each(k.value) s)',
+      variables: [
+        Variable.withInt(epgSourceId),
+        Variable.withString(jsonEncode(keep)),
+      ],
+      updates: {_db.programmes},
+      updateKind: UpdateKind.delete,
+    );
     await (_db.delete(
       _db.epgChannels,
     )..where((c) => c.epgSourceId.equals(epgSourceId))).go();
@@ -591,15 +844,6 @@ class EpgService {
       await _epg.upsertEpgChannels(epgSourceId, part);
     }
   });
-
-  Future<void> _deleteProgrammesFor(int epgSourceId, List<String> ids) async {
-    for (final part in chunked(ids)) {
-      await (_db.delete(_db.programmes)..where(
-            (p) => p.epgSourceId.equals(epgSourceId) & p.xmltvId.isIn(part),
-          ))
-          .go();
-    }
-  }
 
   Future<void> _writeGuide(int epgSourceId, EpgSourcesCompanion values) =>
       (_db.update(
@@ -639,9 +883,10 @@ class EpgService {
   /// hand; automatic matching never overrides it. An empty [xmltvId] means
   /// "no guide" and turns automatic matching off for the channel.
   ///
-  /// When the guide has no stored programmes for [xmltvId] (it was not
-  /// wanted at the last import), its validators are cleared so the next
-  /// [refresh] downloads it in full; call [refresh] to fetch them.
+  /// Call [refresh] afterwards: when the guide has no stored programmes for
+  /// [xmltvId] (it was not wanted at the last import), the guide is no
+  /// longer covered, so the refresh downloads it in full, also when a run
+  /// that started earlier is still going.
   Future<void> setManualMapping(
     int sourceId,
     String channelKey,
@@ -656,14 +901,7 @@ class EpgService {
         'not a guide of source $sourceId',
       );
     }
-    final id = xmltvId.trim();
-    await _epg.setManualLink(sourceId, channelKey, epgSourceId, id);
-    if (id.isNotEmpty && !await _hasProgrammes(epgSourceId, id)) {
-      await _writeGuide(
-        epgSourceId,
-        const EpgSourcesCompanion(etag: Value(null), lastModified: Value(null)),
-      );
-    }
+    await _epg.setManualLink(sourceId, channelKey, epgSourceId, xmltvId.trim());
   }
 
   /// Removes the manual link of [channelKey], if any; the next [refresh]
@@ -712,19 +950,6 @@ class EpgService {
         .get();
     return [for (final r in rows) _db.epgChannels.map(r.data).toRow()];
   }
-
-  Future<bool> _hasProgrammes(int epgSourceId, String xmltvId) async {
-    final row =
-        await (_db.selectOnly(_db.programmes)
-              ..addColumns([_db.programmes.startUtc])
-              ..where(
-                _db.programmes.epgSourceId.equals(epgSourceId) &
-                    _db.programmes.xmltvId.equals(xmltvId),
-              )
-              ..limit(1))
-            .getSingleOrNull();
-    return row != null;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -771,7 +996,12 @@ class _Cancelled implements Exception {
   const _Cancelled();
 }
 
-enum _Outcome { imported, notModified, failed }
+/// The filtered parse cannot serve the import; download again without it.
+class _Restart implements Exception {
+  const _Restart();
+}
+
+enum _Outcome { imported, notModified, skipped, failed }
 
 class _GuideResult {
   const _GuideResult(
@@ -808,18 +1038,47 @@ class _GuidePlan {
   final int total;
 }
 
-/// One running refresh and its listeners.
-class _RefreshJob {
-  _RefreshJob(this.sourceId, {required this.force, required this.lite});
+/// What a refresh call asks for.
+class _RunFlags {
+  const _RunFlags({
+    required this.force,
+    required this.lite,
+    required this.refreshHours,
+  });
 
-  final int sourceId;
   final bool force;
   final bool lite;
+  final int refreshHours;
+
+  /// Whether a run with these flags does everything [other] asks for.
+  bool covers(_RunFlags other) =>
+      (force || !other.force) &&
+      (!lite || other.lite) &&
+      refreshHours <= other.refreshHours;
+
+  _RunFlags merge(_RunFlags other) => _RunFlags(
+    force: force || other.force,
+    lite: lite && other.lite,
+    refreshHours: math.min(refreshHours, other.refreshHours),
+  );
+}
+
+/// One refresh run and its listeners.
+class _RefreshJob {
+  _RefreshJob(this.sourceId, this.flags);
+
+  final int sourceId;
+
+  /// Fixed once the run starts; a queued run takes over later requests.
+  _RunFlags flags;
   final cancelToken = CancelToken();
 
   /// Values to mask in messages besides URL credentials (the password).
   List<String> secrets = const [];
   bool cancelled = false;
+
+  /// Cancels the run in a background isolate ([EpgService.runInIsolate]).
+  SendPort? _control;
 
   final _done = Completer<void>();
   final _watchers = <StreamController<EpgProgress>>{};
@@ -845,6 +1104,7 @@ class _RefreshJob {
   }
 
   void emit(EpgProgress event) {
+    if (_finished) return;
     _last = event;
     for (final c in _watchers.toList()) {
       c.add(event);
@@ -852,6 +1112,7 @@ class _RefreshJob {
   }
 
   void finish(EpgProgress terminal) {
+    if (_finished) return;
     emit(terminal);
     _finished = true;
     final watchers = _watchers.toList();
@@ -866,10 +1127,100 @@ class _RefreshJob {
     if (cancelled) return;
     cancelled = true;
     cancelToken.cancel('Guide refresh cancelled');
+    _control?.send(null);
+  }
+
+  void attachControl(SendPort control) {
+    _control = control;
+    if (cancelled) control.send(null);
   }
 
   void checkCancelled() {
     if (cancelled) throw const _Cancelled();
+  }
+}
+
+/// Everything a background run needs; all of it can be sent to an isolate.
+class _WorkerArgs {
+  const _WorkerArgs({
+    required this.connection,
+    required this.events,
+    required this.sourceId,
+    required this.flags,
+    required this.config,
+    required this.dioFactory,
+    required this.clock,
+    required this.window,
+    required this.liteWindow,
+    required this.back,
+    required this.batchSize,
+    required this.notModifiedMaxAge,
+    required this.retryAfter,
+    required this.parser,
+  });
+
+  final DriftIsolate connection;
+
+  /// Receives the control [SendPort] first, then the progress events.
+  final SendPort events;
+  final int sourceId;
+  final _RunFlags flags;
+  final SourceConfig config;
+  final EpgDioFactory dioFactory;
+  final Clock clock;
+  final Duration window;
+  final Duration liteWindow;
+  final Duration back;
+  final int batchSize;
+  final Duration notModifiedMaxAge;
+  final Duration retryAfter;
+  final XmltvParser parser;
+}
+
+/// Background isolate body: one refresh on its own connection to the
+/// database; returns the terminal event.
+Future<EpgProgress> _workerMain(_WorkerArgs args) async {
+  final db = AppDatabase(await args.connection.connect(), clock: args.clock);
+  final service = EpgService(
+    db: db,
+    dioFactory: args.dioFactory,
+    configLoader: (_) async => args.config,
+    clock: args.clock,
+    window: args.window,
+    liteWindow: args.liteWindow,
+    back: args.back,
+    batchSize: args.batchSize,
+    notModifiedMaxAge: args.notModifiedMaxAge,
+    retryAfter: args.retryAfter,
+    parser: args.parser,
+  );
+  final control = ReceivePort('EpgService control');
+  final cancels = control.listen(
+    (_) => unawaited(service.cancel(args.sourceId)),
+  );
+  args.events.send(control.sendPort);
+  try {
+    EpgProgress? terminal;
+    final flags = args.flags;
+    await for (final event in service.refresh(
+      args.sourceId,
+      force: flags.force,
+      lite: flags.lite,
+      refreshHours: flags.refreshHours,
+    )) {
+      if (event.isTerminal) {
+        terminal = event;
+      } else {
+        args.events.send(event);
+      }
+    }
+    return terminal ??
+        EpgRefreshFailed(args.sourceId, message: 'Guide refresh ended early');
+  } finally {
+    await cancels.cancel();
+    control.close();
+    await service.dispose();
+    await db.close();
   }
 }
 
@@ -882,6 +1233,7 @@ class _GuideImport {
     required this.guideId,
     required this.remaining,
     required this.manualIds,
+    required this.prefilter,
   });
 
   final EpgService service;
@@ -890,6 +1242,9 @@ class _GuideImport {
   final int guideId;
   final List<MatchCandidate> remaining;
   final Set<String> manualIds;
+
+  /// Lower-cased ids passed to the parser, or null for all.
+  final Set<String>? prefilter;
 
   /// Declared guide channels by id, duplicates merged, in document order.
   final _channels = <String, EpgChannel>{};
@@ -900,8 +1255,8 @@ class _GuideImport {
   /// Programme channel ids not declared (yet): lower-cased -> spelling.
   final _undeclared = <String, String>{};
 
-  /// Ids (as stored) with programmes written by this import.
-  final _storedIds = <String>{};
+  /// Start seconds of the programmes written, by id as stored.
+  final _starts = <String, List<int>>{};
 
   var _matches = const <String, EpgMatch>{};
 
@@ -911,8 +1266,9 @@ class _GuideImport {
   int _reportedMatches = -1;
   int _written = 0;
 
-  /// Whether the guide's previous programmes were deleted.
-  bool replacedOld = false;
+  /// Whether programmes were written (the guide is then a mix of versions
+  /// until [run] completes).
+  bool wrote = false;
 
   /// Guide spelling of every id, by lower-cased id (after [run]).
   var _spellings = const <String, String>{};
@@ -929,10 +1285,12 @@ class _GuideImport {
   EpgDao get _epg => service._db.epgDao;
 
   /// Parses [bytes], writes the guide and returns the automatic matches.
+  /// Throws [_Restart] when [prefilter] turns out too narrow.
   Future<Map<String, EpgMatch>> run(Stream<List<int>> bytes) async {
     var sawProgrammes = false;
     final batches = service._parser.parse(
       bytes,
+      wantedChannelIds: prefilter,
       windowStart: plan.windowStart,
       windowEnd: plan.windowEnd,
       batchSize: service.batchSize,
@@ -966,10 +1324,10 @@ class _GuideImport {
         if (!known || _wanted.contains(id)) keep.add(p);
       }
       if (keep.isEmpty) continue;
-      await _replaceOld();
+      wrote = true;
       await _epg.insertProgrammes(guideId, keep);
       for (final p in keep) {
-        _storedIds.add(p.channelId);
+        (_starts[p.channelId] ??= []).add(toEpochSec(p.start));
       }
       _written += keep.length;
       job
@@ -983,6 +1341,8 @@ class _GuideImport {
         );
     }
     if (_channels.isEmpty && !sawProgrammes) {
+      // The filter may have dropped everything of a guide that changed.
+      if (prefilter != null) throw const _Restart();
       throw const ParseFailure('No guide channels or programmes found');
     }
 
@@ -993,13 +1353,10 @@ class _GuideImport {
     ];
     _match(all);
     _spellings = {for (final c in all) c.id.toLowerCase(): c.id};
-    final unwanted = [
-      for (final id in _storedIds)
-        if (!_wanted.contains(id.toLowerCase())) id,
-    ];
-    await service._deleteProgrammesFor(guideId, unwanted);
-    await _replaceOld();
-    await service._replaceGuideChannels(guideId, all);
+    await service._finishImport(guideId, {
+      for (final MapEntry(:key, :value) in _starts.entries)
+        if (_wanted.contains(key.toLowerCase())) key: value,
+    }, all);
     return _matches;
   }
 
@@ -1029,6 +1386,10 @@ class _GuideImport {
       for (final m in _matches.values) m.xmltvId.toLowerCase(),
       for (final id in manualIds) id.toLowerCase(),
     };
+    // The parser dropped programmes of ids outside the filter.
+    if (prefilter case final ids? when !ids.containsAll(_wanted)) {
+      throw const _Restart();
+    }
     final matched = _matches.length + manualIds.length;
     if (matched != _reportedMatches) {
       _reportedMatches = matched;
@@ -1040,12 +1401,5 @@ class _GuideImport {
         ),
       );
     }
-  }
-
-  /// Deletes the guide's previous programmes once, before new ones go in.
-  Future<void> _replaceOld() async {
-    if (replacedOld) return;
-    await _epg.deleteProgrammesOf(guideId);
-    replacedOld = true;
   }
 }
