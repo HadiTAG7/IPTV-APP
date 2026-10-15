@@ -317,12 +317,20 @@ class PlayerPanel extends StatelessWidget {
 
 /// The big number typed on the remote, with the channel it points at.
 class PlayerNumberBadge extends StatelessWidget {
-  const PlayerNumberBadge({super.key, required this.digits, this.channelName});
+  const PlayerNumberBadge({
+    super.key,
+    required this.digits,
+    this.channelName,
+    this.searching = false,
+  });
 
   final String digits;
 
   /// The matching channel, or null when the number is not in the list.
   final String? channelName;
+
+  /// The number is still being looked up (neither a name nor "no channel").
+  final bool searching;
 
   @override
   Widget build(BuildContext context) {
@@ -351,7 +359,7 @@ class PlayerNumberBadge extends StatelessWidget {
           ),
           if (name != null)
             BidiText(name, style: theme.textTheme.bodyMedium)
-          else if (number != null && number > 0)
+          else if (!searching && number != null && number > 0)
             Text(
               l10n.player_noChannelNumber(number),
               style: theme.textTheme.bodySmall?.copyWith(

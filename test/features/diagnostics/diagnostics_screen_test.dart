@@ -130,7 +130,7 @@ void main() {
           expect(find.text('Acme Box 1'), findsOneWidget);
           expect(find.text(l10n.diagRamMb(2048)), findsOneWidget);
           expect(find.text('armeabi-v7a, armeabi'), findsOneWidget);
-          expect(find.text('g12a · Amlogic · Amlogic'), findsOneWidget);
+          expect(find.text('g12a · Amlogic'), findsOneWidget);
           expect(find.text('android · SDK 30'), findsOneWidget);
           expect(find.text(l10n.settingsVersion('0.1.0+1')), findsOneWidget);
           expect(find.text(l10n.deviceModeTv), findsWidgets);
@@ -317,7 +317,9 @@ void main() {
       d.rig.log
         ..addSecret(_secret)
         ..info('login with $_secret')
-        ..info('GET http://127.0.0.1:9/get.php?username=bob&password=pw123');
+        ..info('GET http://127.0.0.1:9/get.php?username=bob&password=pw123')
+        // A stream of an imported playlist: the account is in the path.
+        ..info('Open http://127.0.0.1:9/alice7/Zx-Path-Secret/501.ts');
       await d.rig.db.sourcesDao.create(
         const SourceConfig(
           kind: SourceKind.xtream,
@@ -343,6 +345,11 @@ void main() {
       expect(report, isNot(contains(_secret)));
       expect(report, isNot(contains('pw123')));
       expect(report, isNot(contains('Private name')));
+      expect(report, contains('Open http://127.0.0.1:9/***.ts'));
+      expect(report, isNot(contains('alice7')));
+      expect(report, isNot(contains('Zx-Path-Secret')));
+      // Nor on screen.
+      expect(find.textContaining('Zx-Path-Secret'), findsNothing);
       expect(find.text('Copied'), findsOneWidget);
       await disposeRig(tester, d.rig);
     });
@@ -403,6 +410,33 @@ void main() {
       final report = buildDiagnosticsReport(snapshot);
       expect(report, contains('Sources: 0'));
       expect(report, isNot(contains(_secret)));
+    });
+
+    test('the chipset names Amlogic once', () {
+      const box = DeviceCaps(hardware: 'g12a', socManufacturer: 'Amlogic');
+      expect(chipsetParts(box), ['g12a', 'Amlogic']);
+      expect(chipsetParts(const DeviceCaps(hardware: 'amlogic-sm1')), [
+        'amlogic-sm1',
+      ]);
+      expect(
+        chipsetParts(const DeviceCaps(hardware: 'mt8695', socManufacturer: '')),
+        ['mt8695'],
+      );
+      expect(
+        chipsetParts(const DeviceCaps(hardware: 'g12a', socManufacturer: 'X')),
+        // Detected from the hardware name (g12a), named by no part.
+        ['g12a', 'X', 'Amlogic'],
+      );
+      final summary = buildDiagnosticsSummary(
+        const DiagnosticsSnapshot(
+          caps: box,
+          formFactor: FormFactor.tv,
+          lite: false,
+          settings: AppSettings(),
+        ),
+      );
+      expect(summary, contains('SoC: g12a Amlogic, cores'));
+      expect(summary, isNot(contains('(Amlogic)')));
     });
   });
 }

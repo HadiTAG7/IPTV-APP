@@ -265,14 +265,7 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
                   ),
                   _InfoRow(
                     label: l10n.diagnostics_chipset,
-                    value: _orUnknown(
-                      l10n,
-                      [
-                        caps.hardware,
-                        ?caps.socManufacturer,
-                        if (caps.isAmlogic) 'Amlogic',
-                      ].where((s) => s.trim().isNotEmpty).join(' · '),
-                    ),
+                    value: _orUnknown(l10n, chipsetParts(caps).join(' · ')),
                   ),
                   _InfoRow(
                     label: l10n.diagnostics_cpuCores,
@@ -411,7 +404,10 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
                 key: const ValueKey('diagnostics-log'),
                 title: l10n.diagLog,
                 focusable: false,
-                children: [_LogView(lines: shown)],
+                // No URL paths on screen either (see [hideUrlPaths]).
+                children: [
+                  _LogView(lines: [for (final l in shown) hideUrlPaths(l)]),
+                ],
               ),
             ],
           ),

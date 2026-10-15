@@ -1,3 +1,4 @@
+import '../../core/net/redact.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../engine/player_engine.dart';
 
@@ -38,3 +39,33 @@ String engineLabel(AppLocalizations l10n, EngineKind? kind) => switch (kind) {
   EngineKind.mpv => l10n.engineMpv,
   null => '-',
 };
+
+final _urlPattern = RegExp(
+  // Up to whitespace, quotes (\x22, \x27) or angle brackets.
+  r'\b([a-z][a-z0-9+.-]*)://([^\s\x22\x27<>]+)',
+  caseSensitive: false,
+);
+final _trailingPunctuation = RegExp(r'[.,;:!?)\]}]+$');
+final _pathStart = RegExp('[/?#]');
+final _extension = RegExp(r'\.([a-z0-9]{1,5})$', caseSensitive: false);
+
+/// [text] with every URL cut down to its scheme, host and port, plus the
+/// file extension of its path: `http://host:8080/***.ts`.
+///
+/// For reports and on-screen details. Stream URLs of Xtream playlists carry
+/// the account as bare path segments (`http://host/user/pass/123.ts`), which
+/// [redact] cannot recognise without the source's secrets (an imported M3U
+/// file has none), so no path or query is shown at all.
+String hideUrlPaths(String text) => text.replaceAllMapped(_urlPattern, (m) {
+  var url = m[2]!;
+  final tail = _trailingPunctuation.firstMatch(url)?.group(0) ?? '';
+  url = url.substring(0, url.length - tail.length);
+  final cut = url.indexOf(_pathStart);
+  final authority = cut < 0 ? url : url.substring(0, cut);
+  final rest = cut < 0 ? '' : url.substring(cut);
+  final host = authority.substring(authority.lastIndexOf('@') + 1);
+  if (rest.isEmpty || rest == '/') return '${m[1]}://$host$rest$tail';
+  final path = rest.split(RegExp('[?#]')).first;
+  final ext = _extension.firstMatch(path)?.group(1);
+  return '${m[1]}://$host/$redactedMark${ext == null ? '' : '.$ext'}$tail';
+});

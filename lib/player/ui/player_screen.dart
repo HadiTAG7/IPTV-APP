@@ -20,7 +20,7 @@ import '../../widgets/bidi_text.dart';
 import '../engine/player_engine.dart';
 import '../player_providers.dart';
 import '../session/playback_controller.dart';
-import '../session/zap_controller.dart';
+import 'paged_zapper.dart';
 import 'play_request.dart';
 import 'player_dialogs.dart';
 import 'player_format.dart';
@@ -107,7 +107,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   bool _resumeShown = false;
   bool _countdownShown = false;
 
-  ValueListenable<ZapPreview<ZapEntry>>? _zapPreview;
+  ValueListenable<ZapView>? _zapPreview;
   FocusWatchdogState? _watchdog;
   bool _depsReady = false;
   bool _landscapeLocked = false;
@@ -115,6 +115,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   DateTime? _seekHeldSince;
   DateTime? _lastSeekRepeat;
   double? _doubleTapFraction;
+
+  /// The phone player holding the landscape lock. A closing player gives
+  /// the orientation back only while it still holds it, so it never undoes
+  /// the lock of a player opened during its exit transition.
+  static Object? _orientationOwner;
 
   bool get _failed =>
       _controller.phase == PlaybackPhase.failed || _session.error != null;
@@ -188,7 +193,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     ]) {
       node.dispose();
     }
-    if (_landscapeLocked) _restoreOrientation();
+    _releaseOrientation();
     _controllerSub.close();
     super.dispose();
   }
@@ -198,6 +203,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   void _lockLandscape() {
     _landscapeLocked = true;
+    _orientationOwner = this;
     unawaited(
       SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.landscapeLeft,
@@ -209,12 +215,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  void _restoreOrientation() {
+  /// Gives back the orientation and system bars (on exit, or dispose when
+  /// the route went away without [_exit]) unless another player took them.
+  void _releaseOrientation() {
+    if (!_landscapeLocked) return;
+    _landscapeLocked = false;
+    if (!identical(_orientationOwner, this)) return;
+    _orientationOwner = null;
     unawaited(SystemChrome.setPreferredOrientations(const []));
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
   }
 
   void _onLifecycle(AppLifecycleState state) {
+    // A closing player leaves the shared controller to the next one.
+    if (_exiting) return;
     switch (state) {
       case AppLifecycleState.hidden ||
           AppLifecycleState.paused ||
@@ -235,6 +249,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   void _onSessionChanged() {
+    if (_exiting) return;
     final preview = _session.zapPreview;
     if (preview != _zapPreview) {
       _zapPreview?.removeListener(_onZapPreview);
@@ -245,6 +260,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   void _onControllerChanged() {
+    // The controller may already play for the next player screen.
+    if (_exiting) return;
     _syncCards();
     // A title that ended (without a next episode) shows its controls.
     if (!_session.isLive &&
@@ -306,6 +323,25 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   bool get _isCurrentRoute => ModalRoute.of(context)?.isCurrent ?? true;
+
+  /// The primary button of the card on screen (failure, resume prompt,
+  /// next-episode countdown), or null without a card.
+  FocusNode? get _cardNode {
+    if (_failed) return _retryNode;
+    if (_session.resumeOffer != null) return _resumeNode;
+    if (_session.countdown != null && _session.nextEpisode != null) {
+      return _nextNode;
+    }
+    return null;
+  }
+
+  /// Puts focus back on the card's primary button, e.g. after a dialog
+  /// closed: a card that appeared behind the dialog could not take focus.
+  void _refocusCard() {
+    final node = _cardNode;
+    if (node == null || _exiting || !mounted) return;
+    _focusAfterBuild(node);
+  }
 
   void _focusRoot() {
     if (!mounted || !_isCurrentRoute) return;
@@ -412,6 +448,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   };
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (_exiting) return KeyEventResult.handled;
     final key = event.logicalKey;
     if (event is KeyUpEvent) {
       if (arrowDirection(key) != null) _seekHeldSince = null;
@@ -469,7 +506,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       }
       return KeyEventResult.ignored;
     }
-    if (!_rootNode.hasPrimaryFocus || _cardShown) {
+    if (!_rootNode.hasPrimaryFocus) return KeyEventResult.ignored;
+    if (_cardShown) {
+      // Focus fell back to the player while a card is up (it appeared
+      // behind a dialog): the D-pad and OK go to the card.
+      if (direction != null || selectKeys.contains(key)) {
+        if (down) _cardNode?.requestFocus();
+        return KeyEventResult.handled;
+      }
       return KeyEventResult.ignored;
     }
     if (selectKeys.contains(key)) {
@@ -593,11 +637,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _exit();
   }
 
+  /// Leaves the player. Everything that could still reach the shared
+  /// controller stops first: during the exit transition a new player may
+  /// already be using it.
   void _exit() {
     if (_exiting) return;
-    _exiting = true;
+    setState(() => _exiting = true);
+    _session.close();
     _osdTimer?.cancel();
+    _bannerTimer?.cancel();
     _seek.cancel();
+    unawaited(_onlineSub?.cancel());
+    _onlineSub = null;
+    _releaseOrientation();
     unawaited(_controller.stop());
     Navigator.of(context).pop();
   }
@@ -625,6 +677,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     } finally {
       _dialogs--;
       _restartOsdTimer();
+      _refocusCard();
     }
   }
 
@@ -847,13 +900,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           child: Focus(
             focusNode: _rootNode,
             autofocus: true,
+            // Arrows never move focus onto the invisible player itself
+            // (from a card or the OSD); it is only focused on purpose.
+            skipTraversal: true,
             onKeyEvent: _onKey,
             child: Stack(
               fit: StackFit.expand,
               children: [
                 KeyedSubtree(
                   key: const ValueKey('player-video'),
-                  child: _controller.buildView(aspect: s.aspect),
+                  // A closing player stops showing the shared engine's
+                  // surface (the next player may already show it).
+                  child: _exiting
+                      ? const ColoredBox(
+                          color: Colors.black,
+                          child: SizedBox.expand(),
+                        )
+                      : _controller.buildView(aspect: s.aspect),
                 ),
                 Positioned.fill(child: _gestures()),
                 if (!failed && resume == null)
@@ -955,8 +1018,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
+  /// Engine errors and stats on screen: source secrets masked and no URL
+  /// path at all ([hideUrlPaths]).
   String _redact(String value) =>
-      _session.source?.redactText(value) ?? redact(value);
+      hideUrlPaths(_session.source?.redactText(value) ?? redact(value));
 
   Widget _gestures() {
     final vod = !_session.isLive;
@@ -991,14 +1056,30 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
     final preview = s.zapPreview;
     if (preview == null) return _channelBanner(null, -1);
-    return ValueListenableBuilder<ZapPreview<ZapEntry>>(
+    return ValueListenableBuilder<ZapView>(
       valueListenable: preview,
-      builder: (context, p, _) => _channelBanner(p.item, p.index),
+      builder: (context, p, _) => _channelBanner(
+        p.item,
+        p.index,
+        // The target's page is still being read: no name yet.
+        loading: p.pending && p.item == null && p.digits.isEmpty,
+      ),
     );
   }
 
-  Widget _channelBanner(ZapEntry? entry, int index) {
+  Widget _channelBanner(ZapEntry? entry, int index, {bool loading = false}) {
     final s = _session;
+    if (loading) {
+      return PlayerPanel(
+        key: const ValueKey('player-banner'),
+        maxWidth: 720,
+        child: ChannelInfoRow(
+          name: '',
+          number: s.positionNumber(index),
+          now: _clock.now(),
+        ),
+      );
+    }
     final key = entry?.key ?? s.request.item.key;
     final current = key == s.request.item.key;
     final row = current ? (s.channel ?? s.channelFor(key)) : s.channelFor(key);
@@ -1020,7 +1101,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Widget _numberBadge() {
     final preview = _session.zapPreview;
     if (preview == null) return const SizedBox.shrink();
-    return ValueListenableBuilder<ZapPreview<ZapEntry>>(
+    return ValueListenableBuilder<ZapView>(
       valueListenable: preview,
       builder: (context, p, _) {
         if (p.digits.isEmpty) return const SizedBox.shrink();
@@ -1028,6 +1109,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         final matched = item != null && _session.numberMatches(p);
         return PlayerNumberBadge(
           digits: p.digits,
+          searching: p.searching,
           channelName: matched
               ? _session.channelFor(item.key)?.name ?? ''
               : null,

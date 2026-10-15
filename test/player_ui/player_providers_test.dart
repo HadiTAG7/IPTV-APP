@@ -186,25 +186,99 @@ void main() {
 
     test('category, all channels and explicit keys', () async {
       final id = await seedLive(rig, count: 3);
-      expect(await rig.db.zapEntriesInCategory(id, 'news'), [
-        (key: 'ch1', num: 101),
+      expect(await rig.db.zapCountInCategory(id, 'news'), (
+        total: 3,
+        numbered: 3,
+      ));
+      expect(await rig.db.zapRangeInCategory(id, 'news', 1, 5), [
         (key: 'ch2', num: 102),
         (key: 'ch3', num: 103),
       ]);
-      expect(await rig.db.zapEntriesInCategory(id, 'none'), isEmpty);
-      expect((await rig.db.zapEntriesAll(id)).map((e) => e.key), [
-        'ch1',
-        'ch2',
-        'ch3',
-      ]);
+      expect(await rig.db.zapIndexInCategory(id, 'news', 'ch3'), 2);
+      expect(await rig.db.zapIndexInCategory(id, 'news', 'gone'), isNull);
+      expect(await rig.db.zapNumberInCategory(id, 'news', 102), (
+        (key: 'ch2', num: 102),
+        1,
+      ));
+      expect(await rig.db.zapNumberInCategory(id, 'news', 999), isNull);
+      expect(await rig.db.zapCountInCategory(id, 'none'), (
+        total: 0,
+        numbered: 0,
+      ));
+      expect(await rig.db.zapRangeInCategory(id, 'none', 0, 10), isEmpty);
+      expect(
+        (await rig.db.zapRangeAll(id, 0, 10, numbered: 3)).map((e) => e.key),
+        ['ch1', 'ch2', 'ch3'],
+      );
       expect(
         await rig.db.zapEntriesForKeys(id, ['ch3', 'gone', 'ch1', 'ch3']),
         [(key: 'ch3', num: 103), (key: 'ch1', num: 101)],
       );
     });
+
+    test('all channels: numbered by number, then unnumbered by name, read '
+        'in windows', () async {
+      final db = rig.db;
+      final id = await db.sourcesDao.create(
+        const SourceConfig(
+          kind: SourceKind.m3uUrl,
+          url: 'http://127.0.0.1:9/list.m3u',
+          name: 'Home',
+        ),
+      );
+      final gen = await db.catalogDao.beginGeneration(id);
+      await db.catalogDao.upsertChannels(id, gen, const [
+        ChannelData(key: 'z', name: 'Zulu'),
+        ChannelData(key: 'b', name: 'Bravo', num: 7),
+        ChannelData(key: 'a', name: 'Alpha'),
+        ChannelData(key: 'c2', name: 'Charlie', num: 3),
+        ChannelData(key: 'c1', name: 'Charlie', num: 3),
+        ChannelData(key: 'd', name: 'Delta', num: 1),
+      ]);
+      await db.catalogDao.commitGeneration(id, gen);
+      const order = ['d', 'c1', 'c2', 'b', 'a', 'z'];
+      final count = await db.zapCountAll(id);
+      expect(count, (total: 6, numbered: 4));
+      final all = [
+        for (var i = 0; i < 6; i += 2)
+          ...await db.zapRangeAll(id, i, 2, numbered: count.numbered),
+      ];
+      expect(all.map((e) => e.key), order);
+      for (final (i, key) in order.indexed) {
+        expect(await db.zapIndexAll(id, key), i, reason: key);
+      }
+      expect(await db.zapIndexAll(id, 'gone'), isNull);
+      expect(await db.zapNumberAll(id, 3), ((key: 'c1', num: 3), 1));
+      expect(await db.zapNumberAll(id, 7), ((key: 'b', num: 7), 3));
+      expect(await db.zapNumberAll(id, 2), isNull);
+    });
   });
 
   group('helpers', () {
+    test('hideUrlPaths keeps scheme, host, port and extension only', () {
+      expect(
+        hideUrlPaths('http://h:8080/user/pass/123.ts'),
+        'http://h:8080/***.ts',
+      );
+      expect(
+        hideUrlPaths('HTTP 403 for http://h/u/p/1 (x)'),
+        'HTTP 403 for http://h/*** (x)',
+      );
+      expect(
+        hideUrlPaths('see https://h.example/a/b.m3u8?token=abc.'),
+        'see https://h.example/***.m3u8.',
+      );
+      expect(
+        hideUrlPaths('"http://u:p@h/x/y.mkv", next (rtmp://h/live/key)'),
+        '"http://h/***.mkv", next (rtmp://h/***)',
+      );
+      expect(
+        hideUrlPaths('http://h:9 and http://h/'),
+        'http://h:9 and http://h/',
+      );
+      expect(hideUrlPaths('no address here'), 'no address here');
+    });
+
     test('formatPosition', () {
       expect(formatPosition(Duration.zero), '0:00');
       expect(formatPosition(const Duration(minutes: 42, seconds: 10)), '42:10');

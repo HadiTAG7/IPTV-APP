@@ -3,6 +3,7 @@ import '../../app/settings.dart';
 import '../../core/db/app_db.dart';
 import '../../core/net/redact.dart';
 import '../../core/platform/device_caps.dart';
+import '../../player/ui/player_format.dart';
 import 'engine_ab_test.dart';
 
 /// Everything the Diagnostics report shows, gathered once.
@@ -42,9 +43,22 @@ class DiagnosticsSnapshot {
 /// shows and a phone camera reads reliably).
 const kDiagnosticsQrMaxChars = 1000;
 
+/// The chipset as known: the hardware name, the SoC maker and "Amlogic"
+/// when the device was detected as one and neither part says so already.
+List<String> chipsetParts(DeviceCaps caps) {
+  final parts = [
+    caps.hardware,
+    ?caps.socManufacturer,
+  ].where((p) => p.trim().isNotEmpty).toList();
+  final named = parts.any((p) => p.toLowerCase().contains('amlogic'));
+  return [...parts, if (caps.isAmlogic && !named) 'Amlogic'];
+}
+
 /// The full plain-text report for "Copy report": device, app, settings,
 /// sources (no URLs or names), engine test and the last [logLines] lines.
-/// Every line is redacted.
+/// Every line is redacted, and URLs keep only their host and extension
+/// ([hideUrlPaths]): an imported Xtream playlist carries the account in
+/// the stream path, which [redact] cannot recognise.
 String buildDiagnosticsReport(DiagnosticsSnapshot s, {int logLines = 200}) {
   final b = StringBuffer()
     ..writeln('IPTV Player diagnostics')
@@ -69,7 +83,7 @@ String buildDiagnosticsReport(DiagnosticsSnapshot s, {int logLines = 200}) {
   for (final l in lines) {
     b.writeln(l);
   }
-  return redact(b.toString(), secrets: s.secrets);
+  return hideUrlPaths(redact(b.toString(), secrets: s.secrets));
 }
 
 /// A short summary for the QR code: device, app, settings and engine test,
@@ -78,9 +92,8 @@ String buildDiagnosticsSummary(
   DiagnosticsSnapshot s, {
   int maxChars = kDiagnosticsQrMaxChars,
 }) {
-  final text = redact(
-    'IPTV Player diagnostics\n${_summaryBody(s)}',
-    secrets: s.secrets,
+  final text = hideUrlPaths(
+    redact('IPTV Player diagnostics\n${_summaryBody(s)}', secrets: s.secrets),
   ).trimRight();
   if (text.length <= maxChars) return text;
   return '${text.substring(0, maxChars - 1)}…';
@@ -103,8 +116,8 @@ String _summaryBody(DiagnosticsSnapshot s) {
       'fireTv ${c.fireTv}, touch ${c.touch}); layout ${s.formFactor.name}',
     )
     ..writeln(
-      'SoC: ${_join([c.hardware, ?c.socManufacturer]).isEmpty ? '-' : _join([c.hardware, ?c.socManufacturer])}'
-      '${c.isAmlogic ? ' (Amlogic)' : ''}, cores ${c.cpuCount}',
+      'SoC: ${_join(chipsetParts(c)).isEmpty ? '-' : _join(chipsetParts(c))}'
+      ', cores ${c.cpuCount}',
     )
     ..writeln(
       'RAM: ${c.totalRamMb > 0 ? '${c.totalRamMb} MB' : 'unknown'}'

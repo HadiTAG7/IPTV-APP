@@ -8,14 +8,16 @@ import '../../core/db/queries/player_ui_queries.dart';
 import '../../core/log/ring_log.dart';
 import '../../core/net/redact.dart';
 import '../../core/time/clock.dart';
+import '../../epg/epg_models.dart';
 import '../../sources/models.dart';
 import '../engine/player_engine.dart';
 import '../player_providers.dart';
 import '../session/playback_controller.dart';
 import '../session/progress_saver.dart';
 import '../session/reconnect_watchdog.dart';
-import '../session/zap_controller.dart';
+import 'paged_zapper.dart';
 import 'play_request.dart';
+import 'player_format.dart';
 
 /// What the player screen plays and everything around it that is not the
 /// engine itself: resolving items through the source adapter, per-item
@@ -24,7 +26,10 @@ import 'play_request.dart';
 /// format" and the redacted report.
 ///
 /// Drives one [PlaybackController] (owned by the provider, not by this
-/// object).
+/// object). The controller is shared with the next player screen, so once
+/// the screen exits [close] makes this session inert: nothing it started
+/// (a debounced zap, a typed number, a source or catalog read) reaches the
+/// controller after that.
 class PlayerSession extends ChangeNotifier {
   PlayerSession({
     required PlayRequest request,
@@ -38,6 +43,7 @@ class PlayerSession extends ChangeNotifier {
     this.nextEpisodeLead = const Duration(seconds: 15),
     this.nextEpisodeCountdown = 10,
     this.epgRefresh = const Duration(minutes: 1),
+    this.guideSettle = const Duration(milliseconds: 150),
   }) : _initial = request,
        _request = request,
        _log = log ?? RingLog.instance;
@@ -57,8 +63,13 @@ class PlayerSession extends ChangeNotifier {
   /// Seconds of the next-episode countdown.
   final int nextEpisodeCountdown;
 
-  /// How often the live now/next is re-read.
+  /// How often the live now/next is re-read; also how long a channel
+  /// without guide data is remembered as such.
   final Duration epgRefresh;
+
+  /// The zap banner's now/next is read once it rests this long on a
+  /// channel.
+  final Duration guideSettle;
 
   final RingLog _log;
   final PlayRequest _initial;
@@ -66,22 +77,25 @@ class PlayerSession extends ChangeNotifier {
   PlayerSource? _source;
   Object? _error;
   bool _disposed = false;
+  bool _closed = false;
   bool _started = false;
 
   // Live.
-  ZapController<ZapEntry>? _zap;
-  List<ZapEntry> _zapEntries = const [];
-  bool _hasNumbers = false;
+  PagedZapper? _zap;
   ChannelRow? _channel;
   final _channels = <String, ChannelRow>{};
-  final _guide = <String, NowNext>{};
-  final _guideLoading = <String>{};
+
+  /// Keys read from the catalog and not found (never re-read).
+  final _missingChannels = <String>{};
   final _channelLoading = <String>{};
+  final _guide = <String, _GuideEntry>{};
+  final _guideLoading = <String>{};
   String? _liveExt;
   bool _favorite = false;
   String? _playedKey;
   int _tuneSeq = 0;
   Timer? _epgTimer;
+  Timer? _guideTimer;
 
   // Item prefs.
   AspectMode? _aspect;
@@ -96,6 +110,7 @@ class PlayerSession extends ChangeNotifier {
   Timer? _countdownTimer;
 
   static const _channelCacheSize = 200;
+  static const _guideCacheSize = 300;
 
   /// The item playing now (changes with zapping and the next episode).
   PlayRequest get request => _request;
@@ -110,7 +125,7 @@ class PlayerSession extends ChangeNotifier {
   ChannelRow? get channel => _channel;
 
   /// Now/next of the current channel (null without guide data).
-  NowNext? get nowNext => _guide[_request.item.key];
+  NowNext? get nowNext => _guide[_request.item.key]?.value;
   bool get favorite => _favorite;
 
   /// Aspect ratio of the current item (its saved choice, else Settings).
@@ -127,7 +142,10 @@ class PlayerSession extends ChangeNotifier {
   int? get countdown => _countdown;
 
   /// The zap banner (null until the zap list is loaded).
-  ValueListenable<ZapPreview<ZapEntry>>? get zapPreview => _zap?.preview;
+  ValueListenable<ZapView>? get zapPreview => _zap?.preview;
+
+  /// The screen exited ([close]) or the session was disposed.
+  bool get isClosed => _closed || _disposed;
 
   /// "Try other format" switches Xtream live between `.ts` and `.m3u8`.
   bool get canTryOtherFormat => isLive && (_source?.isXtream ?? false);
@@ -140,7 +158,7 @@ class PlayerSession extends ChangeNotifier {
 
   /// Loads the source and starts the request (or asks about resuming).
   Future<void> start() async {
-    if (_started) return;
+    if (_started || isClosed) return;
     _started = true;
     controller.addListener(_onController);
     controller.state.addListener(_onPlaybackState);
@@ -150,14 +168,18 @@ class PlayerSession extends ChangeNotifier {
   Future<void> _load() async {
     _error = null;
     try {
-      _source ??= await loadSource(sourceId);
+      final source = _source ?? await loadSource(sourceId);
+      if (isClosed) {
+        if (!identical(source, _source)) source.close();
+        return;
+      }
+      _source = source;
     } on Object catch (e) {
-      if (_disposed) return;
+      if (isClosed) return;
       _log.warn('Player: source $sourceId unavailable: $e');
       _setError(e);
       return;
     }
-    if (_disposed) return;
     if (isLive) {
       unawaited(_loadZapList());
       await _startLive(_request.item);
@@ -170,18 +192,19 @@ class PlayerSession extends ChangeNotifier {
   // Live.
 
   Future<void> _startLive(PlayableRef ref) async {
+    if (isClosed) return;
     final seq = ++_tuneSeq;
     final row =
         _channels[ref.key] ??
         await db.catalogDao.channelByKey(sourceId, ref.key);
-    if (seq != _tuneSeq || _disposed) return;
+    if (seq != _tuneSeq || isClosed) return;
     if (row != null) _remember(row);
     await _playLive(row?.toPlayable() ?? ref, row, seq);
   }
 
   Future<void> _playLive(PlayableRef ref, ChannelRow? row, int seq) async {
     final source = _source;
-    if (source == null) return;
+    if (source == null || seq != _tuneSeq || isClosed) return;
     _channel = row;
     _request = PlayRequest(
       sourceId: sourceId,
@@ -199,7 +222,7 @@ class PlayerSession extends ChangeNotifier {
       ContentKind.live,
       ref.key,
     );
-    if (seq != _tuneSeq || _disposed) return;
+    if (seq != _tuneSeq || isClosed) return;
     _aspect = prefs.aspect;
     _favorite = favorite;
     _notify();
@@ -227,59 +250,72 @@ class PlayerSession extends ChangeNotifier {
       maxConnections: source.maxConnections,
       channelPref: prefs.engine,
     );
-    if (seq != _tuneSeq || _disposed) return;
-    unawaited(_refreshGuide(ref.key));
+    if (seq != _tuneSeq || isClosed) return;
+    unawaited(_loadGuide([ref.key]));
     _scheduleEpgRefresh();
   }
 
   Future<void> _loadZapList() async {
-    final List<ZapEntry> entries;
+    final keys = _initial.zapKeys;
+    final category = _initial.categoryKey;
+    final key = _request.item.key;
+    PagedZapper? zap;
     try {
-      final keys = _initial.zapKeys;
-      final category = _initial.categoryKey;
-      entries = keys != null
-          ? await db.zapEntriesForKeys(sourceId, keys)
+      final ZapList list = keys != null
+          ? MemoryZapList(await db.zapEntriesForKeys(sourceId, keys))
           : category != null
-          ? await db.zapEntriesInCategory(sourceId, category)
-          : await db.zapEntriesAll(sourceId);
+          ? CategoryZapList(db, sourceId, category)
+          : AllChannelsZapList(db, sourceId);
+      if (isClosed) return;
+      zap = PagedZapper(
+        list: list,
+        onTune: (e) => unawaited(_tuneKey(e.key)),
+        onError: (e) => _log.warn('Player: zap list read failed: $e'),
+      );
+      await zap.init((key: key, num: _channel?.num));
     } on Object catch (e) {
       _log.warn('Player: zap list unavailable: $e');
+      zap?.dispose();
       return;
     }
-    if (_disposed) return;
-    final key = _request.item.key;
-    final index = entries.indexWhere((e) => e.key == key);
-    final hasNumbers = entries.any((e) => e.num != null);
-    _hasNumbers = hasNumbers;
-    final zap = ZapController<ZapEntry>(
-      onTune: (e) => unawaited(_tuneKey(e.key)),
-      items: entries,
-      initialIndex: index,
-      numberOf: hasNumbers ? (e) => e.num : null,
-    );
-    if (index < 0) zap.markTuned((key: key, num: _channel?.num));
+    if (isClosed) {
+      zap.dispose();
+      return;
+    }
     _zap = zap;
-    _zapEntries = entries;
     zap.preview.addListener(_onPreview);
-    unawaited(_prefetchAround(index));
+    unawaited(_prefetchAround(zap.currentIndex));
     _notify();
   }
 
   Future<void> _tuneKey(String key) async {
+    if (isClosed) return;
     final seq = ++_tuneSeq;
     final row =
         _channels[key] ?? await db.catalogDao.channelByKey(sourceId, key);
-    if (seq != _tuneSeq || _disposed || row == null) return;
+    if (seq != _tuneSeq || isClosed || row == null) return;
     _remember(row);
     await _playLive(row.toPlayable(), row, seq);
+    if (seq != _tuneSeq || isClosed) return;
     unawaited(_prefetchAround(_zap?.currentIndex ?? -1));
   }
 
+  /// The banner moved: its channel row is read at once (with its
+  /// neighbours), its now/next once the banner rests on it.
   void _onPreview() {
-    final item = _zap?.preview.value.item;
-    if (item != null) {
-      channelFor(item.key);
-      nowNextFor(item.key);
+    final p = _zap?.preview.value;
+    final item = p?.item;
+    if (p == null || item == null || isClosed) return;
+    if (!_channels.containsKey(item.key)) {
+      unawaited(_prefetchAround(p.index, also: item.key, guide: false));
+    }
+    _guideTimer?.cancel();
+    _guideTimer = null;
+    if (!_guideFresh(item.key)) {
+      _guideTimer = Timer(guideSettle, () {
+        _guideTimer = null;
+        unawaited(_loadGuide([item.key]));
+      });
     }
   }
 
@@ -295,15 +331,13 @@ class PlayerSession extends ChangeNotifier {
 
   /// The number shown for the zap list entry at [index] when the playlist
   /// has no channel numbers (its 1-based position), else null.
-  int? positionNumber(int index) =>
-      _zap == null || _hasNumbers || index < 0 ? null : index + 1;
+  int? positionNumber(int index) {
+    final zap = _zap;
+    return zap == null || zap.hasNumbers || index < 0 ? null : index + 1;
+  }
 
   /// Whether the typed number of [p] found a channel in the zap list.
-  bool numberMatches(ZapPreview<ZapEntry> p) {
-    final n = int.tryParse(p.digits);
-    if (n == null || n <= 0 || p.item == null) return false;
-    return _hasNumbers ? p.item!.num == n : p.index == n - 1;
-  }
+  bool numberMatches(ZapView p) => p.matched && p.item != null;
 
   /// Whether a channel number is being typed.
   bool get enteringNumber => (_zap?.preview.value.digits ?? '').isNotEmpty;
@@ -316,83 +350,108 @@ class PlayerSession extends ChangeNotifier {
   }
 
   /// Drops a half-typed number. False when none was typed.
-  bool cancelNumber() {
-    if (!enteringNumber) return false;
-    _zap?.cancelNumber();
-    return true;
+  bool cancelNumber() => _zap?.cancelNumber() ?? false;
+
+  /// A channel row from the cache (rows are read when the banner moves).
+  ChannelRow? channelFor(String key) => _channels[key];
+
+  /// Now/next of [key] from the cache (read when the banner rests on a
+  /// channel); null without guide data or before it was read.
+  NowNext? nowNextFor(String key) => _guide[key]?.value;
+
+  /// Whether [key]'s cached now/next is still valid: read less than
+  /// [epgRefresh] ago, and its current programme has not ended (nor its
+  /// next one started).
+  bool _guideFresh(String key) {
+    final entry = _guide[key];
+    if (entry == null) return false;
+    final now = clock.now();
+    if (now.difference(entry.readAt) >= epgRefresh) return false;
+    final current = entry.value?.now;
+    if (current != null && !now.isBefore(current.stop)) return false;
+    final next = entry.value?.next;
+    return next == null || now.isBefore(next.start);
   }
 
-  /// A channel row from the cache; loads it (and notifies) when missing.
-  ChannelRow? channelFor(String key) {
-    final row = _channels[key];
-    if (row != null || _channelLoading.contains(key)) return row;
-    _channelLoading.add(key);
-    unawaited(
-      db.catalogDao
-          .channelByKey(sourceId, key)
-          .then((r) {
-            _channelLoading.remove(key);
-            if (r == null || _disposed) return;
-            _remember(r);
-            _notify();
-          })
-          .catchError((Object _) {
-            _channelLoading.remove(key);
-          }),
-    );
-    return null;
-  }
-
-  /// Now/next of [key] from the cache; loads it when missing.
-  NowNext? nowNextFor(String key) {
-    final cached = _guide[key];
-    if (cached == null && !_guideLoading.contains(key)) {
-      unawaited(_refreshGuide(key));
-    }
-    return cached;
-  }
-
-  Future<void> _refreshGuide(String key) async {
-    if (!_guideLoading.add(key)) return;
+  /// Reads now/next of [keys] (those not fresh, or all with [force]) in one
+  /// query. Misses are cached too; listeners hear only of changed values.
+  Future<void> _loadGuide(List<String> keys, {bool force = false}) async {
+    final wanted = [
+      for (final k in keys.toSet())
+        if (!_guideLoading.contains(k) && (force || !_guideFresh(k))) k,
+    ];
+    if (wanted.isEmpty || isClosed) return;
+    _guideLoading.addAll(wanted);
     try {
-      final result = await db.epgDao.nowNext(sourceId, [key], clock.now());
-      if (_disposed) return;
-      final value = result[key];
-      if (value == null) {
-        _guide.remove(key);
-      } else {
-        _guide[key] = value;
+      final now = clock.now();
+      final result = await db.epgDao.nowNext(sourceId, wanted, now);
+      if (isClosed) return;
+      var changed = false;
+      for (final k in wanted) {
+        final value = result[k];
+        final old = _guide.remove(k);
+        if (!_sameNowNext(old?.value, value)) changed = true;
+        _guide[k] = _GuideEntry(value, now);
       }
-      _notify();
+      while (_guide.length > _guideCacheSize) {
+        _guide.remove(_guide.keys.first);
+      }
+      if (changed) _notify();
     } on Object catch (e) {
       _log.warn('Player: guide read failed: $e');
     } finally {
-      _guideLoading.remove(key);
+      _guideLoading.removeAll(wanted);
     }
   }
 
   void _scheduleEpgRefresh() {
     _epgTimer?.cancel();
     _epgTimer = Timer.periodic(epgRefresh, (_) {
-      if (isLive) unawaited(_refreshGuide(_request.item.key));
+      if (isLive && !isClosed) {
+        unawaited(_loadGuide([_request.item.key], force: true));
+      }
     });
   }
 
-  Future<void> _prefetchAround(int index) async {
-    final items = _zapEntries;
-    if (index < 0) return;
-    final n = items.length;
-    if (n == 0) return;
-    final keys = {
-      for (var d = -10; d <= 10; d++) items[((index + d) % n + n) % n].key,
-    }.where((k) => !_channels.containsKey(k)).toList();
-    if (keys.isEmpty) return;
+  /// Reads the channel rows (and, with [guide], now/next) of the zap list
+  /// entries around [index] that are in memory, plus [also].
+  Future<void> _prefetchAround(
+    int index, {
+    String? also,
+    bool guide = true,
+  }) async {
+    final zap = _zap;
+    final keys = <String>{?also};
+    final n = zap?.length ?? 0;
+    if (zap != null && index >= 0 && n > 0) {
+      for (var d = -10; d <= 10; d++) {
+        final entry = zap.entryAt(((index + d) % n + n) % n);
+        if (entry != null) keys.add(entry.key);
+      }
+    }
+    if (keys.isEmpty || isClosed) return;
+    final missing = [
+      for (final k in keys)
+        if (!_channels.containsKey(k) &&
+            !_missingChannels.contains(k) &&
+            !_channelLoading.contains(k))
+          k,
+    ];
+    if (guide) unawaited(_loadGuide(keys.toList()));
+    if (missing.isEmpty) return;
+    _channelLoading.addAll(missing);
     try {
-      final rows = await db.catalogDao.channelsByKeys(sourceId, keys);
-      if (_disposed) return;
+      final rows = await db.catalogDao.channelsByKeys(sourceId, missing);
+      if (isClosed) return;
       rows.forEach(_remember);
-    } on Object catch (_) {
-      // Prefetching is best-effort.
+      final found = {for (final r in rows) r.key};
+      _missingChannels.addAll(missing.where((k) => !found.contains(k)));
+      final shown = _zap?.preview.value.item?.key;
+      if (shown != null && found.contains(shown)) _notify();
+    } on Object catch (e) {
+      _log.warn('Player: channel read failed: $e');
+    } finally {
+      _channelLoading.removeAll(missing);
     }
   }
 
@@ -415,7 +474,7 @@ class PlayerSession extends ChangeNotifier {
         ContentKind.live,
         key,
       );
-      if (_disposed || key != _request.item.key) return;
+      if (isClosed || key != _request.item.key) return;
       _favorite = now;
       _notify();
     } on Object catch (e) {
@@ -426,7 +485,7 @@ class PlayerSession extends ChangeNotifier {
   /// Plays the current Xtream channel in the other container (`.ts` <->
   /// `.m3u8`); later channels of this session keep that choice.
   Future<void> tryOtherFormat() async {
-    if (!canTryOtherFormat) return;
+    if (!canTryOtherFormat || isClosed) return;
     final url = (controller.request?.url ?? '').toLowerCase();
     final hls =
         (controller.request?.isHls ?? false) ||
@@ -451,7 +510,7 @@ class PlayerSession extends ChangeNotifier {
       } on Object catch (e) {
         _log.warn('Player: progress read failed: $e');
       }
-      if (_disposed) return;
+      if (isClosed) return;
       if (saved != null &&
           ProgressSaver.shouldOfferResume(saved.position, saved.duration)) {
         if (askResume) {
@@ -468,7 +527,7 @@ class PlayerSession extends ChangeNotifier {
   /// Answers the resume offer: from the saved position or from the start.
   Future<void> chooseResume({required bool resume}) async {
     final offer = _resumeOffer;
-    if (offer == null) return;
+    if (offer == null || isClosed) return;
     _resumeOffer = null;
     _notify();
     await _playVod(resume ? offer.position : null);
@@ -476,13 +535,13 @@ class PlayerSession extends ChangeNotifier {
 
   Future<void> _playVod(Duration? startAt) async {
     final source = _source;
-    if (source == null) return;
+    if (source == null || isClosed) return;
     final seq = ++_tuneSeq;
     _error = null;
     _resetNextEpisode();
     final key = itemKey;
     final prefs = await db.prefsDao.prefsFor(sourceId, key.prefsKey);
-    if (seq != _tuneSeq || _disposed) return;
+    if (seq != _tuneSeq || isClosed) return;
     _aspect = prefs.aspect;
     _notify();
     final StreamRequest stream;
@@ -503,7 +562,7 @@ class PlayerSession extends ChangeNotifier {
       maxConnections: source.maxConnections,
       channelPref: prefs.engine,
     );
-    if (seq != _tuneSeq || _disposed) return;
+    if (seq != _tuneSeq || isClosed) return;
     if (_request.kind == PlayableKind.episode) unawaited(_loadEpisodes(seq));
   }
 
@@ -517,7 +576,7 @@ class PlayerSession extends ChangeNotifier {
         sourceId,
         seriesKey,
       );
-      if (seq != _tuneSeq || _disposed) return;
+      if (seq != _tuneSeq || isClosed) return;
       final index = episodes.indexWhere((e) => e.key == key);
       _seriesKey = seriesKey;
       _episode = index >= 0 ? episodes[index] : current;
@@ -540,7 +599,8 @@ class PlayerSession extends ChangeNotifier {
   }
 
   void _onPlaybackState() {
-    if (_nextEpisode == null ||
+    if (isClosed ||
+        _nextEpisode == null ||
         _nextCancelled ||
         _countdownTimer != null ||
         controller.itemKey != itemKey.encode()) {
@@ -579,7 +639,7 @@ class PlayerSession extends ChangeNotifier {
   /// Plays the next episode now (resuming it if it was started before).
   Future<void> playNextEpisode() async {
     final next = _nextEpisode;
-    if (next == null) return;
+    if (next == null || isClosed) return;
     _resetNextEpisode();
     _episode = next;
     _request = PlayRequest(
@@ -607,10 +667,13 @@ class PlayerSession extends ChangeNotifier {
   }
 
   /// Plays the current item with the other engine (remembered per item).
-  Future<void> switchEngine() => controller.switchEngine();
+  Future<void> switchEngine() async {
+    if (!isClosed) await controller.switchEngine();
+  }
 
   /// After a failure: reloads what failed (source, item) or replays.
   Future<void> retry() async {
+    if (isClosed) return;
     if (_error != null || _source == null) {
       final live = isLive;
       _error = null;
@@ -628,7 +691,7 @@ class PlayerSession extends ChangeNotifier {
   }
 
   void _onController() {
-    if (_disposed) return;
+    if (isClosed) return;
     if (isLive &&
         controller.phase == PlaybackPhase.playing &&
         controller.itemKey == itemKey.encode()) {
@@ -655,14 +718,15 @@ class PlayerSession extends ChangeNotifier {
   }
 
   void _notify() {
-    if (!_disposed) notifyListeners();
+    if (!isClosed) notifyListeners();
   }
 
-  /// A plain-text report for support, with every URL credential and source
-  /// secret masked.
+  /// A plain-text report for support, with every source secret masked and
+  /// no URL path or query at all ([hideUrlPaths]): the stream shows as
+  /// `scheme://host:port/***.ext`.
   Future<String> buildReport({String? appVersion}) async {
     final source = _source;
-    String safe(String s) => source?.redactText(s) ?? redact(s);
+    String safe(String s) => hideUrlPaths(source?.redactText(s) ?? redact(s));
     final b = StringBuffer()
       ..writeln('IPTV Player playback report')
       ..writeln('Time: ${clock.now().toUtc().toIso8601String()}');
@@ -698,17 +762,31 @@ class PlayerSession extends ChangeNotifier {
     return b.toString();
   }
 
-  @override
-  void dispose() {
-    if (_disposed) return;
-    _disposed = true;
+  /// The screen is exiting: stops everything this session would still
+  /// start (debounced zaps, typed numbers, reads in flight, the countdown,
+  /// guide refreshes). Its state stays readable for the closing frames.
+  void close() {
+    if (_closed) return;
+    _closed = true;
     _tuneSeq++;
     _epgTimer?.cancel();
+    _epgTimer = null;
+    _guideTimer?.cancel();
+    _guideTimer = null;
     _countdownTimer?.cancel();
+    _countdownTimer = null;
+    _zap?.close();
     if (_started) {
       controller.removeListener(_onController);
       controller.state.removeListener(_onPlaybackState);
     }
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    close();
+    _disposed = true;
     final zap = _zap;
     if (zap != null) {
       zap.preview.removeListener(_onPreview);
@@ -718,3 +796,25 @@ class PlayerSession extends ChangeNotifier {
     super.dispose();
   }
 }
+
+/// A cached now/next (null: the channel has no guide data) and when it was
+/// read.
+class _GuideEntry {
+  const _GuideEntry(this.value, this.readAt);
+
+  final NowNext? value;
+  final DateTime readAt;
+}
+
+bool _sameNowNext(NowNext? a, NowNext? b) =>
+    _sameProgramme(a?.now, b?.now) && _sameProgramme(a?.next, b?.next);
+
+bool _sameProgramme(EpgProgramme? a, EpgProgramme? b) =>
+    identical(a, b) ||
+    (a != null &&
+        b != null &&
+        a.channelId == b.channelId &&
+        a.start == b.start &&
+        a.stop == b.stop &&
+        a.title == b.title &&
+        a.subTitle == b.subTitle);

@@ -2,7 +2,8 @@
 // All data is synthetic (127.0.0.1 URLs, made-up names).
 import 'dart:async';
 
-import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:drift/drift.dart'
+    show QueryExecutor, QueryInterceptor, ApplyInterceptor, driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -35,13 +36,49 @@ const phoneCaps = DeviceCaps();
 const en = Locale('en');
 const ar = Locale('ar');
 
+/// Records the SELECT statements run on the database and how many rows the
+/// largest one returned.
+class QueryCounter extends QueryInterceptor {
+  final statements = <String>[];
+  int maxRows = 0;
+
+  /// Forgets what was recorded so far (e.g. the seeding).
+  void reset() {
+    statements.clear();
+    maxRows = 0;
+  }
+
+  /// SELECTs containing [fragment].
+  int count(String fragment) =>
+      statements.where((s) => s.contains(fragment)).length;
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    final rows = await executor.runSelect(statement, args);
+    statements.add(statement);
+    if (rows.length > maxRows) maxRows = rows.length;
+    return rows;
+  }
+}
+
 /// Everything a player test needs: database, fake engines and recorders.
 class PlayerRig {
-  PlayerRig({DateTime? now})
+  PlayerRig({DateTime? now, this.queries})
     : clock = FakeClock(now ?? DateTime.utc(2026, 3, 1, 20, 30)) {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
-    db = AppDatabase(NativeDatabase.memory(), clock: clock);
+    final queries = this.queries;
+    final executor = queries == null
+        ? NativeDatabase.memory()
+        : NativeDatabase.memory().interceptWith(queries);
+    db = AppDatabase(executor, clock: clock);
   }
+
+  /// Records the database's SELECTs when given.
+  final QueryCounter? queries;
 
   final FakeClock clock;
   late final AppDatabase db;

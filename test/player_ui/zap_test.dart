@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/player/ui/play_request.dart';
+import 'package:iptv_player/sources/models.dart';
 
 import 'support/player_harness.dart';
 
@@ -15,6 +17,21 @@ Finder _inBadge(String text) => find.descendant(
 );
 
 String _url(String key) => 'http://127.0.0.1:9/live/$key.ts';
+
+/// The now/next query of the guide (one per read, whatever the key count).
+const _nowNextSql = 'JOIN programmes';
+
+/// A request without a category or key list: zapping walks every channel.
+PlayRequest _allChannels(int sourceId, String key) => PlayRequest(
+  sourceId: sourceId,
+  item: PlayableRef(kind: PlayableKind.live, key: key, url: _url(key)),
+);
+
+Future<void> _zapAndSettle(WidgetTester tester, LogicalKeyboardKey key) async {
+  await tester.sendKeyEvent(key);
+  await tester.pump(const Duration(milliseconds: 400));
+  await settle(tester);
+}
 
 void main() {
   group('zapping', () {
@@ -176,5 +193,120 @@ void main() {
       expect(rig.openedUrls.last, _url('ch4'));
       await disposeRig(tester, rig);
     });
+  });
+
+  group('banner now/next', () {
+    testWidgets('a channel without guide data is read once, not every '
+        'frame', (tester) async {
+      final queries = QueryCounter();
+      final rig = PlayerRig(queries: queries)..autoPlay();
+      final id = await seedLive(rig);
+      await pumpPlayerApp(tester, rig);
+      await openPlayerFor(tester, liveRequest(id));
+      await tester.pump(const Duration(seconds: 1));
+      queries.reset();
+
+      // The zap banner rests on channel 2 (no guide data) while the
+      // debounce runs; then number entry keeps a badge up for 1.5 s.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(queries.count(_nowNextSql), lessThanOrEqualTo(1));
+      await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+      await tester.sendKeyEvent(LogicalKeyboardKey.digit0);
+      for (var i = 0; i < 60; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(queries.count(_nowNextSql), lessThanOrEqualTo(2));
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('now/next of the zap target shows once the banner rests '
+        'on it', (tester) async {
+      final rig = PlayerRig()..autoPlay();
+      final id = await seedLive(rig);
+      await seedGuide(rig, id);
+      await pumpPlayerApp(tester, rig);
+      await openPlayerFor(tester, liveRequest(id, key: 'ch2'));
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      expect(_inBanner('Channel 1'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('player-banner')),
+          matching: find.textContaining('Evening News'),
+        ),
+        findsOneWidget,
+      );
+      await disposeRig(tester, rig);
+    });
+  });
+
+  group('large lists', () {
+    for (final category in [null, 'news']) {
+      final name = category == null ? 'all channels' : 'a category';
+      testWidgets('$name: zapping reads windows, never the whole list', (
+        tester,
+      ) async {
+        final queries = QueryCounter();
+        final rig = PlayerRig(queries: queries)..autoPlay();
+        final id = await seedLive(rig, count: 1000);
+        await pumpPlayerApp(tester, rig);
+        queries.reset();
+        await openPlayerFor(
+          tester,
+          category == null
+              ? _allChannels(id, 'ch200')
+              : liveRequest(id, key: 'ch200', category: category),
+        );
+        await settle(tester);
+        expect(rig.openedUrls, [_url('ch200')]);
+
+        // Across a page boundary (index 199 -> 200).
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+        await tester.pump();
+        expect(_inBanner('Channel 201'), findsOneWidget);
+        await tester.pump(const Duration(milliseconds: 400));
+        await settle(tester);
+        expect(rig.openedUrls.last, _url('ch201'));
+
+        // A number far away (ch950 is number 1050).
+        for (final k in [
+          LogicalKeyboardKey.digit1,
+          LogicalKeyboardKey.digit0,
+          LogicalKeyboardKey.digit5,
+          LogicalKeyboardKey.digit0,
+        ]) {
+          await tester.sendKeyEvent(k);
+        }
+        await settle(tester);
+        expect(_inBadge('Channel 950'), findsOneWidget);
+        await press(tester, LogicalKeyboardKey.select);
+        expect(rig.openedUrls.last, _url('ch950'));
+        await _zapAndSettle(tester, LogicalKeyboardKey.arrowDown);
+        expect(rig.openedUrls.last, _url('ch949'));
+
+        // The list wraps around from the first channel to the last.
+        await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+        await tester.sendKeyEvent(LogicalKeyboardKey.digit0);
+        await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+        await press(tester, LogicalKeyboardKey.select);
+        expect(rig.openedUrls.last, _url('ch1'));
+        await _zapAndSettle(tester, LogicalKeyboardKey.arrowDown);
+        expect(rig.openedUrls.last, _url('ch1000'));
+        await _zapAndSettle(tester, LogicalKeyboardKey.arrowUp);
+        expect(rig.openedUrls.last, _url('ch1'));
+        // A lone 0 recalls the channel before.
+        await tester.sendKeyEvent(LogicalKeyboardKey.digit0);
+        await press(tester, LogicalKeyboardKey.select);
+        expect(rig.openedUrls.last, _url('ch1000'));
+
+        // No read returned more than one page of the 1000 channels.
+        expect(queries.maxRows, lessThanOrEqualTo(200));
+        await disposeRig(tester, rig);
+      });
+    }
   });
 }

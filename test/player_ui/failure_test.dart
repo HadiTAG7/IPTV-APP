@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/player/engine/player_engine.dart';
+import 'package:iptv_player/player/ui/play_request.dart';
+import 'package:iptv_player/sources/models.dart';
 
 import 'support/player_harness.dart';
 
@@ -14,6 +16,30 @@ Future<void> _pumpFor(WidgetTester tester, Duration total) async {
     await tester.pump(step);
     left -= step;
   }
+}
+
+/// An M3U source with `ch1` and `nourl`, a channel without a stream URL.
+Future<int> _seedWithBrokenChannel(PlayerRig rig) async {
+  final db = rig.db;
+  final id = await db.sourcesDao.create(
+    const SourceConfig(
+      kind: SourceKind.m3uUrl,
+      url: 'http://127.0.0.1:9/list.m3u',
+      name: 'Home',
+    ),
+  );
+  final gen = await db.catalogDao.beginGeneration(id);
+  await db.catalogDao.upsertChannels(id, gen, const [
+    ChannelData(
+      key: 'ch1',
+      name: 'Channel 1',
+      num: 101,
+      url: 'http://127.0.0.1:9/live/ch1.ts',
+    ),
+    ChannelData(key: 'nourl', name: 'No URL', num: 999),
+  ]);
+  await db.catalogDao.commitGeneration(id, gen);
+  return id;
 }
 
 /// Text of every [Text] and [RichText] on screen.
@@ -149,10 +175,155 @@ void main() {
       expect(report, contains('Phase: failed'));
       expect(report, contains('Source: xtream, max connections 1'));
       expect(report, contains('App: 0.1.0+1'));
-      expect(report, contains('/live/***/***/501.ts'));
+      // The stream shows as scheme, host, port and extension only.
+      expect(report, contains('Stream: http://127.0.0.1:9/***.ts'));
+      expect(report, isNot(contains('/live/')));
       expect(report, isNot(contains(_secret)));
       expect(report, isNot(contains('viewer7')));
       expect(find.text('Copied'), findsOneWidget);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('credentials in bare stream path segments stay hidden', (
+      tester,
+    ) async {
+      // An imported Xtream playlist (m3u_plus, output=ts): the account sits
+      // in the path, and the source itself knows no secrets.
+      final rig = PlayerRig();
+      rig.engines.onCreate = (e) =>
+          e.onOpen = (e, r) => e.emitError('HTTP 403 for ${r.url}');
+      final db = rig.db;
+      final id = await db.sourcesDao.create(
+        const SourceConfig(
+          kind: SourceKind.m3uUrl,
+          url: 'http://127.0.0.1:9/list.m3u',
+          name: 'Imported',
+        ),
+      );
+      final gen = await db.catalogDao.beginGeneration(id);
+      await db.catalogDao.upsertChannels(id, gen, const [
+        ChannelData(
+          key: 'x501',
+          name: 'Panel News',
+          url: 'http://127.0.0.1:9/viewer7/$_secret/501',
+        ),
+      ]);
+      await db.catalogDao.commitGeneration(id, gen);
+      await pumpPlayerApp(tester, rig);
+      await openPlayerFor(
+        tester,
+        PlayRequest(
+          sourceId: id,
+          item: const PlayableRef(kind: PlayableKind.live, key: 'x501'),
+        ),
+      );
+      await _pumpFor(tester, const Duration(seconds: 2));
+      expect(find.byKey(const ValueKey('player-failure')), findsOneWidget);
+      final screen = _screenText(tester);
+      expect(screen, contains('HTTP 403 for http://127.0.0.1:9/***'));
+      expect(screen, isNot(contains(_secret)));
+      expect(screen, isNot(contains('viewer7')));
+
+      await press(tester, LogicalKeyboardKey.arrowRight);
+      expect(focusedIn(const ValueKey('player-copy-report')), isTrue);
+      await press(tester, LogicalKeyboardKey.select);
+      final report = rig.clipboard!;
+      expect(report, contains('Stream: http://127.0.0.1:9/***'));
+      expect(report, isNot(contains(_secret)));
+      expect(report, isNot(contains('viewer7')));
+      await disposeRig(tester, rig);
+    });
+  });
+
+  group('cards behind a dialog', () {
+    forLocales((locale) {
+      testWidgets('a failure that appears while the options are open gets '
+          'the focus when they close (${locale.languageCode})', (tester) async {
+        final rig = PlayerRig()..autoPlay();
+        final id = await _seedWithBrokenChannel(rig);
+        await pumpPlayerApp(tester, rig, locale: locale);
+        await openPlayerFor(
+          tester,
+          liveRequest(id).copyWith(zapKeys: ['ch1', 'nourl']),
+        );
+        // Zap to a channel that cannot play, and open the options before
+        // the zap happens: the failure card appears behind the dialog.
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.contextMenu);
+        await _pumpFor(tester, const Duration(milliseconds: 500));
+        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byKey(const ValueKey('player-failure')), findsOneWidget);
+
+        await tester.binding.handlePopRoute();
+        await settle(tester);
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(focusLabel, 'player:retry');
+        // The D-pad stays on the card; the buttons follow the reading
+        // direction.
+        for (final key in [
+          LogicalKeyboardKey.arrowUp,
+          LogicalKeyboardKey.arrowDown,
+        ]) {
+          await press(tester, key);
+          expect(focusLabel, 'player:retry', reason: '$key');
+        }
+        await press(
+          tester,
+          locale == ar
+              ? LogicalKeyboardKey.arrowLeft
+              : LogicalKeyboardKey.arrowRight,
+        );
+        expect(focusedIn(const ValueKey('player-copy-report')), isTrue);
+        await disposeRig(tester, rig);
+      });
+    });
+
+    testWidgets('from the player itself, arrows and OK reach the card', (
+      tester,
+    ) async {
+      final rig = PlayerRig();
+      rig.engines.onCreate = (e) =>
+          e.onOpen = (e, _) => e.emitError('Source error');
+      final id = await seedLive(rig);
+      await pumpPlayerApp(tester, rig);
+      await openPlayerFor(tester, liveRequest(id));
+      await settle(tester);
+      expect(find.byKey(const ValueKey('player-failure')), findsOneWidget);
+      // Focus falls back to the player (e.g. a dialog's route restored it).
+      final root = FocusManager.instance.primaryFocus!.ancestors.firstWhere(
+        (n) => n.debugLabel == 'player',
+      );
+      root.requestFocus();
+      await tester.pump();
+      expect(focusLabel, 'player');
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(focusLabel, 'player:retry');
+      root.requestFocus();
+      await tester.pump();
+      await press(tester, LogicalKeyboardKey.select);
+      expect(focusLabel, 'player:retry');
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('a next-episode countdown that starts behind a dialog gets '
+        'the focus when it closes', (tester) async {
+      final rig = PlayerRig()..autoPlay(duration: const Duration(minutes: 40));
+      final id = await seedVod(rig);
+      await pumpPlayerApp(tester, rig);
+      await openPlayerFor(tester, episodeRequest(id));
+      await press(tester, LogicalKeyboardKey.contextMenu);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      rig.engine.setState(position: const Duration(minutes: 39, seconds: 50));
+      await settle(tester);
+      expect(find.byKey(const ValueKey('player-next-episode')), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await settle(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(focusLabel, 'player:next-episode');
+      await press(tester, LogicalKeyboardKey.select);
+      expect(rig.openedUrls.last, 'http://127.0.0.1:9/series/e2.mp4');
       await disposeRig(tester, rig);
     });
   });
