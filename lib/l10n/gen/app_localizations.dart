@@ -1537,6 +1537,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Series'**
   String get searchSeries;
+
+  /// Account expiry error when the provider sent no expiry date.
+  ///
+  /// In en, this message translates to:
+  /// **'This subscription has expired.'**
+  String get errorExpiredNoDate;
 }
 
 class _AppLocalizationsDelegate

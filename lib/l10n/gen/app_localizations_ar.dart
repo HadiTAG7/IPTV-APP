@@ -878,4 +878,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get searchSeries => 'المسلسلات';
+
+  @override
+  String get errorExpiredNoDate => 'انتهى هذا الاشتراك.';
 }

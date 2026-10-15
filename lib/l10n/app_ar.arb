@@ -255,5 +255,7 @@
   "searchNoResults": "لا توجد نتائج لـ «\u2068{query}\u2069»",
   "searchChannels": "القنوات",
   "searchMovies": "الأفلام",
-  "searchSeries": "المسلسلات"
+  "searchSeries": "المسلسلات",
+
+  "errorExpiredNoDate": "انتهى هذا الاشتراك."
 }
