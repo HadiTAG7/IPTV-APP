@@ -857,4 +857,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get searchSeries => 'Series';
+
+  @override
+  String get errorExpiredNoDate => 'This subscription has expired.';
 }

@@ -350,5 +350,10 @@
   },
   "searchChannels": "Channels",
   "searchMovies": "Movies",
-  "searchSeries": "Series"
+  "searchSeries": "Series",
+
+  "errorExpiredNoDate": "This subscription has expired.",
+  "@errorExpiredNoDate": {
+    "description": "Account expiry error when the provider sent no expiry date."
+  }
 }
