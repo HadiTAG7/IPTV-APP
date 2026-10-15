@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/features/live/live_models.dart';
 import 'package:iptv_player/features/live/live_screen.dart';
+import 'package:iptv_player/features/live/providers.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
 
 import 'support/live_test_utils.dart';
@@ -101,10 +102,11 @@ void main() {
   }
 
   testWidgets('Back from the info pane returns to the channel; the list '
-      'shown last comes back on the next start', (tester) async {
+      'shown last is saved and comes back on the next start', (tester) async {
     final db = openAppTestDb();
-    await seedThreeCategories(db);
+    final id = await seedThreeCategories(db);
     await pumpLiveApp(tester, db);
+    expect(await db.settingsDao.getString(liveLastListKey(id)), isNull);
     await press(tester, LogicalKeyboardKey.arrowRight);
     await press(tester, LogicalKeyboardKey.arrowLeft);
     await press(tester, LogicalKeyboardKey.arrowDown);
@@ -112,6 +114,7 @@ void main() {
     expectFocusOn('Sports');
     await press(tester, LogicalKeyboardKey.select);
     expectFocusOn('Channel 11');
+    expect(await db.settingsDao.getString(liveLastListKey(id)), 'cat:sports');
     await press(tester, LogicalKeyboardKey.arrowDown);
     await press(tester, LogicalKeyboardKey.arrowRight);
     expect(find.byKey(const ValueKey('live-info-k12')), findsOneWidget);
@@ -119,16 +122,14 @@ void main() {
     await settle(tester);
     expectFocusOn('Channel 12');
 
-    // A new app start reopens Sports.
-    await disposeApp(tester, db);
-    final again = openAppTestDb();
-    final id = await seedThreeCategories(again);
-    await again.settingsDao.setString('live.lastList.$id', 'cat:sports');
-    await pumpLiveApp(tester, again);
+    // A new app start on the same database reopens Sports.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
+    await pumpLiveApp(tester, db);
     final live = tester.state<LiveViewState>(find.byType(LiveView));
     expect(live.selected, const LiveList.category('sports'));
     expect(find.text('Channel 11'), findsOneWidget);
     expect(find.text('Channel 1'), findsNothing);
-    await disposeApp(tester, again);
+    await disposeApp(tester, db);
   });
 }

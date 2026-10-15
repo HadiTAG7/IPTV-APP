@@ -146,19 +146,21 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
   // -------------------------------------------------------------------------
   // Channels.
 
-  Future<void> _playChannel(ChannelListSource source, LiveEntry entry) async {
+  Future<void> _playChannel(ChannelListSource source, LiveEntry entry) {
     final row = entry.row;
-    if (row == null) return;
-    final request = await source.requestFor(row);
-    if (!mounted) return;
-    final wasFocused = _list.currentState?.hasFocus ?? false;
-    await playLiveChannel(context, ref, request);
-    if (!mounted) return;
-    final last =
-        (await ref.read(recentDaoProvider).recentChannelKeys(_id, limit: 1))
-            .firstOrNull;
-    if (!mounted) return;
-    await _list.currentState?.refresh(focusKey: last, focus: wasFocused);
+    if (row == null) return Future.value();
+    return ref.read(playGateProvider).run(() async {
+      final request = await source.requestFor(row);
+      if (!mounted) return;
+      final wasFocused = _list.currentState?.hasFocus ?? false;
+      await playLiveChannel(context, ref, request);
+      if (!mounted) return;
+      final last =
+          (await ref.read(recentDaoProvider).recentChannelKeys(_id, limit: 1))
+              .firstOrNull;
+      if (!mounted) return;
+      await _list.currentState?.refresh(focusKey: last, focus: wasFocused);
+    });
   }
 
   Future<void> _channelMenu(ChannelListSource source, LiveEntry entry) async {
@@ -186,9 +188,11 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
       case LiveChannelAction.favorite:
         await setFavorite(ref, _id, ContentKind.live, entry.key, false);
       case LiveChannelAction.otherPlayer:
-        final request = await source.requestFor(row!);
-        if (!mounted) return;
-        await playWithOtherEngine(context, ref, request);
+        await ref.read(playGateProvider).run(() async {
+          final request = await source.requestFor(row!);
+          if (!mounted) return;
+          await playWithOtherEngine(context, ref, request);
+        });
       case null:
         break;
     }
@@ -197,10 +201,19 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
   // -------------------------------------------------------------------------
   // Movies and series.
 
-  Future<void> _openVod(VodTarget target) async {
-    await ref.read(vodDetailNavigatorProvider)(context, ref, target);
-    if (!mounted) return;
-    ref.invalidate(favoriteMoviesProvider(_id));
+  Future<void> _openVod(VodTarget target) =>
+      ref.read(playGateProvider).run(() async {
+        await ref.read(vodDetailNavigatorProvider)(context, ref, target);
+        if (!mounted) return;
+        ref.invalidate(favoriteMoviesProvider(_id));
+      });
+
+  /// A segment's favourites changed. When the segment shown has none left
+  /// its content pane leaves the tree (see [build]); focus in it moves to
+  /// the tabs first, before the rows it is on go.
+  void _onKeysChanged(FavoritesSegment segment, Set<String>? after) {
+    if (after == null || after.isNotEmpty || segment != _segment) return;
+    if (_contentPane.currentState?.hasFocus ?? false) _enterTabs();
   }
 
   Future<void> _vodMenu(ContentKind kind, PosterItem item) async {
@@ -237,8 +250,17 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
       final before = prev?.value;
       final after = next.value;
       if (before == null || after == null || setEquals(before, after)) return;
+      _onKeysChanged(FavoritesSegment.live, after);
       setState(() => _liveVersion++);
     });
+    ref.listen(
+      favoriteKeysProvider((_id, ContentKind.movie)),
+      (_, next) => _onKeysChanged(FavoritesSegment.movies, next.value),
+    );
+    ref.listen(
+      favoriteKeysProvider((_id, ContentKind.series)),
+      (_, next) => _onKeysChanged(FavoritesSegment.series, next.value),
+    );
     final counts = {
       FavoritesSegment.live: ref
           .watch(favoriteKeysProvider((_id, ContentKind.live)))
@@ -261,6 +283,11 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
     final autofocus = !_inShell;
     // Pushed pages have an app bar; in a shell tab the page names itself.
     final title = _inShell && isLargeLayout(context);
+    final (content, empty) = switch (_segment) {
+      FavoritesSegment.live => _buildChannels(l10n),
+      FavoritesSegment.movies => _buildMovies(l10n),
+      FavoritesSegment.series => _buildSeries(l10n),
+    };
     return HomeTabBackHandler(
       onBack: _onBack,
       child: FocusTraversalGroup(
@@ -308,19 +335,24 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
               ),
             ),
             Expanded(
-              child: PaneScope(
-                key: _contentPane,
-                debugLabel: 'favorites-content',
-                onExitUp: _enterTabs,
-                child: KeyedSubtree(
-                  key: ValueKey('favorites-${_segment.name}'),
-                  child: switch (_segment) {
-                    FavoritesSegment.live => _buildChannels(l10n),
-                    FavoritesSegment.movies => _buildMovies(l10n),
-                    FavoritesSegment.series => _buildSeries(l10n),
-                  },
-                ),
-              ),
+              // An empty segment is not a pane. A pane in the tree is
+              // remembered by the page's focus scope as the way back in, and
+              // one with nothing focusable would leave the rail unable to
+              // enter the page; without it the page re-enters on the tabs.
+              child: empty
+                  ? KeyedSubtree(
+                      key: ValueKey('favorites-${_segment.name}-empty'),
+                      child: content,
+                    )
+                  : PaneScope(
+                      key: _contentPane,
+                      debugLabel: 'favorites-content',
+                      onExitUp: _enterTabs,
+                      child: KeyedSubtree(
+                        key: ValueKey('favorites-${_segment.name}'),
+                        child: content,
+                      ),
+                    ),
             ),
           ],
         ),
@@ -328,12 +360,19 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
     );
   }
 
-  Widget _buildChannels(AppLocalizations l10n) {
-    final favorites =
-        ref.watch(favoriteKeysProvider((_id, ContentKind.live))).value ??
-        const <String>{};
+  /// The content of a segment, and whether it is empty (nothing to focus).
+  (Widget, bool) _buildChannels(AppLocalizations l10n) {
+    final keys = ref.watch(favoriteKeysProvider((_id, ContentKind.live))).value;
+    if (keys != null && keys.isEmpty) {
+      final empty = EmptyView(
+        message: l10n.favoritesEmpty,
+        icon: Icons.star_outline_rounded,
+      );
+      return (empty, true);
+    }
+    final favorites = keys ?? const <String>{};
     final recent = ref.watch(recentChannelKeysProvider(_id)).value;
-    return ChannelList(
+    final list = ChannelList(
       key: _list,
       sourceId: _id,
       list: const LiveList.favorites(),
@@ -346,31 +385,38 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
       dataVersion: _liveVersion,
       onPlay: _playChannel,
       onMenu: _channelMenu,
-      onEmptied: _enterTabs,
+      onEmptied: (hadFocus, _) {
+        if (hadFocus || (_contentPane.currentState?.hasFocus ?? false)) {
+          _enterTabs();
+        }
+      },
       emptyMessage: l10n.favoritesEmpty,
       emptyIcon: Icons.star_outline_rounded,
     );
+    return (list, false);
   }
 
-  Widget _buildMovies(AppLocalizations l10n) {
+  (Widget, bool) _buildMovies(AppLocalizations l10n) {
     final movies = ref.watch(favoriteMoviesProvider(_id));
     final value = movies.value;
     if (value == null) {
-      return movies.hasError
+      final state = movies.hasError
           ? ErrorView(
               onRetry: () => ref.invalidate(favoriteMoviesProvider(_id)),
               autofocusRetry: false,
             )
           : const LoadingView();
+      return (state, false);
     }
     if (value.items.isEmpty) {
-      return EmptyView(
+      final empty = EmptyView(
         message: l10n.favoritesEmptyMovies,
         icon: Icons.movie_outlined,
       );
+      return (empty, true);
     }
     final rows = {for (final f in value.items) f.key: f.item};
-    return PosterGrid(
+    final grid = PosterGrid(
       key: _grid,
       items: [
         for (final f in value.items)
@@ -388,27 +434,30 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
       },
       onMenu: (item) => unawaited(_vodMenu(ContentKind.movie, item)),
     );
+    return (grid, false);
   }
 
-  Widget _buildSeries(AppLocalizations l10n) {
+  (Widget, bool) _buildSeries(AppLocalizations l10n) {
     final series = ref.watch(favoriteSeriesProvider(_id));
     final items = series.value;
     if (items == null) {
-      return series.hasError
+      final state = series.hasError
           ? ErrorView(
               onRetry: () => ref.invalidate(favoriteSeriesProvider(_id)),
               autofocusRetry: false,
             )
           : const LoadingView();
+      return (state, false);
     }
     if (items.isEmpty) {
-      return EmptyView(
+      final empty = EmptyView(
         message: l10n.favoritesEmptySeries,
         icon: Icons.video_library_outlined,
       );
+      return (empty, true);
     }
     final rows = {for (final f in items) f.key: f.item};
-    return PosterGrid(
+    final grid = PosterGrid(
       key: _grid,
       items: [
         for (final f in items)
@@ -425,6 +474,7 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
       },
       onMenu: (item) => unawaited(_vodMenu(ContentKind.series, item)),
     );
+    return (grid, false);
   }
 }
 

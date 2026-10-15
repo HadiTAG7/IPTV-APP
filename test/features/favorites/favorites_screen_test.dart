@@ -143,6 +143,72 @@ void main() {
       await disposeApp(tester, db);
     });
 
+    testWidgets('${locale.languageCode}: the page stays reachable from the '
+        'rail after its list empties elsewhere', (tester) async {
+      final db = openAppTestDb();
+      final id = await addTestSource(db, lastSyncAt: DateTime.now());
+      await seedCatalog(
+        db,
+        id,
+        categories: [liveCategory('news', 'News', 0)],
+        channels: [for (var n = 1; n <= 3; n++) testChannel(n)],
+        movies: [
+          const MovieData(key: 'm1', name: 'First Movie', categoryKeys: ['f']),
+        ],
+      );
+      await db.favoritesDao.setFavorite(id, ContentKind.live, 'k2', true);
+      await db.favoritesDao.setFavorite(id, ContentKind.movie, 'm1', true);
+      await pumpLiveApp(tester, db, locale: locale);
+      final railSteps = HomeTab.tvTabs.indexOf(HomeTab.favorites);
+
+      // Leave Favorites from its list straight to the rail.
+      await openFavoritesTab(tester, rtl);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expectFocusOn('Channel 2');
+      await press(tester, toStart(rtl));
+      expect(focusedIn(const ValueKey('rail-favorites')), isTrue);
+
+      // On Live, remove the favourite with the Menu key.
+      for (var i = 0; i < railSteps; i++) {
+        await press(tester, LogicalKeyboardKey.arrowUp);
+      }
+      expect(focusedIn(const ValueKey('rail-live')), isTrue);
+      await press(tester, toEnd(rtl));
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expectFocusOn('Channel 2');
+      await press(tester, LogicalKeyboardKey.contextMenu);
+      expectFocusOn(l10n.liveRemoveFavorite);
+      await press(tester, LogicalKeyboardKey.select);
+      expect(await db.favoritesDao.favoriteKeys(id, ContentKind.live), []);
+      await press(tester, toStart(rtl));
+      await press(tester, toStart(rtl));
+      expect(focusedIn(const ValueKey('rail-live')), isTrue);
+
+      // Back on Favorites: entering lands on the segment tabs.
+      for (var i = 0; i < railSteps; i++) {
+        await press(tester, LogicalKeyboardKey.arrowDown);
+      }
+      expect(focusedIn(const ValueKey('rail-favorites')), isTrue);
+      expect(find.text(l10n.favoritesEmpty), findsOneWidget);
+      await press(tester, toEnd(rtl));
+      expect(focusedIn(const ValueKey('favorites-tab-live')), isTrue);
+
+      // Same for the movie grid: leave it from the poster to the rail, then
+      // the movie stops being a favourite.
+      await press(tester, toEnd(rtl));
+      expect(focusedIn(const ValueKey('favorites-tab-movies')), isTrue);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(focusedIn(const ValueKey('poster-m1')), isTrue);
+      await press(tester, toStart(rtl));
+      expect(focusedIn(const ValueKey('rail-favorites')), isTrue);
+      await db.favoritesDao.setFavorite(id, ContentKind.movie, 'm1', false);
+      await settle(tester);
+      expect(find.text(l10n.favoritesEmptyMovies), findsOneWidget);
+      await press(tester, LogicalKeyboardKey.select);
+      expect(focusedIn(const ValueKey('favorites-tab-movies')), isTrue);
+      await disposeApp(tester, db);
+    });
+
     testWidgets('${locale.languageCode}: phone favourites as a pushed page; '
         'a movie resumes from its saved position', (tester) async {
       final db = openAppTestDb();

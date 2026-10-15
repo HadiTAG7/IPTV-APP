@@ -1,4 +1,6 @@
 // Actions on live channels shared by Live, Favorites and Search.
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -51,16 +53,44 @@ typedef PlayerLauncher = Future<void> Function(
 /// by default. Tests replace it to record requests without a real player.
 final playerLauncherProvider = Provider<PlayerLauncher>((ref) => openPlayer);
 
-/// Marks the channel of [request] as played, then opens the fullscreen
-/// player. Completes when the player is closed.
+/// Lets one player at a time be opened from the Live, Favorites and Search
+/// screens: a second OK pressed while the first one is still opening (a
+/// database read, then the route push) would open a second player.
+class PlayGate {
+  bool _busy = false;
+
+  /// Whether a player is opening or open.
+  bool get busy => _busy;
+
+  /// Runs [open] (everything from the press to the player closing) unless
+  /// another run is in progress; then the call is ignored.
+  Future<void> run(Future<void> Function() open) async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      await open();
+    } finally {
+      _busy = false;
+    }
+  }
+}
+
+/// The [PlayGate] of the app (one per provider container).
+final playGateProvider = Provider<PlayGate>((ref) => PlayGate());
+
+/// Marks the channel of [request] as played and opens the fullscreen
+/// player at once (the Recent write is not awaited: it is queued before
+/// anything the player writes). Completes when the player is closed.
+///
+/// Callers wrap the whole action, from the key press on, in
+/// [playGateProvider]'s [PlayGate.run].
 Future<void> playLiveChannel(
   BuildContext context,
   WidgetRef ref,
   PlayRequest request,
-) async {
-  await markChannelPlayed(ref, request.sourceId, request.item.key);
-  if (!context.mounted) return;
-  await ref.read(playerLauncherProvider)(context, request);
+) {
+  unawaited(markChannelPlayed(ref, request.sourceId, request.item.key));
+  return ref.read(playerLauncherProvider)(context, request);
 }
 
 /// Adds or removes a favourite (`ContentKind.live` for channels).

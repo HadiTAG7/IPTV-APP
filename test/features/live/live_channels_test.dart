@@ -6,11 +6,13 @@ import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/time/clock.dart';
 import 'package:iptv_player/features/live/channel_list.dart';
 import 'package:iptv_player/features/live/info_pane.dart';
+import 'package:iptv_player/features/live/live_actions.dart';
 import 'package:iptv_player/features/live/live_models.dart';
 import 'package:iptv_player/features/live/live_screen.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/player/engine/player_engine.dart';
 import 'package:iptv_player/sources/models.dart';
+import 'package:iptv_player/theme/tokens.dart';
 import 'package:iptv_player/tv/key_repeat.dart';
 import 'package:iptv_player/widgets/channel_tile.dart';
 import 'package:iptv_player/widgets/states.dart';
@@ -399,9 +401,66 @@ void main() {
       expectFocusOn('Channel 1');
       await disposeApp(tester, db);
     });
+
+    testWidgets('the options sheet keeps clear of the TV overscan', (
+      tester,
+    ) async {
+      final db = openAppTestDb();
+      await seedThreeCategories(db);
+      await pumpLiveApp(
+        tester,
+        db,
+        overrides: [
+          targetPlatformProvider.overrideWithValue(TargetPlatform.android),
+        ],
+      );
+      await enterPage(tester);
+      await press(tester, LogicalKeyboardKey.contextMenu);
+      await tester.pumpAndSettle();
+      final last = find.byKey(
+        ValueKey('option-${LiveChannelAction.otherPlayer}'),
+      );
+      expect(last, findsOneWidget);
+      expect(
+        tester.getRect(last).bottom,
+        lessThanOrEqualTo(tvSize.height - TvLayout.overscanVertical),
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expectFocusOn('Channel 1');
+      await disposeApp(tester, db);
+    });
   });
 
   group('play', () {
+    testWidgets('a second OK while the player opens is ignored', (
+      tester,
+    ) async {
+      final db = openAppTestDb();
+      await seedThreeCategories(db);
+      final player = FakePlayer();
+      await pumpLiveApp(tester, db, overrides: [player.override]);
+      await enterPage(tester);
+      expectFocusOn('Channel 1');
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await settle(tester);
+      expect(player.requests, hasLength(1));
+      expect(find.text('PLAYING k1'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await settle(tester);
+      expectFocusOn('Channel 1');
+
+      // Once the player has closed, OK plays again.
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      await press(tester, LogicalKeyboardKey.select);
+      expect(player.requests, hasLength(2));
+      expect(player.requests.last.item.key, 'k2');
+      await tester.binding.handlePopRoute();
+      await settle(tester);
+      await disposeApp(tester, db);
+    });
+
     testWidgets('OK plays within the category and returns to the channel '
         'played last', (tester) async {
       final db = openAppTestDb();

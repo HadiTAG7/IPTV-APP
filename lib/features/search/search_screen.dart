@@ -168,7 +168,9 @@ class SearchViewState extends ConsumerState<SearchView> {
       _searching = false;
     });
     _pruneNodes(results);
-    _store.showing([for (final c in results.channels.take(12)) c.key]);
+    // At most [SearchView.limitPerKind] channels: one query covers them all,
+    // so rows scrolled to later have their programme too.
+    _store.showing([for (final c in results.channels) c.key]);
   }
 
   /// Drops the focus nodes of items no longer listed (after this frame,
@@ -207,13 +209,15 @@ class SearchViewState extends ConsumerState<SearchView> {
   // -------------------------------------------------------------------------
   // Actions.
 
-  Future<void> _playChannel(ChannelRow channel) async {
+  Future<void> _playChannel(ChannelRow channel) {
     final request = PlayRequest(
       sourceId: _id,
       item: channel.toPlayable(),
       zapKeys: [for (final c in _results.channels) c.key],
     );
-    await playLiveChannel(context, ref, request);
+    return ref
+        .read(playGateProvider)
+        .run(() => playLiveChannel(context, ref, request));
   }
 
   Future<void> _channelMenu(ChannelRow channel, bool isFavorite) async {
@@ -240,24 +244,33 @@ class SearchViewState extends ConsumerState<SearchView> {
       case LiveChannelAction.favorite:
         await setFavorite(ref, _id, ContentKind.live, channel.key, !isFavorite);
       case LiveChannelAction.otherPlayer:
-        await playWithOtherEngine(
-          context,
-          ref,
-          PlayRequest(
-            sourceId: _id,
-            item: channel.toPlayable(),
-            zapKeys: [for (final c in _results.channels) c.key],
-          ),
+        final request = PlayRequest(
+          sourceId: _id,
+          item: channel.toPlayable(),
+          zapKeys: [for (final c in _results.channels) c.key],
         );
+        await ref
+            .read(playGateProvider)
+            .run(() => playWithOtherEngine(context, ref, request));
       case null:
         break;
     }
   }
 
   Future<void> _vodMenu(ContentKind kind, String key, String title) async {
+    // Read the database: nothing here keeps the movie and series favourite
+    // providers alive, so their value may not be loaded.
+    final bool isFavorite;
+    try {
+      isFavorite = await ref
+          .read(favoritesDaoProvider)
+          .isFavorite(_id, kind, key);
+    } on Object catch (e, st) {
+      ref.read(ringLogProvider).error('Reading a favourite failed', e, st);
+      return;
+    }
+    if (!mounted) return;
     final l10n = AppLocalizations.of(context);
-    final favorites = ref.read(favoriteKeysProvider((_id, kind))).value;
-    final isFavorite = favorites?.contains(key) ?? false;
     final choice = await showOptionsSheet<bool>(
       context,
       title: title,
@@ -273,8 +286,11 @@ class SearchViewState extends ConsumerState<SearchView> {
     await setFavorite(ref, _id, kind, key, !isFavorite);
   }
 
-  void _open(VodTarget target) =>
-      unawaited(ref.read(vodDetailNavigatorProvider)(context, ref, target));
+  void _open(VodTarget target) => unawaited(
+    ref
+        .read(playGateProvider)
+        .run(() => ref.read(vodDetailNavigatorProvider)(context, ref, target)),
+  );
 
   // -------------------------------------------------------------------------
   // Build.
@@ -369,7 +385,10 @@ class SearchViewState extends ConsumerState<SearchView> {
                     name: c.name,
                     number: c.num,
                     logoUrl: c.logo,
-                    nowTitle: _store[c.key]?.now?.title,
+                    // Blank (not "no programme info") until it is known.
+                    nowTitle: _store.has(c.key)
+                        ? _store[c.key]?.now?.title
+                        : '',
                     progress: programmeProgress(_store[c.key]?.now, now),
                     isFavorite: favorites.contains(c.key),
                     onSelect: () => unawaited(_playChannel(c)),

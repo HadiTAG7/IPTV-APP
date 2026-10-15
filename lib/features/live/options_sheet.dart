@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../app/form_factor.dart';
 import '../../theme/tokens.dart';
 import '../../tv/tv_focusable.dart';
 import '../../widgets/bidi_text.dart';
@@ -44,10 +45,15 @@ class OptionsSheet<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // The sheet sits on the screen's bottom edge, outside the shell's
+    // overscan margin: keep the last choice clear of what TVs crop.
+    final overscan = overscanPadding(FormFactorScope.of(context));
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(
-        horizontal: Spacing.lg,
-        vertical: Spacing.lg,
+      padding: EdgeInsets.fromLTRB(
+        Spacing.lg,
+        Spacing.lg,
+        Spacing.lg,
+        Spacing.lg + overscan.bottom,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,

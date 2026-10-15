@@ -14,7 +14,9 @@ import 'preferred_focus.dart';
 /// Focusing an entry reports it ([onFocusList], the screen switches lists
 /// after a short pause); OK reports [onSelectList] (switch now and move to
 /// the channels); Menu reports [onMenu]. Focus nodes are kept per entry so
-/// list updates (a sync, hiding a category) never drop focus.
+/// list updates (a sync, hiding a category) keep focus on its entry; when
+/// the focused entry itself goes, [onFocusedEntryGone] lets the screen pick
+/// where focus goes.
 class LiveCategoryPane extends StatefulWidget {
   const LiveCategoryPane({
     super.key,
@@ -23,6 +25,7 @@ class LiveCategoryPane extends StatefulWidget {
     this.onFocusList,
     this.onSelectList,
     this.onMenu,
+    this.onFocusedEntryGone,
   });
 
   /// Row height.
@@ -33,6 +36,10 @@ class LiveCategoryPane extends StatefulWidget {
   final ValueChanged<LiveList>? onFocusList;
   final ValueChanged<LiveList>? onSelectList;
   final ValueChanged<LiveCategoryEntry>? onMenu;
+
+  /// The focused entry left the list (a sync dropped its category). Called
+  /// after the frame, before focus falls back to the pane itself.
+  final VoidCallback? onFocusedEntryGone;
 
   @override
   State<LiveCategoryPane> createState() => LiveCategoryPaneState();
@@ -53,6 +60,9 @@ class LiveCategoryPaneState extends State<LiveCategoryPane> {
 
   int _indexOf(LiveList list) =>
       widget.entries.indexWhere((e) => e.list == list);
+
+  /// Whether [list] has an entry.
+  bool hasEntry(LiveList list) => _indexOf(list) >= 0;
 
   /// Focuses the entry of [list], scrolling to it first when needed.
   void focusList(LiveList list) {
@@ -91,6 +101,14 @@ class LiveCategoryPaneState extends State<LiveCategoryPane> {
   void didUpdateWidget(LiveCategoryPane oldWidget) {
     super.didUpdateWidget(oldWidget);
     final ids = {for (final e in widget.entries) e.list.id};
+    final lostFocus = _nodes.entries.any(
+      (e) => !ids.contains(e.key) && e.value.hasFocus,
+    );
+    if (lostFocus) {
+      afterNextFrame(() {
+        if (mounted) widget.onFocusedEntryGone?.call();
+      });
+    }
     final gone = [
       for (final MapEntry(:key, :value) in _nodes.entries)
         if (!ids.contains(key) && !value.hasFocus) key,

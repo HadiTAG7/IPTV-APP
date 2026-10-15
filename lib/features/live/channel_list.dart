@@ -25,6 +25,11 @@ typedef ChannelEntryCallback = void Function(
   LiveEntry entry,
 );
 
+/// Called when a refresh finds no rows: whether a row had focus (or was
+/// meant to get it back), and the channel that was current (or was to be
+/// focused).
+typedef ListEmptiedCallback = void Function(bool hadFocus, String? lastKey);
+
 /// A remote-friendly, paged list of channels ([ChannelTile] rows).
 ///
 /// * Rows are read from the database by position in pages of
@@ -98,8 +103,10 @@ class ChannelList extends ConsumerStatefulWidget {
   /// The focused entry (null while its page loads).
   final ValueChanged<LiveEntry?>? onFocusEntry;
 
-  /// The list became empty while it had focus.
-  final VoidCallback? onEmptied;
+  /// A refresh found no rows. Called whether or not a row had focus, so
+  /// a screen can also move focus out of a neighbour pane that showed the
+  /// list's channel.
+  final ListEmptiedCallback? onEmptied;
   final String? emptyMessage;
   final IconData emptyIcon;
 
@@ -229,15 +236,22 @@ class ChannelListState extends ConsumerState<ChannelList> {
     if (pager == null || source == null) return;
     final hadFocus = focus ?? hasFocus;
     final key = focusKey ?? currentEntry?.key;
-    final count = await source.count();
-    final index = key == null || count == 0
-        ? null
-        : await source.indexOfKey(key);
+    int count;
+    int? index;
+    try {
+      count = await source.count();
+      index = key == null || count == 0 ? null : await source.indexOfKey(key);
+    } on Object catch (e, st) {
+      if (mounted) {
+        ref.read(ringLogProvider).error('Reloading channels failed', e, st);
+      }
+      return;
+    }
     if (!mounted || pager != _pager) return;
     pager.reset(count);
     if (count == 0) {
       setState(() => _current = 0);
-      if (hadFocus) widget.onEmptied?.call();
+      widget.onEmptied?.call(hadFocus, key);
       return;
     }
     final target = (index ?? _current).clamp(0, count - 1);
@@ -340,8 +354,9 @@ class ChannelListState extends ConsumerState<ChannelList> {
 
   /// Focuses the remembered row (the last focused, else the one the list
   /// opened on). Before the rows have loaded, focus follows once they have.
-  /// Returns false when the list is empty.
+  /// Returns false when the list is empty or failed to load.
   bool focusCurrent() {
+    if (_error != null) return false;
     final pager = _pager;
     if (pager == null) {
       _focusWhenReady = true;
@@ -523,7 +538,10 @@ class ChannelListState extends ConsumerState<ChannelList> {
       name: row?.name ?? (entry == null ? '' : l10n.commonUnavailable),
       number: row?.num,
       logoUrl: row?.logo,
-      nowTitle: nowNext?.now?.title,
+      // Blank (not "no programme info") until the guide has been read.
+      nowTitle: row == null || widget.store.has(row.key)
+          ? nowNext?.now?.title
+          : '',
       progress: programmeProgress(nowNext?.now, now),
       isFavorite: key != null && widget.favorites.contains(key),
       selected: key != null && key == widget.playingKey,

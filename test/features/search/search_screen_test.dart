@@ -7,6 +7,7 @@ import 'package:iptv_player/features/favorites/vod_navigation.dart';
 import 'package:iptv_player/features/search/search_screen.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/sources/models.dart';
+import 'package:iptv_player/widgets/channel_tile.dart';
 
 import '../live/support/live_test_utils.dart';
 
@@ -174,6 +175,113 @@ void main() {
       await disposeApp(tester, db);
     });
   }
+
+  testWidgets('TV: Menu on a movie or series offers removing a favourite '
+      'without the Favorites tab open', (tester) async {
+    final db = openAppTestDb();
+    final id = await seedSearchCatalog(db);
+    await db.favoritesDao.setFavorite(id, ContentKind.movie, 'm1', true);
+    final en = lookupAppLocalizations(const Locale('en'));
+    await pumpLiveApp(tester, db);
+    await openTab(tester, HomeTab.search);
+    await tester.enterText(find.byType(TextField), 'News');
+    await wait(tester, SearchView.debounce);
+    for (var i = 0; i < 3; i++) {
+      await press(tester, LogicalKeyboardKey.arrowDown);
+    }
+    expect(focusedIn(const ValueKey('search-movie-m1')), isTrue);
+
+    await press(tester, LogicalKeyboardKey.contextMenu);
+    expectFocusOn(en.vodRemoveFavorite);
+    expect(find.text(en.vodAddFavorite), findsNothing);
+    await press(tester, LogicalKeyboardKey.select);
+    expect(await db.favoritesDao.favoriteKeys(id, ContentKind.movie), []);
+    expect(focusedIn(const ValueKey('search-movie-m1')), isTrue);
+
+    // The series is not a favourite: Menu adds it.
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(focusedIn(const ValueKey('search-series-s1')), isTrue);
+    await press(tester, LogicalKeyboardKey.contextMenu);
+    expectFocusOn(en.vodAddFavorite);
+    await press(tester, LogicalKeyboardKey.select);
+    expect(await db.favoritesDao.favoriteKeys(id, ContentKind.series), ['s1']);
+    await disposeApp(tester, db);
+  });
+
+  testWidgets('TV: a second OK on a result while the player opens is '
+      'ignored', (tester) async {
+    final db = openAppTestDb();
+    await seedSearchCatalog(db);
+    final player = FakePlayer();
+    await pumpLiveApp(tester, db, overrides: [player.override]);
+    await openTab(tester, HomeTab.search);
+    await tester.enterText(find.byType(TextField), 'News');
+    await wait(tester, SearchView.debounce);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expectFocusOn('News One');
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await settle(tester);
+    expect(player.requests, hasLength(1));
+    await tester.binding.handlePopRoute();
+    await settle(tester);
+    expectFocusOn('News One');
+    await press(tester, LogicalKeyboardKey.select);
+    expect(player.requests, hasLength(2));
+    await tester.binding.handlePopRoute();
+    await settle(tester);
+    await disposeApp(tester, db);
+  });
+
+  testWidgets('every channel result gets its programme, not just the first '
+      'screen; none reads as "no guide" before it is known', (tester) async {
+    final db = openAppTestDb();
+    final id = await addTestSource(db, lastSyncAt: DateTime.now());
+    await seedCatalog(
+      db,
+      id,
+      categories: [liveCategory('all', 'All', 0)],
+      channels: [
+        for (var n = 1; n <= 20; n++)
+          testChannel(n, name: 'News $n', categories: ['all']),
+      ],
+    );
+    final start = DateTime.utc(2026, 10, 15, 18);
+    await seedGuide(db, id, {
+      for (var n = 1; n <= 20; n++)
+        n: [programme(n, start, const Duration(hours: 1), 'Show $n')],
+    });
+    final en = lookupAppLocalizations(const Locale('en'));
+    await pumpLiveApp(tester, db);
+    await openTab(tester, HomeTab.search);
+    await tester.enterText(find.byType(TextField), 'News');
+    await tester.pump(SearchView.debounce);
+    await tester.pump();
+    await tester.pump();
+    // Results are in, their guide not yet: no "No programme info".
+    expect(searchState(tester).results.channels, hasLength(20));
+    expect(find.text(en.liveNoProgrammeInfo), findsNothing);
+
+    await wait(tester, const Duration(milliseconds: 200));
+    expect(find.text('Show 1'), findsOneWidget);
+    final list = find.byKey(const ValueKey('search-results-News'));
+    await tester.scrollUntilVisible(
+      find.text('News 20'),
+      200,
+      scrollable: find
+          .descendant(of: list, matching: find.byType(Scrollable))
+          .first,
+    );
+    await settle(tester);
+    expect(find.text('Show 20'), findsOneWidget);
+    final tiles = tester.widgetList<ChannelTile>(find.byType(ChannelTile));
+    expect(tiles.length, greaterThan(5));
+    for (final tile in tiles) {
+      expect(tile.nowTitle, 'Show ${tile.number}');
+    }
+    expect(find.text(en.liveNoProgrammeInfo), findsNothing);
+    await disposeApp(tester, db);
+  });
 
   testWidgets('phone: Arabic folding finds hamza and taa marbuta '
       'variants', (tester) async {

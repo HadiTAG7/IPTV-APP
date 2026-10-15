@@ -72,6 +72,10 @@ class LiveViewState extends ConsumerState<LiveView> {
   LiveList? _selected;
   LiveList? _pending;
   String? _openKey;
+
+  /// Channel the next list opens on instead of the last played one (set
+  /// when a list is swapped under the user, to keep their place).
+  String? _keepKey;
   bool _ready = false;
   LiveEntry? _infoEntry;
   Timer? _infoTimer;
@@ -134,12 +138,15 @@ class LiveViewState extends ConsumerState<LiveView> {
   // -------------------------------------------------------------------------
   // Selection and focus.
 
-  void _select(LiveList list, {bool enter = false}) {
+  /// Shows [list]; with [enter], focus moves into it. [keepKey] opens the
+  /// new list on that channel (when listed) rather than the last played one.
+  void _select(LiveList list, {bool enter = false, String? keepKey}) {
     _selectTimer?.cancel();
     _pending = null;
     if (list != _selected) {
       setState(() {
         _selected = list;
+        _keepKey = keepKey;
         _list = GlobalKey(debugLabel: 'live-list');
         _infoEntry = null;
       });
@@ -166,17 +173,42 @@ class LiveViewState extends ConsumerState<LiveView> {
     });
   }
 
-  /// Categories -> channels (commits a pending category first).
+  /// Categories -> channels (commits a pending category first). A list
+  /// without rows may still offer Retry.
   void _enterChannels() {
     final pending = _pending;
     if (pending != null) {
       _select(pending, enter: true);
       return;
     }
-    _list.currentState?.focusCurrent();
+    if (_list.currentState?.focusCurrent() ?? false) return;
+    _channelsPane.currentState?.requestFocus();
   }
 
   void _enterCategories() => _catsPane.currentState?.requestFocus();
+
+  /// Info -> channels, or the categories when the list has no rows (it
+  /// emptied while the info pane had focus).
+  void _leaveInfo() {
+    if (_list.currentState?.focusCurrent() ?? false) return;
+    _focusSelectedCategory();
+  }
+
+  /// Focuses the entry of the list shown (not just the pane's remembered
+  /// entry, which may have gone).
+  void _focusSelectedCategory() {
+    final cats = _categories.currentState;
+    final selected = _selected;
+    if (cats != null && selected != null && cats.hasEntry(selected)) {
+      cats.focusList(selected);
+    } else {
+      _enterCategories();
+    }
+  }
+
+  bool get _contentHasFocus =>
+      (_channelsPane.currentState?.hasFocus ?? false) ||
+      (_infoPane.currentState?.hasFocus ?? false);
 
   /// Channels -> info: shows the focused channel at once, then enters.
   void _enterInfo() {
@@ -197,8 +229,59 @@ class LiveViewState extends ConsumerState<LiveView> {
     });
   }
 
-  void _onListEmptied() {
-    if (isLargeLayout(context)) _enterCategories();
+  /// The list has no rows any more (favourites removed, a sync emptied or
+  /// removed its category). Focus in the channel or info pane must not be
+  /// stranded there: a provider category falls back to All channels on the
+  /// same channel; Favorites and Recent stay (they say how to fill them)
+  /// and focus goes to their entry.
+  void _onListEmptied(bool hadFocus, String? lastKey) {
+    if (!mounted) return;
+    final large = isLargeLayout(context);
+    final focused = large && (hadFocus || _contentHasFocus);
+    final selected = _selected;
+    if (focused) {
+      if (selected != null && selected.isCategory) {
+        _select(const LiveList.all(), enter: true, keepKey: lastKey);
+        return;
+      }
+      _focusSelectedCategory();
+    }
+    // The channel shown in the info pane is no longer listed. Its buttons
+    // go once focus has left them (the request above applies first).
+    _infoTimer?.cancel();
+    if (_infoEntry != null) setState(() => _infoEntry = null);
+    _store.pin(null);
+  }
+
+  /// The list shown is gone (a sync dropped its category, or it was hidden
+  /// elsewhere): show All channels. Focus in the channel or info pane
+  /// follows into All on the same channel; a category being hovered still
+  /// opens after its pause.
+  void _onSelectedGone() {
+    final inContent = isLargeLayout(context) && _contentHasFocus;
+    final key = inContent
+        ? (_list.currentState?.currentEntry?.key ?? _infoEntry?.key)
+        : null;
+    final pending = _pending;
+    _select(const LiveList.all(), enter: inContent, keepKey: key);
+    if (pending != null &&
+        (_categories.currentState?.hasEntry(pending) ?? false)) {
+      _onCategoryFocus(pending);
+    }
+  }
+
+  /// The focused category left the list (a sync): focus goes to the list
+  /// shown, which is All channels when that was the one that left (see
+  /// [_onSelectedGone], which runs first), never to the first entry, which
+  /// would open Favorites after the pause.
+  void _onFocusedCategoryGone() {
+    final pending = _pending;
+    if (pending != null &&
+        !(_categories.currentState?.hasEntry(pending) ?? false)) {
+      _selectTimer?.cancel();
+      _pending = null;
+    }
+    _focusSelectedCategory();
   }
 
   List<FocusNode?> _preferred() {
@@ -219,7 +302,7 @@ class LiveViewState extends ConsumerState<LiveView> {
     if (list?.clearDigits() ?? false) return true;
     if (!isLargeLayout(context)) return false;
     if (_infoPane.currentState?.hasFocus ?? false) {
-      list?.focusCurrent();
+      _leaveInfo();
       return true;
     }
     if (_channelsPane.currentState?.hasFocus ?? false) {
@@ -244,12 +327,14 @@ class LiveViewState extends ConsumerState<LiveView> {
     await _list.currentState?.refresh(focusKey: last, focus: wasFocused);
   }
 
-  Future<void> _play(ChannelListSource source, LiveEntry entry) async {
+  Future<void> _play(ChannelListSource source, LiveEntry entry) {
     final row = entry.row;
-    if (row == null) return;
-    final request = await source.requestFor(row);
-    if (!mounted) return;
-    await _withPlayer(() => playLiveChannel(context, ref, request));
+    if (row == null) return Future.value();
+    return ref.read(playGateProvider).run(() async {
+      final request = await source.requestFor(row);
+      if (!mounted) return;
+      await _withPlayer(() => playLiveChannel(context, ref, request));
+    });
   }
 
   Future<void> _toggleFavorite(LiveEntry entry) {
@@ -294,9 +379,11 @@ class LiveViewState extends ConsumerState<LiveView> {
       case LiveChannelAction.favorite:
         await setFavorite(ref, _id, ContentKind.live, entry.key, !isFavorite);
       case LiveChannelAction.otherPlayer:
-        final request = await source.requestFor(row!);
-        if (!mounted) return;
-        await _withPlayer(() => playWithOtherEngine(context, ref, request));
+        await ref.read(playGateProvider).run(() async {
+          final request = await source.requestFor(row!);
+          if (!mounted) return;
+          await _withPlayer(() => playWithOtherEngine(context, ref, request));
+        });
       case null:
         break;
     }
@@ -406,9 +493,9 @@ class LiveViewState extends ConsumerState<LiveView> {
           ),
     ];
     if (!entries.any((e) => e.list == selected)) {
-      // The saved category is gone or hidden: show all channels.
+      // The saved or shown category is gone or hidden: show all channels.
       afterNextFrame(() {
-        if (mounted && _selected == selected) _select(const LiveList.all());
+        if (mounted && _selected == selected) _onSelectedGone();
       });
     }
     final list = ChannelList(
@@ -416,7 +503,7 @@ class LiveViewState extends ConsumerState<LiveView> {
       sourceId: _id,
       list: selected,
       store: _store,
-      initialKey: recent.firstOrNull ?? _openKey,
+      initialKey: _keepKey ?? recent.firstOrNull ?? _openKey,
       itemExtent: isLargeLayout(context)
           ? TvLayout.channelExtent
           : TvLayout.channelExtentPhone,
@@ -473,6 +560,7 @@ class LiveViewState extends ConsumerState<LiveView> {
                   onFocusList: _onCategoryFocus,
                   onSelectList: (l) => _select(l, enter: true),
                   onMenu: _categoryMenu,
+                  onFocusedEntryGone: _onFocusedCategoryGone,
                 ),
               ),
             ),
@@ -493,7 +581,7 @@ class LiveViewState extends ConsumerState<LiveView> {
               child: PaneScope(
                 key: _infoPane,
                 debugLabel: 'live-info',
-                onExitStart: () => _list.currentState?.focusCurrent(),
+                onExitStart: _leaveInfo,
                 child: LiveInfoPane(
                   key: _info,
                   entry: info,
@@ -522,7 +610,7 @@ class LiveViewState extends ConsumerState<LiveView> {
 
   Future<void> _playEntry(LiveEntry entry) async {
     final source = _source;
-    if (source == null) return;
+    if (source == null || ref.read(playGateProvider).busy) return;
     await source.count(); // keyed sources load their keys here
     if (!mounted) return;
     await _play(source, entry);
