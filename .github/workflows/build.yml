@@ -10,6 +10,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      release_version:
+        description: Publish a GitHub Release for this commit, e.g. 0.1.0 (creates tag v0.1.0). Leave empty for a test build.
+        type: string
+        default: ''
       impeller_off:
         description: Also build iptv-player-universal-compat.apk (Impeller off) for boxes with GPU glitches
         type: boolean
@@ -18,12 +22,16 @@ on:
 permissions:
   contents: write
 
+# Releases (a v* tag, or a manual run with release_version) get their own
+# group and are never cancelled by a later push.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.release_version != '' && '-release' || '' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && !(github.event_name == 'workflow_dispatch' && inputs.release_version != '') }}
 
 env:
   FLUTTER_VERSION: 3.47.7
+  # Set only on a manual run that publishes a release (see release_version).
+  RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version || '' }}
 
 jobs:
   test:
@@ -105,11 +113,16 @@ jobs:
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             name="${GITHUB_REF_NAME#v}"
+            what="Tag $GITHUB_REF_NAME"
+          elif [ -n "${RELEASE_VERSION:-}" ]; then
+            name="$RELEASE_VERSION"
+            what="release_version $RELEASE_VERSION"
           else
             name="0.0.0-dev"
+            what="0.0.0-dev"
           fi
           if ! [[ $name =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME is not a version tag like v1.2.3 or v1.2.3-beta.1."
+            echo "::error::$what is not a version like v1.2.3 or v1.2.3-beta.1 (release_version takes it without the v)."
             exit 1
           fi
           echo "BUILD_NAME=$name" >> "$GITHUB_ENV"
@@ -148,7 +161,7 @@ jobs:
             echo "suffix=" >> "$GITHUB_OUTPUT"
             echo "release=1" >> "$GITHUB_OUTPUT"
             echo "Signing with the release key."
-          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+          elif [ "$GITHUB_REF_TYPE" = "tag" ] || [ -n "${RELEASE_VERSION:-}" ]; then
             echo "::error::Release signing secrets are missing. Add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD before tagging a release."
             exit 1
           else
@@ -174,7 +187,7 @@ jobs:
             fi
             echo "sha256=$sha" >> "$GITHUB_OUTPUT"
             echo "APKs must be signed by certificate $sha"
-          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+          elif [ "$GITHUB_REF_TYPE" = "tag" ] || [ -n "${RELEASE_VERSION:-}" ]; then
             echo "::error::$pin_file is missing. Commit the release certificate's SHA-256 fingerprint (keytool -list -v -keystore release.jks, or apksigner verify --print-certs on a release APK) before tagging. Without the pin, a replaced keystore would ship APKs that cannot update installed copies."
             exit 1
           else
@@ -270,11 +283,16 @@ jobs:
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             name="${GITHUB_REF_NAME#v}"
+            what="Tag $GITHUB_REF_NAME"
+          elif [ -n "${RELEASE_VERSION:-}" ]; then
+            name="$RELEASE_VERSION"
+            what="release_version $RELEASE_VERSION"
           else
             name="0.0.0-dev"
+            what="0.0.0-dev"
           fi
           if ! [[ $name =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME is not a version tag like v1.2.3 or v1.2.3-beta.1."
+            echo "::error::$what is not a version like v1.2.3 or v1.2.3-beta.1 (release_version takes it without the v)."
             exit 1
           fi
           echo "BUILD_NAME=$name" >> "$GITHUB_ENV"
@@ -306,7 +324,7 @@ jobs:
 
   release:
     name: GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_version != '')
     needs: [android, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -331,6 +349,9 @@ jobs:
 
       - uses: softprops/action-gh-release@v3
         with:
+          # A tag push releases that tag; a manual run creates v<release_version> on this commit.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', inputs.release_version) }}
+          target_commitish: ${{ github.sha }}
           files: |
             dist/iptv-player-universal.apk
             dist/iptv-player-armeabi-v7a.apk
@@ -339,10 +360,10 @@ jobs:
             dist/SHA256SUMS.txt
             ${{ steps.optional.outputs.compat }}
           fail_on_unmatched_files: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-') || contains(inputs.release_version, '-') }}
           generate_release_notes: true
           body: |
-            **أي ملف أنزّل؟** إذا ما أنت متأكد نزّل `iptv-player-universal.apk`. أجهزة Fire TV Stick والبوكسات الرخيصة: `armeabi-v7a`. الجوالات الحديثة و Shield و Google TV: `arm64-v8a`. الكمبيوتر: `iptv-player-windows-x64.zip`. طريقة التثبيت: https://github.com/${{ github.repository }}/blob/main/docs/INSTALL_AR.md
+            **أي ملف أنزّل؟** إذا ما أنت متأكد نزّل `iptv-player-universal.apk`. أجهزة Fire TV Stick والبوكسات الرخيصة: `armeabi-v7a`. الجوالات الحديثة و Shield و Google TV: `arm64-v8a`. الكمبيوتر: `iptv-player-windows-x64.zip`. طريقة التثبيت: https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/INSTALL_AR.md
 
             **Which file?** Not sure: `iptv-player-universal.apk`. Fire TV Stick and cheap boxes: `armeabi-v7a`. Modern phones, Shield, Google TV: `arm64-v8a`. PC: `iptv-player-windows-x64.zip`.
 

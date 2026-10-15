@@ -173,17 +173,49 @@ void main() {
 
     group('Version', () {
       for (final job in ['android', 'windows']) {
-        ProcessResult run(Directory dir, String refType, String refName) =>
-            _bash(
-              _runScript(job, 'Version'),
-              cwd: dir,
-              env: {
-                'GITHUB_ENV': '${dir.path}/env',
-                'GITHUB_REF_TYPE': refType,
-                'GITHUB_REF_NAME': refName,
-                'BUILD_NUMBER': '7',
-              },
+        ProcessResult run(
+          Directory dir,
+          String refType,
+          String refName, {
+          String? releaseVersion,
+        }) => _bash(
+          _runScript(job, 'Version'),
+          cwd: dir,
+          env: {
+            'GITHUB_ENV': '${dir.path}/env',
+            'GITHUB_REF_TYPE': refType,
+            'GITHUB_REF_NAME': refName,
+            'BUILD_NUMBER': '7',
+            'RELEASE_VERSION': ?releaseVersion,
+          },
+        );
+
+        test('$job: a manual release builds release_version', () {
+          final dir = _tempDir();
+          final result = run(
+            dir,
+            'branch',
+            'claude/x',
+            releaseVersion: '0.1.0',
+          );
+          expect(result.exitCode, 0, reason: _log(result));
+          expect(_keyValues(File('${dir.path}/env')), {'BUILD_NAME': '0.1.0'});
+        });
+
+        test('$job: rejects a release_version that is not a version', () {
+          for (final version in ['v0.1.0', '0.1', r'1.2.3$(id)']) {
+            final dir = _tempDir();
+            final result = run(
+              dir,
+              'branch',
+              'claude/x',
+              releaseVersion: version,
             );
+            expect(result.exitCode, 1, reason: '$version\n${_log(result)}');
+            expect(result.stdout, contains('::error::'), reason: version);
+            expect(File('${dir.path}/env').existsSync(), isFalse);
+          }
+        });
 
         test('$job: tag v1.2.3-beta.1 builds 1.2.3-beta.1', () {
           final dir = _tempDir();
@@ -305,6 +337,13 @@ void main() {
         expect(keyProperties().existsSync(), isFalse);
       });
 
+      test('manual releases fail without the secrets', () {
+        final result = run('branch', {'RELEASE_VERSION': '0.1.0'});
+        expect(result.exitCode, 1, reason: _log(result));
+        expect(result.stdout, contains('::error::Release signing secrets'));
+        expect(keyProperties().existsSync(), isFalse);
+      });
+
       test('branch builds fall back to debug signing with a warning', () {
         final result = run('branch', {'KEYSTORE_BASE64': 'AAAA'});
         expect(result.exitCode, 0, reason: _log(result));
@@ -332,7 +371,11 @@ void main() {
             ..createSync(recursive: true)
             ..writeAsStringSync(content);
 
-      ProcessResult run(String refType, {required String releaseSigned}) {
+      ProcessResult run(
+        String refType, {
+        required String releaseSigned,
+        String? releaseVersion,
+      }) {
         File('${dir.path}/output').writeAsStringSync('');
         return _bash(
           _runScript('android', 'Release certificate pin'),
@@ -341,9 +384,23 @@ void main() {
             'GITHUB_OUTPUT': '${dir.path}/output',
             'GITHUB_REF_TYPE': refType,
             'RELEASE_SIGNED': releaseSigned,
+            'RELEASE_VERSION': ?releaseVersion,
           },
         );
       }
+
+      test('manual releases fail when the pin file is missing', () {
+        final result = run(
+          'branch',
+          releaseSigned: '1',
+          releaseVersion: '0.1.0',
+        );
+        expect(result.exitCode, 1, reason: _log(result));
+        expect(
+          result.stdout,
+          contains('::error::.github/release-cert.sha256 is missing'),
+        );
+      });
 
       Map<String, String> outputs() => _keyValues(File('${dir.path}/output'));
 
