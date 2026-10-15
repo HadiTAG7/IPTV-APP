@@ -19,6 +19,7 @@ import '../sources/sync/sync_progress.dart';
 import '../theme/tokens.dart';
 import '../tv/tv_focusable.dart';
 import '../widgets/bidi_text.dart';
+import 'form_factor.dart';
 import 'providers.dart';
 import 'shell_phone.dart';
 import 'shell_tv.dart';
@@ -103,15 +104,35 @@ final homePageBuilderProvider = Provider<Widget Function(HomeTab tab)>(
 
 /// Pushes [tab]'s screen as a page with an app bar (phone "More" items and
 /// any screen opened from another one).
+///
+/// On TV the app bar keeps clear of the overscan margins and has no Back
+/// arrow: the remote's Back key (Escape on a keyboard) closes the page, and
+/// a focusable arrow in the corner would sit where TVs crop the picture.
+/// The pages add the side and bottom margins to their own content.
 Future<void> pushHomePage(BuildContext context, WidgetRef ref, HomeTab tab) {
   final page = ref.read(homePageBuilderProvider)(tab);
   return Navigator.of(context).push<void>(
     MaterialPageRoute<void>(
       settings: RouteSettings(name: '/${tab.name}'),
-      builder: (context) => Scaffold(
-        appBar: AppBar(title: Text(tab.label(AppLocalizations.of(context)))),
-        body: SafeArea(top: false, child: page),
-      ),
+      builder: (context) {
+        final tv = FormFactorScope.isTv(context);
+        final scaffold = Scaffold(
+          appBar: AppBar(
+            automaticallyImplyLeading: !tv,
+            titleSpacing: tv ? TvLayout.overscanHorizontal : null,
+            title: Text(tab.label(AppLocalizations.of(context))),
+          ),
+          body: SafeArea(top: false, child: page),
+        );
+        if (!tv) return scaffold;
+        return ColoredBox(
+          color: AppColors.background,
+          child: Padding(
+            padding: const EdgeInsets.only(top: TvLayout.overscanVertical),
+            child: scaffold,
+          ),
+        );
+      },
     ),
   );
 }

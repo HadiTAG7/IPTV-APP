@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/app/home_shell.dart';
+import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/features/favorites/favorites_screen.dart';
 import 'package:iptv_player/features/favorites/vod_navigation.dart';
@@ -143,6 +144,47 @@ void main() {
       await tester.binding.handlePopRoute();
       await settle(tester);
       expect(focusedIn(const ValueKey('rail-favorites')), isTrue);
+      await disposeApp(tester, db);
+    });
+
+    testWidgets('${locale.languageCode}: a key pressed while the list '
+        're-reads after the player closes is kept', (tester) async {
+      final db = openAppTestDb();
+      final id = await seedFavorites(db);
+      final player = FakePlayer();
+      final recent = SlowRecentDao(db);
+      await pumpLiveApp(
+        tester,
+        db,
+        locale: locale,
+        overrides: [
+          player.override,
+          recentDaoProvider.overrideWithValue(recent),
+        ],
+      );
+      await openFavoritesTab(tester, rtl);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expectFocusOn('Channel 2');
+      await press(tester, LogicalKeyboardKey.select);
+      expect(player.requests.single.item.key, 'k2');
+
+      // The player zapped on to channel 5; Back, then Up at once.
+      await db.recentDao.markRecent(id, 'k5');
+      recent.delay = const Duration(milliseconds: 300);
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      expectFocusOn('Channel 2');
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      const tab = ValueKey('favorites-tab-live');
+      expect(focusedIn(tab), isTrue);
+      for (var i = 0; i < 4; i++) {
+        await settle(tester);
+      }
+      expect(focusedIn(tab), isTrue);
+      // The list still moved on to the channel played last.
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expectFocusOn('Channel 5');
       await disposeApp(tester, db);
     });
 

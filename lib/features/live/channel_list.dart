@@ -228,13 +228,14 @@ class ChannelListState extends ConsumerState<ChannelList> {
 
   /// Re-reads the source (after a sync, a favourite change or playback) and
   /// keeps focus on the same channel, or on [focusKey] when given and
-  /// listed. Focus moves only when the list has it (or [focus] is true);
-  /// otherwise just the remembered row changes.
-  Future<void> refresh({String? focusKey, bool? focus}) async {
+  /// listed. Focus moves only when, once the rows are read, the list has it
+  /// or [focus] is set and focus is nowhere else (no node, or a bare scope,
+  /// as while a closed player hands focus back); otherwise just the
+  /// remembered row changes. A key pressed meanwhile is never undone.
+  Future<void> refresh({String? focusKey, bool focus = false}) async {
     final pager = _pager;
     final source = _source;
     if (pager == null || source == null) return;
-    final hadFocus = focus ?? hasFocus;
     final key = focusKey ?? currentEntry?.key;
     int count;
     int? index;
@@ -248,6 +249,9 @@ class ChannelListState extends ConsumerState<ChannelList> {
       return;
     }
     if (!mounted || pager != _pager) return;
+    final primary = FocusManager.instance.primaryFocus;
+    final hadFocus =
+        hasFocus || (focus && (primary == null || primary is FocusScopeNode));
     pager.reset(count);
     if (count == 0) {
       setState(() => _current = 0);

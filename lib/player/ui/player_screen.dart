@@ -300,6 +300,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   void _onControllerChanged() {
     // The controller may already play for the next player screen.
     if (_exiting) return;
+    _onPlaybackState();
     _syncCards();
     // A title that ended (without a next episode) shows its controls.
     if (!_session.isLive &&
@@ -313,7 +314,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _rebuild();
   }
 
-  void _onPlaybackState() => _playing.value = _controller.state.value.playing;
+  /// Play/Pause shows what the user meant, not the engine's momentary state
+  /// (ExoPlayer is "not playing" while it rebuffers).
+  void _onPlaybackState() => _playing.value = _controller.playIntended;
 
   void _onZapPreview() {
     final p = _zapPreview?.value;

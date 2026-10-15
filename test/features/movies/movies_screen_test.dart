@@ -243,6 +243,33 @@ void main() {
     await disposeVodApp(tester, db);
   });
 
+  testWidgets('TV grid: Page Down moves focus rows ahead, on screen', (
+    tester,
+  ) async {
+    final (db, _) = await seed();
+    await pumpVodApp(tester, db: db);
+    await openTabFromRail(tester, 2, rtl: false);
+    await pressN(tester, LogicalKeyboardKey.arrowDown, 2);
+    expect(focusedIn(_action), isTrue);
+    await press(tester, LogicalKeyboardKey.select);
+    await press(tester, LogicalKeyboardKey.arrowRight);
+    expect(_focusedPoster(tester)?.index, 1);
+
+    await press(tester, LogicalKeyboardKey.pageDown);
+    final down = _focusedPoster(tester);
+    expect(down, isNotNull, reason: describeFocus());
+    // Same column, at least two rows further, fully visible.
+    expect(down!.index % 6, 1);
+    expect(down.index, greaterThanOrEqualTo(13));
+    final rect = tester.getRect(find.byKey(_grid(down.index)));
+    expect(rect.top, greaterThanOrEqualTo(0));
+    expect(rect.bottom, lessThanOrEqualTo(540));
+
+    await press(tester, LogicalKeyboardKey.pageUp);
+    expect(_focusedPoster(tester)?.index, lessThan(down.index));
+    await disposeVodApp(tester, db);
+  });
+
   for (final rtl in [false, true]) {
     testWidgets('${rtl ? 'ar' : 'en'} phone: chips, 3 columns, tap opens', (
       tester,
@@ -440,6 +467,76 @@ void main() {
       await disposeVodApp(tester, db);
     });
   }
+
+  testWidgets('TV: a continue card keeps focus when watching it moves it to '
+      'the front', (tester) async {
+    final (db, id) = await seed();
+    // A third, oldest title: its card stays where it is.
+    final now = clock.now();
+    clock.current = now.subtract(const Duration(hours: 1));
+    await db.progressDao.saveProgress(
+      id,
+      PlayableKind.movie,
+      'm002',
+      10 * 60 * 1000,
+      100 * 60 * 1000,
+    );
+    clock.current = now;
+    await pumpVodApp(tester, db: db);
+    await openTabFromRail(tester, 2, rtl: false);
+    Future<void> watchAndReturn(String key) async {
+      await press(tester, LogicalKeyboardKey.select);
+      expect(find.byType(MovieDetailScreen), findsOneWidget);
+      clock.advance(const Duration(minutes: 5));
+      await db.progressDao.saveProgress(
+        id,
+        PlayableKind.movie,
+        key,
+        30 * 60 * 1000,
+        100 * 60 * 1000,
+      );
+      await settle(tester);
+      await tester.binding.handlePopRoute();
+      await settle(tester, frames: 16);
+      expect(find.byType(MovieDetailScreen), findsNothing);
+    }
+
+    // The row: d001 (newest), m001. Visit the grid once on the way.
+    await press(tester, LogicalKeyboardKey.arrowRight);
+    expect(focusedIn(_cwCard('d001')), isTrue, reason: describeFocus());
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(focusedIn(_grid(0)), isTrue, reason: describeFocus());
+    await press(tester, LogicalKeyboardKey.arrowUp);
+    await press(tester, LogicalKeyboardKey.arrowRight);
+    expect(focusedIn(_cwCard('m001')), isTrue, reason: describeFocus());
+    await watchAndReturn('m001');
+    final first = tester.getCenter(find.byKey(_cwCard('m001'))).dx;
+    final second = tester.getCenter(find.byKey(_cwCard('d001'))).dx;
+    expect(first, lessThan(second));
+    expect(focusedIn(_cwCard('m001')), isTrue, reason: describeFocus());
+
+    // The Continue watching category shows them as a grid.
+    await tester.binding.handlePopRoute();
+    await settle(tester);
+    expect(focusedIn(_all), isTrue, reason: describeFocus());
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    await press(tester, LogicalKeyboardKey.select);
+    const cwgM001 = ValueKey('vod-cwg-movie-m001');
+    const cwgD001 = ValueKey('vod-cwg-movie-d001');
+    expect(focusedIn(cwgM001), isTrue, reason: describeFocus());
+    await pressN(tester, LogicalKeyboardKey.arrowRight, 2);
+    expect(focusedIn(const ValueKey('vod-cwg-movie-m002')), isTrue);
+    await press(tester, LogicalKeyboardKey.arrowLeft);
+    expect(focusedIn(cwgD001), isTrue, reason: describeFocus());
+    await watchAndReturn('d001');
+    expect(
+      tester.getCenter(find.byKey(cwgD001)).dx,
+      lessThan(tester.getCenter(find.byKey(cwgM001)).dx),
+    );
+    expect(focusedIn(cwgD001), isTrue, reason: describeFocus());
+
+    await disposeVodApp(tester, db);
+  });
 
   testWidgets('TV: Back reaches the shown category after it scrolled away', (
     tester,

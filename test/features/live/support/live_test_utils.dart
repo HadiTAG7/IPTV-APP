@@ -234,3 +234,21 @@ class FakePlayer {
 
   Override get override => playerLauncherProvider.overrideWithValue(launch);
 }
+
+/// Recent channels read slowly once [delay] is set, as on a busy box: the
+/// list re-reads after the player closes while the user may already press
+/// keys.
+class SlowRecentDao extends RecentDao {
+  SlowRecentDao(super.attachedDatabase);
+
+  Duration delay = Duration.zero;
+
+  @override
+  Future<List<String>> recentChannelKeys(
+    int sourceId, {
+    int limit = RecentDao.maxEntries,
+  }) async {
+    if (delay > Duration.zero) await Future<void>.delayed(delay);
+    return super.recentChannelKeys(sourceId, limit: limit);
+  }
+}

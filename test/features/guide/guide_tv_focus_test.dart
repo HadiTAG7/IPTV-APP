@@ -4,6 +4,7 @@
 // outliving the grid. English and Arabic where focus moves sideways.
 import 'dart:async';
 
+import 'package:drift/drift.dart' show QueryExecutor, QueryInterceptor;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -30,6 +31,15 @@ String? get _focusLabel => FocusManager.instance.primaryFocus?.debugLabel;
 bool get _gridFocused => _focusLabel == 'guide-grid';
 
 bool get _headerFocused => focusedIn(_filter) || focusedIn(_refresh);
+
+bool get _inErrorView {
+  var found = false;
+  FocusManager.instance.primaryFocus?.context?.visitAncestorElements((e) {
+    found = e.widget is ErrorView;
+    return !found;
+  });
+  return found;
+}
 
 String? _infoTitle(WidgetTester tester) => tester
     .widget<BidiText>(find.byKey(const ValueKey('guide-info-title')))
@@ -60,6 +70,23 @@ class _FailingEpgDao extends EpgDao {
   ) async {
     calls++;
     throw StateError('disk I/O error');
+  }
+}
+
+/// Channel counts fail while [fail] is set, as on a damaged database.
+class _FailingCounts extends QueryInterceptor {
+  bool fail = false;
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) {
+    if (fail && statement.startsWith('SELECT COUNT(*) AS n FROM channels')) {
+      throw StateError('disk I/O error');
+    }
+    return executor.runSelect(statement, args);
   }
 }
 
@@ -114,6 +141,53 @@ void main() {
       await disposeApp(tester, db);
     });
   }
+
+  testWidgets('walking the rail past a Guide that failed to load stays on '
+      'the rail', (tester) async {
+    final db = openGuideDb();
+    await seedGuide(db);
+    await pumpGuideApp(
+      tester,
+      db: db,
+      player: PlayerLog(),
+      overrides: [
+        guideHasDataProvider.overrideWith(
+          (ref, id) => Stream<bool>.error(StateError('disk I/O error')),
+        ),
+      ],
+    );
+    expect(focusedIn(const ValueKey('rail-live')), isTrue);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(focusedIn(const ValueKey('rail-guide')), isTrue);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(focusedIn(const ValueKey('rail-movies')), isTrue);
+    // Entering the page lands on the header; Retry is right below.
+    await press(tester, LogicalKeyboardKey.arrowUp);
+    await press(tester, LogicalKeyboardKey.arrowRight);
+    expect(_headerFocused, isTrue);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(_inErrorView, isTrue);
+    await disposeApp(tester, db);
+  });
+
+  testWidgets('a channel list that fails to load does not pull focus off '
+      'the rail', (tester) async {
+    final counts = _FailingCounts();
+    final db = openGuideDb(interceptor: counts);
+    await seedGuide(db);
+    await pumpGuideApp(tester, db: db, player: PlayerLog());
+    expect(focusedIn(const ValueKey('rail-live')), isTrue);
+    counts.fail = true;
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    await settle(tester);
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(focusedIn(const ValueKey('rail-guide')), isTrue);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(focusedIn(const ValueKey('rail-movies')), isTrue);
+    counts.fail = false;
+    await disposeApp(tester, db);
+  });
 
   testWidgets('a slow box: focus stays in the body until the rows arrive', (
     tester,

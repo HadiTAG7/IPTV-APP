@@ -258,23 +258,54 @@ class PlaybackController extends ChangeNotifier {
     );
   }
 
+  /// Whether the current item is meant to be playing: what Play/Pause
+  /// toggles and shows. Unlike `state.playing` it stays true while
+  /// ExoPlayer rebuffers. Listeners hear when the user pauses or resumes;
+  /// otherwise it changes with [phase] and [state].
+  bool get playIntended {
+    final s = _session;
+    return s == null ? _state.value.playing : _meantToPlay(s);
+  }
+
+  /// Pauses what is meant to be playing (also while it rebuffers), else
+  /// resumes.
   Future<void> togglePlayPause() async {
-    if (_state.value.playing) {
+    if (playIntended) {
       await pause();
     } else {
       await resume();
     }
   }
 
+  /// Whether [s] is meant to be playing: opening, or started and not paused
+  /// by the user, with the engine playing or buffering. ExoPlayer reports
+  /// `playing` false while it rebuffers, which is no pause.
+  bool _meantToPlay(_Session s) {
+    if (s.userPaused) return false;
+    final state = _state.value;
+    return switch (_phase) {
+      PlaybackPhase.opening => true,
+      PlaybackPhase.playing => state.playing || state.buffering,
+      _ => false,
+    };
+  }
+
   Future<void> pause() async {
-    _session?.userPaused = true;
+    _setUserPaused(true);
     await _engine?.pause();
   }
 
   Future<void> resume() async {
-    _session?.userPaused = false;
+    _setUserPaused(false);
     _rearmAfterEnd();
     await _engine?.play();
+  }
+
+  void _setUserPaused(bool paused) {
+    final s = _session;
+    if (s == null || s.userPaused == paused) return;
+    s.userPaused = paused;
+    if (!_disposed) notifyListeners();
   }
 
   Future<void> seek(Duration position) async {
@@ -331,9 +362,7 @@ class PlaybackController extends ChangeNotifier {
       _cancelSilentCheck();
       await _guard.stop(() async => _engine?.stop());
     } else {
-      s.resumeOnForeground =
-          !s.userPaused &&
-          (_state.value.playing || _phase == PlaybackPhase.opening);
+      s.resumeOnForeground = _meantToPlay(s);
       if (_silentTimer != null) {
         _cancelSilentCheck();
         s.silentPending = true;

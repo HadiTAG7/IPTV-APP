@@ -1075,6 +1075,49 @@ void main() {
       });
     });
 
+    test('VOD backgrounded while exo rebuffers resumes on return', () {
+      fakeAsync((async) {
+        // Amlogic: VOD plays on exo, which reports playing false while it
+        // rebuffers.
+        final rig = Rig(async, isAmlogic: true)..playsOn(EngineKind.exo);
+        rig.play(movie, key: 'm');
+        expect(rig.engine.kind, EngineKind.exo);
+        rig.engine.setState(buffering: true, playing: false);
+        unawaited(rig.controller.onBackground());
+        async.flushMicrotasks();
+        expect(rig.engine.calls.last, 'pause');
+
+        unawaited(rig.controller.onForeground());
+        async.flushMicrotasks();
+        expect(rig.engine.calls.last, 'play');
+        rig.controller.dispose();
+      });
+    });
+
+    test('Play/Pause during a rebuffer pauses; again resumes', () {
+      fakeAsync((async) {
+        final rig = Rig(async, isAmlogic: true)..playsOn(EngineKind.exo);
+        rig.play(movie, key: 'm');
+        rig.engine.setState(buffering: true, playing: false);
+        // The button shows Pause while it rebuffers.
+        expect(rig.controller.playIntended, isTrue);
+        var notified = 0;
+        rig.controller.addListener(() => notified++);
+        unawaited(rig.controller.togglePlayPause());
+        async.flushMicrotasks();
+        expect(rig.engine.calls.last, 'pause');
+        expect(rig.controller.playIntended, isFalse);
+        expect(notified, greaterThan(0));
+        // Paused by the user, still buffering: the next press resumes.
+        rig.engine.setState(buffering: true);
+        unawaited(rig.controller.togglePlayPause());
+        async.flushMicrotasks();
+        expect(rig.engine.calls.last, 'play');
+        expect(rig.controller.playIntended, isTrue);
+        rig.controller.dispose();
+      });
+    });
+
     test('paused VOD stays paused on return', () {
       fakeAsync((async) {
         final rig = Rig(async)..playsOn(EngineKind.mpv);

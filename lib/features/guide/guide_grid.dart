@@ -589,7 +589,10 @@ class GuideGridState extends ConsumerState<GuideGrid> {
     final Widget content;
     if (n == null) {
       content = _pager.error != null
-          ? ErrorView(onRetry: () => unawaited(_pager.reload()))
+          ? ErrorView(
+              autofocusRetry: false,
+              onRetry: () => unawaited(_pager.reload()),
+            )
           : const LoadingView();
     } else if (n == 0) {
       content = EmptyView(

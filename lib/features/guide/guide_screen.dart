@@ -193,7 +193,10 @@ class _GuidePageState extends ConsumerState<_GuidePage> {
     final Widget body;
     if (hasData.hasError) {
       _bodyChanged(const _BodyError());
-      body = ErrorView(onRetry: () => ref.invalidate(guideHasDataProvider(id)));
+      body = ErrorView(
+        autofocusRetry: false,
+        onRetry: () => ref.invalidate(guideHasDataProvider(id)),
+      );
     } else if (!hasData.hasValue || !favorites.hasValue) {
       _bodyChanged(const _BodyLoading());
       // Focusable, so entering the page now lands in the body.

@@ -8,10 +8,17 @@ import '../app_db.dart';
 extension SettingsHelpQueries on AppDatabase {
   /// Stores the guide time offset of one source (minutes, may be negative).
   /// Unknown ids are a no-op.
+  ///
+  /// Offsets are applied at import, so the source's guides also forget their
+  /// validators and import time: every later refresh downloads them in full,
+  /// even when the forced refresh that should follow fails.
   Future<void> setSourceEpgOffset(int sourceId, int minutes) =>
-      (update(sources)..where((s) => s.id.equals(sourceId))).write(
-        SourcesCompanion(epgOffsetMin: Value(minutes)),
-      );
+      transaction(() async {
+        await (update(sources)..where((s) => s.id.equals(sourceId))).write(
+          SourcesCompanion(epgOffsetMin: Value(minutes)),
+        );
+        await epgDao.forgetGuideVersions(sourceId);
+      });
 
   /// Adds a guide URL typed by the user for [sourceId] after the existing
   /// ones (automatic guides keep their priority; manual ones are tried after

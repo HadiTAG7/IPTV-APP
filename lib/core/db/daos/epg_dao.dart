@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 import '../../../epg/epg_models.dart';
@@ -13,6 +15,11 @@ class EpgDao extends DatabaseAccessor<AppDatabase> {
 
   /// How far ahead [nowNext] looks for the next programme.
   static const nextHorizon = Duration(hours: 24);
+
+  /// Guide channel ids per statement in the chunked programme deletes
+  /// ([pruneGuide], the end of a guide import). The connection is shared
+  /// with the UI (see `AppDatabase.open`), so each statement must be short.
+  static const idChunk = 200;
 
   // -------------------------------------------------------------------------
   // epg_sources.
@@ -140,6 +147,19 @@ class EpgDao extends DatabaseAccessor<AppDatabase> {
         );
       });
 
+  /// Forgets the validators and import time of every guide of [sourceId],
+  /// so the next refresh downloads each one in full instead of skipping it
+  /// or getting a 304 (after a change that applies at import, such as the
+  /// source's guide offset).
+  Future<void> forgetGuideVersions(int sourceId) =>
+      (update(db.epgSources)..where((e) => e.sourceId.equals(sourceId))).write(
+        const EpgSourcesCompanion(
+          etag: Value(null),
+          lastModified: Value(null),
+          lastFetchAt: Value(null),
+        ),
+      );
+
   Future<void> _writeSource(int id, EpgSourcesCompanion values) =>
       (update(db.epgSources)..where((e) => e.id.equals(id))).write(values);
 
@@ -182,9 +202,66 @@ class EpgDao extends DatabaseAccessor<AppDatabase> {
   )..where((p) => p.epgSourceId.equals(epgSourceId))).go();
 
   /// Removes programmes that ended at or before [before]; returns how many.
+  ///
+  /// One statement over the whole table (there is no index on the stop
+  /// time): prefer [pruneGuide] while the app is in use.
   Future<int> pruneProgrammes(DateTime before) => (delete(
     db.programmes,
   )..where((p) => p.stopUtc.isSmallerOrEqualValue(toEpochSec(before)))).go();
+
+  /// Removes the programmes of guide [epgSourceId] that ended at or before
+  /// [before]; returns how many. Each statement covers [idChunk] guide
+  /// channels, a primary-key range each, so readers are never held up long.
+  Future<int> pruneGuide(int epgSourceId, DateTime before) async {
+    var removed = 0;
+    for (final ids in chunked(await programmeIds(epgSourceId), idChunk)) {
+      removed += await customUpdate(
+        'DELETE FROM programmes WHERE epg_source_id = ?1 '
+        'AND xmltv_id IN (SELECT value FROM json_each(?2)) '
+        'AND stop_utc <= ?3',
+        variables: [
+          Variable.withInt(epgSourceId),
+          Variable.withString(jsonEncode(ids)),
+          Variable.withInt(toEpochSec(before)),
+        ],
+        updates: {db.programmes},
+        updateKind: UpdateKind.delete,
+      );
+    }
+    return removed;
+  }
+
+  /// Removes every programme of [ids] (at most [idChunk] or so) in guide
+  /// [epgSourceId]; returns how many.
+  Future<int> deleteProgrammesOfIds(int epgSourceId, List<String> ids) =>
+      customUpdate(
+        'DELETE FROM programmes WHERE epg_source_id = ?1 '
+        'AND xmltv_id IN (SELECT value FROM json_each(?2))',
+        variables: [
+          Variable.withInt(epgSourceId),
+          Variable.withString(jsonEncode(ids)),
+        ],
+        updates: {db.programmes},
+        updateKind: UpdateKind.delete,
+      );
+
+  /// Guide channel ids (as stored) that have programmes in guide
+  /// [epgSourceId], in id order. One index seek per id, so it does not read
+  /// every programme of the guide.
+  Future<List<String>> programmeIds(int epgSourceId) async {
+    final rows = await customSelect(
+      'WITH RECURSIVE ids(x) AS ('
+      'SELECT (SELECT min(xmltv_id) FROM programmes WHERE epg_source_id = ?1) '
+      'UNION ALL '
+      'SELECT (SELECT min(xmltv_id) FROM programmes '
+      'WHERE epg_source_id = ?1 AND xmltv_id > ids.x) '
+      'FROM ids WHERE ids.x IS NOT NULL'
+      ') SELECT x FROM ids WHERE x IS NOT NULL',
+      variables: [Variable.withInt(epgSourceId)],
+      readsFrom: {db.programmes},
+    ).get();
+    return [for (final r in rows) r.read<String>('x')];
+  }
 
   Future<int> programmeCount(int epgSourceId) async {
     final count = db.programmes.xmltvId.count();

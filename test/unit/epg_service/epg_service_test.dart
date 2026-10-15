@@ -7,6 +7,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/core/db/app_db.dart';
+import 'package:iptv_player/core/db/queries/settings_help_queries.dart';
 import 'package:iptv_player/core/net/http.dart';
 import 'package:iptv_player/core/time/clock.dart';
 import 'package:iptv_player/epg/epg_models.dart';
@@ -841,6 +842,63 @@ void main() {
         (await guideRow(db, guide)).lastFetchAt,
         _now.add(const Duration(hours: 13)),
       );
+    });
+
+    test('an offset changed while a forced refresh runs is applied before '
+        'the run ends', () async {
+      server.etag = '"v1"';
+      await runRefresh(service, source);
+
+      // Settings > Guide offset: +30, then corrected to +45 while the
+      // forced refresh for +30 is still downloading.
+      server.stallAfterBytes = 10;
+      await db.setSourceEpgOffset(source, 30);
+      final first = runRefresh(service, source, force: true);
+      await _until(() => server.requests.length == 2);
+      await db.setSourceEpgOffset(source, 45);
+      final second = runRefresh(service, source, force: true);
+      server
+        ..stallAfterBytes = null
+        ..release();
+
+      final a = await first;
+      final b = await second;
+      expect(a.last, isA<EpgRefreshDone>());
+      expect(b.last, a.last);
+      expect(a.whereType<EpgRefreshDone>(), hasLength(1));
+      expect(server.requests, hasLength(3));
+      expect(server.requests.last.isConditional, isFalse);
+      final stored = await storedProgrammes(db, guide);
+      expect(stored.map((p) => fromSec(p.startUtc).minute).toSet(), {45});
+
+      // Nothing left to redo: the next refresh skips the guide.
+      clock.advance(const Duration(hours: 1));
+      final later = await runRefresh(service, source);
+      expect((later.last as EpgRefreshDone).skipped, 1);
+      expect(server.requests, hasLength(3));
+    });
+
+    test('after an offset change a failed forced refresh leaves the guide '
+        'due for a full download', () async {
+      server.etag = '"v1"';
+      await runRefresh(service, source);
+
+      await db.setSourceEpgOffset(source, 30);
+      server.status = 500;
+      final failed = await runRefresh(service, source, force: true);
+      expect(failed.last, isA<EpgRefreshFailed>());
+      final row = await guideRow(db, guide);
+      expect(row.etag, isNull);
+      expect(row.lastFetchAt, isNull);
+
+      server.status = 200;
+      clock.advance(const Duration(hours: 1));
+      expect(await service.needsRefresh(source), isTrue);
+      final events = await runRefresh(service, source);
+      expect((events.last as EpgRefreshDone).imported, 1);
+      expect(server.requests.last.isConditional, isFalse);
+      final stored = await storedProgrammes(db, guide);
+      expect(stored.map((p) => fromSec(p.startUtc).minute).toSet(), {30});
     });
 
     test('cancel also drops a queued follow-up', () async {

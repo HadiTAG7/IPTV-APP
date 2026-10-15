@@ -592,6 +592,50 @@ void main() {
       await disposeApp(tester, db);
     });
 
+    testWidgets('a key pressed while the list re-reads after the player '
+        'closes is kept', (tester) async {
+      final db = openAppTestDb();
+      final id = await seedThreeCategories(db);
+      final player = FakePlayer();
+      final recent = SlowRecentDao(db);
+      await pumpLiveApp(
+        tester,
+        db,
+        overrides: [
+          player.override,
+          recentDaoProvider.overrideWithValue(recent),
+        ],
+      );
+      await enterPage(tester);
+      await press(tester, LogicalKeyboardKey.arrowLeft);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expectFocusOn('Sports');
+      await press(tester, LogicalKeyboardKey.select);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expectFocusOn('Channel 12');
+      await press(tester, LogicalKeyboardKey.select);
+      expect(player.requests.single.item.key, 'k12');
+
+      // The player zapped on to channel 15; Back, then Left at once.
+      await db.recentDao.markRecent(id, 'k15');
+      recent.delay = const Duration(milliseconds: 300);
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      expectFocusOn('Channel 12');
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expectFocusOn('Sports');
+      for (var i = 0; i < 4; i++) {
+        await settle(tester);
+      }
+      expectFocusOn('Sports');
+      // The list still moved on to the channel played last.
+      await press(tester, LogicalKeyboardKey.arrowRight);
+      expectFocusOn('Channel 15');
+      await disposeApp(tester, db);
+    });
+
     testWidgets('an empty favourites list says how to add one', (tester) async {
       final db = openAppTestDb();
       await seedThreeCategories(db);

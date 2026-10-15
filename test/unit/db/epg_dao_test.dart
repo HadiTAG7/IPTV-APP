@@ -246,6 +246,27 @@ void main() {
       expect(await epg.deleteProgrammesOf(guide), 4);
       expect(await epg.programmeCount(guide), 0);
     });
+
+    test('per-guide prune, ids and deletes by id', () async {
+      final other = await epg.addEpgSource(
+        src,
+        'http://127.0.0.1:8080/other.xml',
+        EpgOrigin.manual,
+      );
+      await epg.insertProgrammes(other, [prog('X.A', at(9), at(10), 'Other')]);
+      expect(await epg.programmeIds(guide), ['x.a', 'x.b', 'x.c']);
+      expect(await epg.programmeIds(other), ['X.A']);
+
+      // Only this guide, only rows that ended at or before the time.
+      expect(await epg.pruneGuide(guide, at(11)), 3);
+      expect(await epg.programmeCount(guide), 4);
+      expect(await epg.programmeCount(other), 1);
+      expect(await epg.programmeIds(guide), ['x.a', 'x.c']);
+
+      expect(await epg.deleteProgrammesOfIds(guide, ['x.c', 'X.A']), 2);
+      expect(await epg.programmeIds(guide), ['x.a']);
+      expect(await epg.programmeCount(other), 1);
+    });
   });
 
   group('channel map', () {
@@ -364,6 +385,33 @@ void main() {
       expect(row.programmeCount, 10);
       expect(row.lastFetchAt, at(15));
       expect(await epg.epgSourceById(999), isNull);
+    });
+
+    test('forgetGuideVersions clears validators and import time of the '
+        "source's guides only", () async {
+      final otherSource = await addSource(db, name: 'Other');
+      final otherGuide = await epg.addEpgSource(
+        otherSource,
+        'http://127.0.0.1:8080/other.xml',
+        EpgOrigin.manual,
+      );
+      for (final id in [guide, otherGuide]) {
+        await epg.recordFetch(
+          id,
+          etag: '"v1"',
+          lastModified: 'x',
+          status: 'ok',
+        );
+      }
+
+      await epg.forgetGuideVersions(src);
+
+      final row = (await epg.epgSourceById(guide))!;
+      expect((row.etag, row.lastModified, row.lastFetchAt), (null, null, null));
+      expect(row.status, 'ok');
+      final other = (await epg.epgSourceById(otherGuide))!;
+      expect(other.etag, '"v1"');
+      expect(other.lastFetchAt, isNotNull);
     });
 
     test('guide channels store normalised names', () async {

@@ -673,6 +673,9 @@ class _PageErrorNote extends StatelessWidget {
   }
 }
 
+Key _cardKey(ContinueWatchingItem item) =>
+    ValueKey('vod-cwg-${item.kind.name}-${item.key}');
+
 /// The Continue watching category as a grid (newest first).
 class _ContinueGrid extends StatelessWidget {
   const _ContinueGrid({
@@ -699,10 +702,11 @@ class _ContinueGrid extends StatelessWidget {
             padding: const EdgeInsets.all(VodGridLayout.padding),
             gridDelegate: layout.delegate,
             itemCount: items.length,
+            findChildIndexCallback: continueIndexOf(items, _cardKey),
             itemBuilder: (context, i) {
               final item = items[i];
               return PosterCard(
-                key: ValueKey('vod-cwg-${item.kind.name}-${item.key}'),
+                key: _cardKey(item),
                 title: continueTitle(item),
                 posterUrl: item.poster,
                 progress: item.progress.fraction,

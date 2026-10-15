@@ -95,6 +95,34 @@ void main() {
       await h.dispose(tester);
     });
 
+    testWidgets('$lang TV: Page Down and Page Up move focus a screen at a '
+        'time and keep it on screen', (tester) async {
+      final h = await pumpSettingsApp(tester, locale: locale);
+      await openSettingsTv(tester);
+      expect(focusedIn(const ValueKey('settings-sources')), isTrue);
+
+      int focusedRow() => _rowOrder.indexWhere((k) => focusedIn(ValueKey(k)));
+      await press(tester, LogicalKeyboardKey.pageDown);
+      final down = focusedRow();
+      expect(down, greaterThan(2), reason: focusDescription());
+      expect(onScreen(tester, _row(_rowOrder[down])), isTrue);
+      await press(tester, LogicalKeyboardKey.pageDown);
+      final further = focusedRow();
+      expect(further, greaterThan(down));
+      expect(onScreen(tester, _row(_rowOrder[further])), isTrue);
+
+      await press(tester, LogicalKeyboardKey.pageUp);
+      final up = focusedRow();
+      expect(up, inInclusiveRange(1, further - 3));
+      expect(onScreen(tester, _row(_rowOrder[up])), isTrue);
+      // Never past the top: the rail stays where it is.
+      await press(tester, LogicalKeyboardKey.pageUp);
+      await press(tester, LogicalKeyboardKey.pageUp);
+      expect(focusedRow(), 0);
+      expect(onScreen(tester, _row(_rowOrder.first)), isTrue);
+      await h.dispose(tester);
+    });
+
     testWidgets('$lang TV: values sit on the end side of their rows', (
       tester,
     ) async {

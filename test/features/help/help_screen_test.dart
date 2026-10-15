@@ -145,6 +145,23 @@ void main() {
       }
       expect(_scrollOffset(tester), 0);
 
+      // Nothing to focus in the app bar (no Back arrow in the overscan
+      // margin), and its title is clear of the margins.
+      await press(tester, LogicalKeyboardKey.arrowUp);
+      expect(focusedIn(const ValueKey('help-intro')), isTrue);
+      expect(find.byType(BackButton), findsNothing);
+      final title = tester.getRect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.text(l10n.helpTitle),
+        ),
+      );
+      final screen = tester.getRect(find.byType(HelpScreen));
+      expect(title.top, greaterThanOrEqualTo(27));
+      expect(title.left, greaterThanOrEqualTo(48));
+      expect(title.right, lessThanOrEqualTo(960 - 48));
+      expect(screen.top, greaterThanOrEqualTo(27));
+
       // Back returns to Settings.
       await tester.binding.handlePopRoute();
       await settle(tester);

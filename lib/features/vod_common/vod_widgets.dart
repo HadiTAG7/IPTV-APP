@@ -369,9 +369,11 @@ class ContinueWatchingRow extends StatelessWidget {
             padding: const EdgeInsets.all(VodGridLayout.padding),
             itemExtent: itemExtent,
             itemCount: items.length,
+            findChildIndexCallback: continueIndexOf(items, _slotKey),
             itemBuilder: (context, i) {
               final item = items[i];
               return Padding(
+                key: _slotKey(item),
                 padding: const EdgeInsetsDirectional.only(
                   end: VodGridLayout.spacing,
                 ),
@@ -390,6 +392,21 @@ class ContinueWatchingRow extends StatelessWidget {
     );
   }
 }
+
+Key _slotKey(ContinueWatchingItem item) =>
+    ValueKey('vod-cw-slot-${item.kind.name}-${item.key}');
+
+/// `findChildIndexCallback` of a continue-watching list whose children are
+/// keyed with [keyOf]. Watching a title moves it to the front: its card
+/// moves along instead of being rebuilt, so a focused card keeps its focus
+/// node (and Back from the title returns to it).
+ChildIndexGetter continueIndexOf(
+  List<ContinueWatchingItem> items,
+  Key Function(ContinueWatchingItem item) keyOf,
+) => (key) {
+  final i = items.indexWhere((item) => keyOf(item) == key);
+  return i < 0 ? null : i;
+};
 
 /// Card title of a continue-watching entry: the movie, or the series of an
 /// episode.

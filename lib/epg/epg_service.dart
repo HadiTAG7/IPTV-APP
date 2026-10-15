@@ -108,22 +108,25 @@ List<EpgProgramme> shiftProgrammes(
 ///    tvg-id at the end), and programmes of ids that end up unlinked are
 ///    deleted at the end. With a parser filter, undeclared ids outside the
 ///    filter are not seen at all.
-/// 5. Writes: batches are upserted over the stored programmes, so readers
-///    keep seeing a complete guide during the import. At the end, one
-///    transaction deletes the guide's rows this import did not write (old
-///    slots, unlinked channels) and stores all guide channels
-///    (`epg_channels`, for matching and [searchGuideChannels]). A failure or
-///    cancellation keeps the old rows next to those already written; once
-///    anything was written, the guide's validators and `lastFetchAt` are
-///    cleared so the next refresh downloads it in full. A failure before
-///    that keeps the guide as it was.
+/// 5. Writes: batches are upserted over the stored programmes (at most
+///    [writeBatchSize] per transaction), so readers keep seeing a complete
+///    guide during the import. At the end, the guide's rows this import did
+///    not write (old slots, unlinked channels) are deleted and all guide
+///    channels are stored (`epg_channels`, for matching and
+///    [searchGuideChannels]), in short statements of at most
+///    [EpgDao.idChunk] ids, as the UI reads through the same connection.
+///    A failure or cancellation keeps the old rows next to those already
+///    written; once anything was written, the guide's validators and
+///    `lastFetchAt` are cleared so the next refresh downloads it in full. A
+///    failure before that keeps the guide as it was.
 ///
 /// A playlist channel links to the first guide (in the order above) that
 /// matches it. Manual links always win; only the letter case of their id
 /// follows the guide (reads join on the exact id). A guide that failed or
 /// was skipped keeps the links to the ids it kept. After all guides, the
-/// automatic links of the source are replaced, programmes that ended before
-/// now - [back] are pruned, and `epg_sources` get their status
+/// automatic links of the source are replaced, programmes of its other
+/// guides (not imported in this run) that ended before now - [back] are
+/// pruned, and `epg_sources` get their status
 /// ([EpgSourceStatus], with the attempt time), validators, `lastFetchAt`
 /// (time of the last full import; a 304, a skip or a failure does not change
 /// it) and `programmeCount`. `sources.lastEpgAt` is set when at least one
@@ -134,7 +137,11 @@ List<EpgProgramme> shiftProgrammes(
 /// reading, so several playlist channels can share a guide id with
 /// different shifts. After changing `epgOffsetMin`, call
 /// `refresh(sourceId, force: true)` (a skip or a 304 would keep the old
-/// offset).
+/// offset; `setSourceEpgOffset` also clears the guides' validators and
+/// import times). A run that finds the offset changed when it ends (it read
+/// the old one, and later refresh calls joined it) clears them again and,
+/// unless it failed or was cancelled, runs again in full before it reports
+/// its end.
 ///
 /// **Concurrency**: at most one refresh runs per source. A [refresh] call
 /// while one runs joins it when that run does at least as much, otherwise
@@ -175,8 +182,13 @@ class EpgService {
   /// How long programmes are kept after they end.
   final Duration back;
 
-  /// Programmes per database write.
+  /// Programmes and channels per parser batch.
   final int batchSize;
+
+  /// Most programmes written in one database transaction. The connection is
+  /// shared with the UI (see `AppDatabase.open`), whose reads wait behind
+  /// each write.
+  static const writeBatchSize = 1000;
 
   /// Conditional requests are only sent while the last full import is
   /// younger than this: a 304 keeps the window stored at that import.
@@ -347,14 +359,30 @@ class EpgService {
 
   Future<void> _run(_RefreshJob job) async {
     EpgProgress terminal;
-    try {
-      terminal = runInIsolate
-          ? await _runInIsolate(job)
-          : await _refreshSource(job);
-    } on Object catch (e) {
-      terminal = job.cancelled || e is _Cancelled
-          ? EpgRefreshCancelled(job.sourceId)
-          : EpgRefreshFailed(job.sourceId, message: _describe(e, job.secrets));
+    while (true) {
+      try {
+        terminal = runInIsolate
+            ? await _runInIsolate(job)
+            : await _refreshSource(job);
+      } on Object catch (e) {
+        terminal = job.cancelled || e is _Cancelled
+            ? EpgRefreshCancelled(job.sourceId)
+            : EpgRefreshFailed(
+                job.sourceId,
+                message: _describe(e, job.secrets),
+              );
+      }
+      if (!await _offsetChanged(job)) break;
+      // The guide offset changed after this run read it (Settings, a
+      // refresh that joined this run): what it stored is off, and so are
+      // the validators and import times it wrote.
+      await _epg.forgetGuideVersions(job.sourceId);
+      if (terminal is! EpgRefreshDone || job.cancelled) break;
+      job.flags = _RunFlags(
+        force: true,
+        lite: job.flags.lite,
+        refreshHours: job.flags.refreshHours,
+      );
     }
     // Hand over first: a listener that reacts to the terminal event by
     // calling refresh again must not join this finished run.
@@ -368,6 +396,19 @@ class EpgService {
     job.finish(terminal);
   }
 
+  /// Whether the source's guide offset is no longer the one [job] imported
+  /// with. Unknown when the settings cannot be read (no rerun then).
+  Future<bool> _offsetChanged(_RefreshJob job) async {
+    final used = job.offsetMinutes;
+    if (used == null) return false;
+    try {
+      final config = await _configLoader(job.sourceId);
+      return config != null && config.epgOffsetMin != used;
+    } on Object {
+      return false;
+    }
+  }
+
   /// Runs [job] in a background isolate on this database and forwards its
   /// events; [cancel] reaches it through a control port.
   Future<EpgProgress> _runInIsolate(_RefreshJob job) async {
@@ -379,6 +420,7 @@ class EpgService {
     }
     job
       ..secrets = [?config.password]
+      ..offsetMinutes = config.epgOffsetMin
       ..checkCancelled();
     final events = ReceivePort('EpgService events');
     events.listen((message) {
@@ -432,7 +474,9 @@ class EpgService {
     if (config == null) {
       return EpgRefreshFailed(sourceId, message: 'Unknown source $sourceId');
     }
-    job.secrets = [?config.password];
+    job
+      ..secrets = [?config.password]
+      ..offsetMinutes = config.epgOffsetMin;
     final guides = _ordered(await _epg.epgSources(sourceId, enabledOnly: true));
     final identities = await _db.catalogDao.channelIdentities(sourceId);
     if (guides.isEmpty || identities.isEmpty) return EpgRefreshDone(sourceId);
@@ -474,6 +518,8 @@ class EpgService {
 
     final claimed = <String>{...manual.keys};
     final autoLinks = <String, EpgLink>{};
+    // Imports keep only programmes inside the window; the others are pruned.
+    final importedGuides = <int>{};
     var imported = 0;
     var notModified = 0;
     var skipped = 0;
@@ -506,6 +552,7 @@ class EpgService {
         switch (result.outcome) {
           case _Outcome.imported:
             imported++;
+            importedGuides.add(guide.id);
           case _Outcome.notModified:
             notModified++;
           case _Outcome.skipped:
@@ -536,7 +583,11 @@ class EpgService {
     }
 
     await _epg.replaceChannelMap(sourceId, autoLinks);
-    await _epg.pruneProgrammes(range.start);
+    for (final row in await _epg.epgSources(sourceId)) {
+      if (!importedGuides.contains(row.id)) {
+        await _epg.pruneGuide(row.id, range.start);
+      }
+    }
     var programmes = 0;
     for (final guide in guides) {
       final count = await _epg.programmeCount(guide.id);
@@ -808,42 +859,62 @@ class EpgService {
   }
 
   /// Lower-cased ids with stored programmes in guide [epgSourceId].
-  Future<Set<String>> _storedProgrammeIds(int epgSourceId) async {
-    final id = _db.programmes.xmltvId;
-    final query = _db.selectOnly(_db.programmes, distinct: true)
-      ..addColumns([id])
-      ..where(_db.programmes.epgSourceId.equals(epgSourceId));
-    return {
-      for (final value in await query.map((r) => r.read(id)!).get())
-        value.toLowerCase(),
-    };
-  }
+  Future<Set<String>> _storedProgrammeIds(int epgSourceId) async => {
+    for (final id in await _epg.programmeIds(epgSourceId)) id.toLowerCase(),
+  };
 
-  /// Ends an import in one transaction: keeps only the programmes in [keep]
-  /// (stored id -> start seconds) and replaces the guide channels.
+  /// Ends an import: keeps only the programmes in [keep] (stored id -> start
+  /// seconds; each id is removed from it once done) and replaces the guide
+  /// channels.
+  ///
+  /// The UI reads through the same connection, so this is a series of short
+  /// statements of at most [EpgDao.idChunk] ids rather than one transaction;
+  /// in between, readers see old slots next to new ones, as during the
+  /// import.
   Future<void> _finishImport(
     int epgSourceId,
     Map<String, List<int>> keep,
     List<EpgChannel> channels,
-  ) => _db.transaction(() async {
-    await _db.customUpdate(
-      'DELETE FROM programmes WHERE epg_source_id = ?1 '
-      'AND (xmltv_id, start_utc) NOT IN '
-      '(SELECT k.key, s.value FROM json_each(?2) k, json_each(k.value) s)',
-      variables: [
-        Variable.withInt(epgSourceId),
-        Variable.withString(jsonEncode(keep)),
-      ],
-      updates: {_db.programmes},
-      updateKind: UpdateKind.delete,
-    );
-    await (_db.delete(
-      _db.epgChannels,
-    )..where((c) => c.epgSourceId.equals(epgSourceId))).go();
-    for (final part in chunked(channels, batchSize)) {
+  ) async {
+    final kept = keep.keys.toSet();
+    // Slots of the kept ids that this import did not write.
+    for (final ids in chunked(keep.keys.toList(), EpgDao.idChunk)) {
+      await _db.customUpdate(
+        'DELETE FROM programmes WHERE epg_source_id = ?1 '
+        'AND xmltv_id IN (SELECT key FROM json_each(?2)) '
+        'AND (xmltv_id, start_utc) NOT IN '
+        '(SELECT k.key, s.value FROM json_each(?2) k, json_each(k.value) s)',
+        variables: [
+          Variable.withInt(epgSourceId),
+          Variable.withString(jsonEncode({for (final id in ids) id: keep[id]})),
+        ],
+        updates: {_db.programmes},
+        updateKind: UpdateKind.delete,
+      );
+      ids.forEach(keep.remove);
+    }
+    // Ids no longer kept (unlinked, or spelled differently now).
+    final dropped = [
+      for (final id in await _epg.programmeIds(epgSourceId))
+        if (!kept.contains(id)) id,
+    ];
+    for (final ids in chunked(dropped, EpgDao.idChunk)) {
+      await _epg.deleteProgrammesOfIds(epgSourceId, ids);
+    }
+    for (final part in chunked(channels, writeBatchSize)) {
       await _epg.upsertEpgChannels(epgSourceId, part);
     }
-  });
+    await _db.customUpdate(
+      'DELETE FROM epg_channels WHERE epg_source_id = ?1 '
+      'AND xmltv_id NOT IN (SELECT value FROM json_each(?2))',
+      variables: [
+        Variable.withInt(epgSourceId),
+        Variable.withString(jsonEncode([for (final c in channels) c.id])),
+      ],
+      updates: {_db.epgChannels},
+      updateKind: UpdateKind.delete,
+    );
+  }
 
   Future<void> _writeGuide(int epgSourceId, EpgSourcesCompanion values) =>
       (_db.update(
@@ -1069,12 +1140,17 @@ class _RefreshJob {
 
   final int sourceId;
 
-  /// Fixed once the run starts; a queued run takes over later requests.
+  /// Fixed once the run starts (a queued run takes over later requests),
+  /// except that a run whose guide offset changed meanwhile runs again in
+  /// full.
   _RunFlags flags;
   final cancelToken = CancelToken();
 
   /// Values to mask in messages besides URL credentials (the password).
   List<String> secrets = const [];
+
+  /// Guide offset the run imports with, once it has read the settings.
+  int? offsetMinutes;
   bool cancelled = false;
 
   /// Cancels the run in a background isolate ([EpgService.runInIsolate]).
@@ -1325,7 +1401,10 @@ class _GuideImport {
       }
       if (keep.isEmpty) continue;
       wrote = true;
-      await _epg.insertProgrammes(guideId, keep);
+      // Parser batches are larger than a short write (see writeBatchSize).
+      for (final part in chunked(keep, EpgService.writeBatchSize)) {
+        await _epg.insertProgrammes(guideId, part);
+      }
       for (final p in keep) {
         (_starts[p.channelId] ??= []).add(toEpochSec(p.start));
       }
@@ -1353,10 +1432,13 @@ class _GuideImport {
     ];
     _match(all);
     _spellings = {for (final c in all) c.id.toLowerCase(): c.id};
-    await service._finishImport(guideId, {
+    final keep = {
       for (final MapEntry(:key, :value) in _starts.entries)
         if (_wanted.contains(key.toLowerCase())) key: value,
-    }, all);
+    };
+    // The finish drops each id from [keep] once done: hold no other copy.
+    _starts.clear();
+    await service._finishImport(guideId, keep, all);
     return _matches;
   }
 
