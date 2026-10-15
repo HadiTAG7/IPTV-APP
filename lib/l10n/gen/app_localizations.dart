@@ -1621,6 +1621,588 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'New code'**
   String get lanNewCode;
+
+  /// No description provided for @liveShowHiddenCategories.
+  ///
+  /// In en, this message translates to:
+  /// **'Show hidden categories'**
+  String get liveShowHiddenCategories;
+
+  /// No description provided for @liveMoreOptions.
+  ///
+  /// In en, this message translates to:
+  /// **'More options'**
+  String get liveMoreOptions;
+
+  /// No description provided for @liveRecentEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Channels you watch will appear here.'**
+  String get liveRecentEmpty;
+
+  /// Start and end time of a programme. Each time is wrapped in U+2068/U+2069 (first-strong isolate).
+  ///
+  /// In en, this message translates to:
+  /// **'⁨{start}⁩ – ⁨{end}⁩'**
+  String liveTimeRange(String start, String end);
+
+  /// Shown when the number typed on the remote matches no channel in the list.
+  ///
+  /// In en, this message translates to:
+  /// **'No channel {number}'**
+  String liveNoChannelNumber(int number);
+
+  /// No description provided for @favoritesEmptyMovies.
+  ///
+  /// In en, this message translates to:
+  /// **'No favorite movies yet.'**
+  String get favoritesEmptyMovies;
+
+  /// No description provided for @favoritesEmptySeries.
+  ///
+  /// In en, this message translates to:
+  /// **'No favorite series yet.'**
+  String get favoritesEmptySeries;
+
+  /// No description provided for @player_playNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Play now'**
+  String get player_playNow;
+
+  /// No description provided for @player_pause.
+  ///
+  /// In en, this message translates to:
+  /// **'Pause'**
+  String get player_pause;
+
+  /// No description provided for @player_options.
+  ///
+  /// In en, this message translates to:
+  /// **'Options'**
+  String get player_options;
+
+  /// No description provided for @player_noTracks.
+  ///
+  /// In en, this message translates to:
+  /// **'No tracks available'**
+  String get player_noTracks;
+
+  /// No description provided for @player_itemUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This item can\'t be played.'**
+  String get player_itemUnavailable;
+
+  /// Shown when a typed channel number is not in the current list.
+  ///
+  /// In en, this message translates to:
+  /// **'No channel {number}'**
+  String player_noChannelNumber(int number);
+
+  /// No description provided for @player_favoriteAdded.
+  ///
+  /// In en, this message translates to:
+  /// **'Added to favorites'**
+  String get player_favoriteAdded;
+
+  /// No description provided for @player_favoriteRemoved.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed from favorites'**
+  String get player_favoriteRemoved;
+
+  /// No description provided for @player_episodeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Season {season} · Episode {episode}'**
+  String player_episodeLabel(int season, int episode);
+
+  /// No description provided for @player_statsBuffer.
+  ///
+  /// In en, this message translates to:
+  /// **'Buffer'**
+  String get player_statsBuffer;
+
+  /// No description provided for @player_statsReconnects.
+  ///
+  /// In en, this message translates to:
+  /// **'Reconnects'**
+  String get player_statsReconnects;
+
+  /// No description provided for @player_statsVideoOutput.
+  ///
+  /// In en, this message translates to:
+  /// **'Video output'**
+  String get player_statsVideoOutput;
+
+  /// No description provided for @player_statsFormat.
+  ///
+  /// In en, this message translates to:
+  /// **'Stream format'**
+  String get player_statsFormat;
+
+  /// No description provided for @player_statsAudioCodec.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio codec'**
+  String get player_statsAudioCodec;
+
+  /// No description provided for @diagnostics_app.
+  ///
+  /// In en, this message translates to:
+  /// **'App'**
+  String get diagnostics_app;
+
+  /// No description provided for @diagnostics_platform.
+  ///
+  /// In en, this message translates to:
+  /// **'Platform'**
+  String get diagnostics_platform;
+
+  /// No description provided for @diagnostics_model.
+  ///
+  /// In en, this message translates to:
+  /// **'Model'**
+  String get diagnostics_model;
+
+  /// No description provided for @diagnostics_chipset.
+  ///
+  /// In en, this message translates to:
+  /// **'Chipset'**
+  String get diagnostics_chipset;
+
+  /// No description provided for @diagnostics_cpuCores.
+  ///
+  /// In en, this message translates to:
+  /// **'CPU cores'**
+  String get diagnostics_cpuCores;
+
+  /// No description provided for @diagnostics_lowRam.
+  ///
+  /// In en, this message translates to:
+  /// **'Low-RAM device'**
+  String get diagnostics_lowRam;
+
+  /// No description provided for @diagnostics_detectedTv.
+  ///
+  /// In en, this message translates to:
+  /// **'Detected as TV'**
+  String get diagnostics_detectedTv;
+
+  /// No description provided for @diagnostics_touch.
+  ///
+  /// In en, this message translates to:
+  /// **'Touchscreen'**
+  String get diagnostics_touch;
+
+  /// No description provided for @diagnostics_layout.
+  ///
+  /// In en, this message translates to:
+  /// **'Layout'**
+  String get diagnostics_layout;
+
+  /// No description provided for @diagnostics_testing.
+  ///
+  /// In en, this message translates to:
+  /// **'Testing…'**
+  String get diagnostics_testing;
+
+  /// No description provided for @diagnostics_notRun.
+  ///
+  /// In en, this message translates to:
+  /// **'Not run yet'**
+  String get diagnostics_notRun;
+
+  /// No description provided for @diagnostics_testStream.
+  ///
+  /// In en, this message translates to:
+  /// **'Test stream {n}'**
+  String diagnostics_testStream(int n);
+
+  /// No description provided for @diagnostics_testStreamsNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Public test streams from Apple and Mux. Each engine plays them one after the other.'**
+  String get diagnostics_testStreamsNote;
+
+  /// No description provided for @diagnostics_unknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown'**
+  String get diagnostics_unknown;
+
+  /// No description provided for @diagnostics_qrHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Scan this code with your phone to share the summary.'**
+  String get diagnostics_qrHint;
+
+  /// No description provided for @diagnostics_subtitleLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Preferred subtitle language'**
+  String get diagnostics_subtitleLanguage;
+
+  /// No description provided for @diagnostics_maxConnections.
+  ///
+  /// In en, this message translates to:
+  /// **'Max connections'**
+  String get diagnostics_maxConnections;
+
+  /// No description provided for @diagnostics_desktop.
+  ///
+  /// In en, this message translates to:
+  /// **'Desktop'**
+  String get diagnostics_desktop;
+
+  /// No description provided for @diagnostics_runAgain.
+  ///
+  /// In en, this message translates to:
+  /// **'Run again'**
+  String get diagnostics_runAgain;
+
+  /// No description provided for @vod_allMovies.
+  ///
+  /// In en, this message translates to:
+  /// **'All movies'**
+  String get vod_allMovies;
+
+  /// No description provided for @vod_allSeries.
+  ///
+  /// In en, this message translates to:
+  /// **'All series'**
+  String get vod_allSeries;
+
+  /// No description provided for @vod_noMovies.
+  ///
+  /// In en, this message translates to:
+  /// **'No movies here'**
+  String get vod_noMovies;
+
+  /// No description provided for @vod_noSeries.
+  ///
+  /// In en, this message translates to:
+  /// **'No series here'**
+  String get vod_noSeries;
+
+  /// No description provided for @vod_detailsFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t load more details.'**
+  String get vod_detailsFailed;
+
+  /// Cast line on a movie page. {names} is wrapped in U+2068/U+2069 (first-strong isolate).
+  ///
+  /// In en, this message translates to:
+  /// **'Cast: ⁨{names}⁩'**
+  String vod_cast(String names);
+
+  /// Director line on a movie page. {name} is wrapped in U+2068/U+2069 (first-strong isolate).
+  ///
+  /// In en, this message translates to:
+  /// **'Director: ⁨{name}⁩'**
+  String vod_director(String name);
+
+  /// Series page button that plays an episode from the start, e.g. Play S1 E3.
+  ///
+  /// In en, this message translates to:
+  /// **'Play S{season} E{episode}'**
+  String vod_playEpisode(int season, int episode);
+
+  /// Series page button that resumes a partly watched episode, e.g. Resume S1 E3.
+  ///
+  /// In en, this message translates to:
+  /// **'Resume S{season} E{episode}'**
+  String vod_resumeEpisode(int season, int episode);
+
+  /// No description provided for @vod_pageLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Some titles couldn\'t be loaded. Trying again shortly.'**
+  String get vod_pageLoadFailed;
+
+  /// Lite mode Auto choice with the value detected on this device (On or Off).
+  ///
+  /// In en, this message translates to:
+  /// **'Auto ({state})'**
+  String settings_liteAuto(String state);
+
+  /// No description provided for @settings_preferredSubtitleLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Preferred subtitle language'**
+  String get settings_preferredSubtitleLanguage;
+
+  /// No description provided for @settings_defaultAspect.
+  ///
+  /// In en, this message translates to:
+  /// **'Default aspect ratio'**
+  String get settings_defaultAspect;
+
+  /// No description provided for @settings_langArabic.
+  ///
+  /// In en, this message translates to:
+  /// **'Arabic'**
+  String get settings_langArabic;
+
+  /// No description provided for @settings_langEnglish.
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get settings_langEnglish;
+
+  /// No description provided for @settings_langFrench.
+  ///
+  /// In en, this message translates to:
+  /// **'French'**
+  String get settings_langFrench;
+
+  /// No description provided for @settings_langTurkish.
+  ///
+  /// In en, this message translates to:
+  /// **'Turkish'**
+  String get settings_langTurkish;
+
+  /// Under the TV guide header: the source these settings belong to. {name} is wrapped in U+2068/U+2069 (first-strong isolate).
+  ///
+  /// In en, this message translates to:
+  /// **'For ⁨{name}⁩'**
+  String settings_guideFor(String name);
+
+  /// No description provided for @settings_epgNoUrls.
+  ///
+  /// In en, this message translates to:
+  /// **'No guide URLs yet. Sync the source or add one.'**
+  String get settings_epgNoUrls;
+
+  /// No description provided for @settings_addEpgUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Add guide URL'**
+  String get settings_addEpgUrl;
+
+  /// No description provided for @settings_epgUrlHint.
+  ///
+  /// In en, this message translates to:
+  /// **'http://example.com/guide.xml.gz'**
+  String get settings_epgUrlHint;
+
+  /// No description provided for @settings_epgUrlExists.
+  ///
+  /// In en, this message translates to:
+  /// **'This guide URL is already in the list.'**
+  String get settings_epgUrlExists;
+
+  /// No description provided for @settings_deleteEpgUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete guide URL'**
+  String get settings_deleteEpgUrl;
+
+  /// No description provided for @settings_deleteEpgUrlBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Its programmes will be removed from this device.'**
+  String get settings_deleteEpgUrlBody;
+
+  /// No description provided for @settings_epgOriginXtream.
+  ///
+  /// In en, this message translates to:
+  /// **'From the provider'**
+  String get settings_epgOriginXtream;
+
+  /// No description provided for @settings_epgOriginPlaylist.
+  ///
+  /// In en, this message translates to:
+  /// **'From the playlist'**
+  String get settings_epgOriginPlaylist;
+
+  /// No description provided for @settings_epgOriginManual.
+  ///
+  /// In en, this message translates to:
+  /// **'Added by you'**
+  String get settings_epgOriginManual;
+
+  /// No description provided for @settings_epgStatusNever.
+  ///
+  /// In en, this message translates to:
+  /// **'Not loaded yet'**
+  String get settings_epgStatusNever;
+
+  /// No description provided for @settings_epgStatusOk.
+  ///
+  /// In en, this message translates to:
+  /// **'Loaded'**
+  String get settings_epgStatusOk;
+
+  /// No description provided for @settings_epgStatusNotModified.
+  ///
+  /// In en, this message translates to:
+  /// **'Up to date'**
+  String get settings_epgStatusNotModified;
+
+  /// No description provided for @settings_epgStatusFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Failed'**
+  String get settings_epgStatusFailed;
+
+  /// No description provided for @settings_epgStatusCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancelled'**
+  String get settings_epgStatusCancelled;
+
+  /// Programmes stored for one guide URL.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{No programmes} =1{1 programme} other{{count} programmes}}'**
+  String settings_programmeCount(int count);
+
+  /// When a guide URL was last downloaded in full.
+  ///
+  /// In en, this message translates to:
+  /// **'Imported {date}'**
+  String settings_epgLastImport(DateTime date);
+
+  /// No description provided for @settings_epgOffsetHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Moves this source\'s guide times. Use it when programmes show at the wrong time.'**
+  String get settings_epgOffsetHint;
+
+  /// No description provided for @settings_epgOffsetNone.
+  ///
+  /// In en, this message translates to:
+  /// **'No offset'**
+  String get settings_epgOffsetNone;
+
+  /// No description provided for @settings_epgOffsetEarlier.
+  ///
+  /// In en, this message translates to:
+  /// **'30 minutes earlier'**
+  String get settings_epgOffsetEarlier;
+
+  /// No description provided for @settings_epgOffsetLater.
+  ///
+  /// In en, this message translates to:
+  /// **'30 minutes later'**
+  String get settings_epgOffsetLater;
+
+  /// No description provided for @settings_epgRefreshNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Download the guide again now'**
+  String get settings_epgRefreshNow;
+
+  /// No description provided for @settings_epgRefreshInterval.
+  ///
+  /// In en, this message translates to:
+  /// **'Guide refresh interval'**
+  String get settings_epgRefreshInterval;
+
+  /// How often the guide is refreshed.
+  ///
+  /// In en, this message translates to:
+  /// **'{hours, plural, =1{Every hour} other{Every {hours} hours}}'**
+  String settings_everyHours(int hours);
+
+  /// No description provided for @settings_saveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t save the change.'**
+  String get settings_saveFailed;
+
+  /// No description provided for @help_playerOnlyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The app is a player only'**
+  String get help_playerOnlyTitle;
+
+  /// No description provided for @help_playerOnlyBody.
+  ///
+  /// In en, this message translates to:
+  /// **'IPTV Player contains no channels, playlists or provider links. It plays only the M3U links and Xtream logins you add yourself, from sources you have the right to use.'**
+  String get help_playerOnlyBody;
+
+  /// No description provided for @help_freeSourcesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Free legal sources'**
+  String get help_freeSourcesTitle;
+
+  /// No description provided for @help_freeSourcesBody.
+  ///
+  /// In en, this message translates to:
+  /// **'The iptv-org project lists public links that broadcasters such as Al Arabiya, Al Jazeera, Sky News Arabia, France 24, DW and BBC Arabic publish themselves. Some links stop working or are geo-blocked, and a public link is not always cleared for use in other apps, so prefer channels hosted on the broadcasters\' own sites. The app never adds these lists for you: type a link when you add a source.'**
+  String get help_freeSourcesBody;
+
+  /// No description provided for @help_iptvOrgSaudi.
+  ///
+  /// In en, this message translates to:
+  /// **'Saudi channels'**
+  String get help_iptvOrgSaudi;
+
+  /// No description provided for @help_iptvOrgArabic.
+  ///
+  /// In en, this message translates to:
+  /// **'Arabic-language channels'**
+  String get help_iptvOrgArabic;
+
+  /// No description provided for @help_addAsSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Add as source'**
+  String get help_addAsSource;
+
+  /// No description provided for @help_receiverBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Your own satellite receiver (for example Enigma2 with OpenWebif, Tvheadend or a SAT>IP tuner) can export M3U and XMLTV for the free-to-air channels you already receive. It is the cleanest legal way to get a playlist with a guide.'**
+  String get help_receiverBody;
+
+  /// No description provided for @help_officialAppsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Official apps'**
+  String get help_officialAppsTitle;
+
+  /// No description provided for @help_officialAppsBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Free: Aloula (the Saudi channels), Shahid\'s free tier, Thmanyah and Samsung TV Plus. Paid: Shahid VIP, TOD by beIN, stc tv and OSN+. These services work only in their own apps and don\'t give M3U links or Xtream logins, so they can\'t be added here. No licensed Saudi service sells premium channels as M3U or Xtream.'**
+  String get help_officialAppsBody;
+
+  /// No description provided for @help_warningSignsMore.
+  ///
+  /// In en, this message translates to:
+  /// **'• Free 24-hour trials\n• Payment by transfer to a person, gift cards or crypto\n• Asks you to install apps from outside the store or to use a VPN'**
+  String get help_warningSignsMore;
+
+  /// No description provided for @help_legitServices.
+  ///
+  /// In en, this message translates to:
+  /// **'Legitimate services are known broadcasters or telecom companies, with official store apps, VAT invoices and official payment methods.'**
+  String get help_legitServices;
+
+  /// No description provided for @help_updatesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'How to install updates'**
+  String get help_updatesTitle;
+
+  /// No description provided for @help_updatesBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Download the latest version from the project\'s releases page and install it over the current one; your sources, favorites and watch progress stay. On Android TV or Fire TV, type this link into the Downloader app. On Windows, close the app and extract the new zip into the same folder.'**
+  String get help_updatesBody;
+
+  /// No description provided for @help_downloadLink.
+  ///
+  /// In en, this message translates to:
+  /// **'Download link'**
+  String get help_downloadLink;
 }
 
 class _AppLocalizationsDelegate

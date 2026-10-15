@@ -902,4 +902,354 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get lanNewCode => 'New code';
+
+  @override
+  String get liveShowHiddenCategories => 'Show hidden categories';
+
+  @override
+  String get liveMoreOptions => 'More options';
+
+  @override
+  String get liveRecentEmpty => 'Channels you watch will appear here.';
+
+  @override
+  String liveTimeRange(String start, String end) {
+    return '⁨$start⁩ – ⁨$end⁩';
+  }
+
+  @override
+  String liveNoChannelNumber(int number) {
+    return 'No channel $number';
+  }
+
+  @override
+  String get favoritesEmptyMovies => 'No favorite movies yet.';
+
+  @override
+  String get favoritesEmptySeries => 'No favorite series yet.';
+
+  @override
+  String get player_playNow => 'Play now';
+
+  @override
+  String get player_pause => 'Pause';
+
+  @override
+  String get player_options => 'Options';
+
+  @override
+  String get player_noTracks => 'No tracks available';
+
+  @override
+  String get player_itemUnavailable => 'This item can\'t be played.';
+
+  @override
+  String player_noChannelNumber(int number) {
+    return 'No channel $number';
+  }
+
+  @override
+  String get player_favoriteAdded => 'Added to favorites';
+
+  @override
+  String get player_favoriteRemoved => 'Removed from favorites';
+
+  @override
+  String player_episodeLabel(int season, int episode) {
+    return 'Season $season · Episode $episode';
+  }
+
+  @override
+  String get player_statsBuffer => 'Buffer';
+
+  @override
+  String get player_statsReconnects => 'Reconnects';
+
+  @override
+  String get player_statsVideoOutput => 'Video output';
+
+  @override
+  String get player_statsFormat => 'Stream format';
+
+  @override
+  String get player_statsAudioCodec => 'Audio codec';
+
+  @override
+  String get diagnostics_app => 'App';
+
+  @override
+  String get diagnostics_platform => 'Platform';
+
+  @override
+  String get diagnostics_model => 'Model';
+
+  @override
+  String get diagnostics_chipset => 'Chipset';
+
+  @override
+  String get diagnostics_cpuCores => 'CPU cores';
+
+  @override
+  String get diagnostics_lowRam => 'Low-RAM device';
+
+  @override
+  String get diagnostics_detectedTv => 'Detected as TV';
+
+  @override
+  String get diagnostics_touch => 'Touchscreen';
+
+  @override
+  String get diagnostics_layout => 'Layout';
+
+  @override
+  String get diagnostics_testing => 'Testing…';
+
+  @override
+  String get diagnostics_notRun => 'Not run yet';
+
+  @override
+  String diagnostics_testStream(int n) {
+    return 'Test stream $n';
+  }
+
+  @override
+  String get diagnostics_testStreamsNote =>
+      'Public test streams from Apple and Mux. Each engine plays them one after the other.';
+
+  @override
+  String get diagnostics_unknown => 'Unknown';
+
+  @override
+  String get diagnostics_qrHint =>
+      'Scan this code with your phone to share the summary.';
+
+  @override
+  String get diagnostics_subtitleLanguage => 'Preferred subtitle language';
+
+  @override
+  String get diagnostics_maxConnections => 'Max connections';
+
+  @override
+  String get diagnostics_desktop => 'Desktop';
+
+  @override
+  String get diagnostics_runAgain => 'Run again';
+
+  @override
+  String get vod_allMovies => 'All movies';
+
+  @override
+  String get vod_allSeries => 'All series';
+
+  @override
+  String get vod_noMovies => 'No movies here';
+
+  @override
+  String get vod_noSeries => 'No series here';
+
+  @override
+  String get vod_detailsFailed => 'Couldn\'t load more details.';
+
+  @override
+  String vod_cast(String names) {
+    return 'Cast: ⁨$names⁩';
+  }
+
+  @override
+  String vod_director(String name) {
+    return 'Director: ⁨$name⁩';
+  }
+
+  @override
+  String vod_playEpisode(int season, int episode) {
+    return 'Play S$season E$episode';
+  }
+
+  @override
+  String vod_resumeEpisode(int season, int episode) {
+    return 'Resume S$season E$episode';
+  }
+
+  @override
+  String get vod_pageLoadFailed =>
+      'Some titles couldn\'t be loaded. Trying again shortly.';
+
+  @override
+  String settings_liteAuto(String state) {
+    return 'Auto ($state)';
+  }
+
+  @override
+  String get settings_preferredSubtitleLanguage =>
+      'Preferred subtitle language';
+
+  @override
+  String get settings_defaultAspect => 'Default aspect ratio';
+
+  @override
+  String get settings_langArabic => 'Arabic';
+
+  @override
+  String get settings_langEnglish => 'English';
+
+  @override
+  String get settings_langFrench => 'French';
+
+  @override
+  String get settings_langTurkish => 'Turkish';
+
+  @override
+  String settings_guideFor(String name) {
+    return 'For ⁨$name⁩';
+  }
+
+  @override
+  String get settings_epgNoUrls =>
+      'No guide URLs yet. Sync the source or add one.';
+
+  @override
+  String get settings_addEpgUrl => 'Add guide URL';
+
+  @override
+  String get settings_epgUrlHint => 'http://example.com/guide.xml.gz';
+
+  @override
+  String get settings_epgUrlExists => 'This guide URL is already in the list.';
+
+  @override
+  String get settings_deleteEpgUrl => 'Delete guide URL';
+
+  @override
+  String get settings_deleteEpgUrlBody =>
+      'Its programmes will be removed from this device.';
+
+  @override
+  String get settings_epgOriginXtream => 'From the provider';
+
+  @override
+  String get settings_epgOriginPlaylist => 'From the playlist';
+
+  @override
+  String get settings_epgOriginManual => 'Added by you';
+
+  @override
+  String get settings_epgStatusNever => 'Not loaded yet';
+
+  @override
+  String get settings_epgStatusOk => 'Loaded';
+
+  @override
+  String get settings_epgStatusNotModified => 'Up to date';
+
+  @override
+  String get settings_epgStatusFailed => 'Failed';
+
+  @override
+  String get settings_epgStatusCancelled => 'Cancelled';
+
+  @override
+  String settings_programmeCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count programmes',
+      one: '1 programme',
+      zero: 'No programmes',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String settings_epgLastImport(DateTime date) {
+    final intl.DateFormat dateDateFormat = intl.DateFormat.yMMMd(localeName)
+        .add_Hm();
+    final String dateString = dateDateFormat.format(date);
+
+    return 'Imported $dateString';
+  }
+
+  @override
+  String get settings_epgOffsetHint =>
+      'Moves this source\'s guide times. Use it when programmes show at the wrong time.';
+
+  @override
+  String get settings_epgOffsetNone => 'No offset';
+
+  @override
+  String get settings_epgOffsetEarlier => '30 minutes earlier';
+
+  @override
+  String get settings_epgOffsetLater => '30 minutes later';
+
+  @override
+  String get settings_epgRefreshNow => 'Download the guide again now';
+
+  @override
+  String get settings_epgRefreshInterval => 'Guide refresh interval';
+
+  @override
+  String settings_everyHours(int hours) {
+    String _temp0 = intl.Intl.pluralLogic(
+      hours,
+      locale: localeName,
+      other: 'Every $hours hours',
+      one: 'Every hour',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get settings_saveFailed => 'Couldn\'t save the change.';
+
+  @override
+  String get help_playerOnlyTitle => 'The app is a player only';
+
+  @override
+  String get help_playerOnlyBody =>
+      'IPTV Player contains no channels, playlists or provider links. It plays only the M3U links and Xtream logins you add yourself, from sources you have the right to use.';
+
+  @override
+  String get help_freeSourcesTitle => 'Free legal sources';
+
+  @override
+  String get help_freeSourcesBody =>
+      'The iptv-org project lists public links that broadcasters such as Al Arabiya, Al Jazeera, Sky News Arabia, France 24, DW and BBC Arabic publish themselves. Some links stop working or are geo-blocked, and a public link is not always cleared for use in other apps, so prefer channels hosted on the broadcasters\' own sites. The app never adds these lists for you: type a link when you add a source.';
+
+  @override
+  String get help_iptvOrgSaudi => 'Saudi channels';
+
+  @override
+  String get help_iptvOrgArabic => 'Arabic-language channels';
+
+  @override
+  String get help_addAsSource => 'Add as source';
+
+  @override
+  String get help_receiverBody =>
+      'Your own satellite receiver (for example Enigma2 with OpenWebif, Tvheadend or a SAT>IP tuner) can export M3U and XMLTV for the free-to-air channels you already receive. It is the cleanest legal way to get a playlist with a guide.';
+
+  @override
+  String get help_officialAppsTitle => 'Official apps';
+
+  @override
+  String get help_officialAppsBody =>
+      'Free: Aloula (the Saudi channels), Shahid\'s free tier, Thmanyah and Samsung TV Plus. Paid: Shahid VIP, TOD by beIN, stc tv and OSN+. These services work only in their own apps and don\'t give M3U links or Xtream logins, so they can\'t be added here. No licensed Saudi service sells premium channels as M3U or Xtream.';
+
+  @override
+  String get help_warningSignsMore =>
+      '• Free 24-hour trials\n• Payment by transfer to a person, gift cards or crypto\n• Asks you to install apps from outside the store or to use a VPN';
+
+  @override
+  String get help_legitServices =>
+      'Legitimate services are known broadcasters or telecom companies, with official store apps, VAT invoices and official payment methods.';
+
+  @override
+  String get help_updatesTitle => 'How to install updates';
+
+  @override
+  String get help_updatesBody =>
+      'Download the latest version from the project\'s releases page and install it over the current one; your sources, favorites and watch progress stay. On Android TV or Fire TV, type this link into the Downloader app. On Windows, close the app and extract the new zip into the same folder.';
+
+  @override
+  String get help_downloadLink => 'Download link';
 }

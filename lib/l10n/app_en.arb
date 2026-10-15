@@ -1,8 +1,9 @@
 {
   "@@locale": "en",
   "appTitle": "IPTV Player",
-  "@appTitle": {"description": "App name shown in the launcher, title bar and About."},
-
+  "@appTitle": {
+    "description": "App name shown in the launcher, title bar and About."
+  },
   "commonOk": "OK",
   "commonCancel": "Cancel",
   "commonSave": "Save",
@@ -25,7 +26,6 @@
   "commonOff": "Off",
   "commonSearchHint": "Search channels, movies and series",
   "commonPressBackAgainToExit": "Press back again to exit",
-
   "onboardingWelcomeTitle": "Welcome",
   "onboardingWelcomeBody": "Watch your own IPTV sources on your TV, phone and PC.",
   "onboardingChooseLanguage": "Choose language",
@@ -35,14 +35,12 @@
   "onboardingAddSourceTitle": "Add a source",
   "onboardingAddSourceBody": "Add an M3U link, an M3U file or an Xtream Codes login from a provider you have the right to use.",
   "onboardingSkip": "Skip for now",
-
   "sourceTypeM3uUrl": "M3U link",
   "sourceTypeM3uUrlHint": "A playlist URL, usually ending in .m3u or .m3u8",
   "sourceTypeM3uFile": "M3U file",
   "sourceTypeM3uFileHint": "A playlist file saved on this device",
   "sourceTypeXtream": "Xtream Codes",
   "sourceTypeXtreamHint": "Server address, username and password",
-
   "fieldName": "Name",
   "fieldNameHint": "e.g. Home",
   "fieldServer": "Server",
@@ -70,7 +68,6 @@
   "typeOnYourPhone": "Type on your phone",
   "testAndSave": "Test & save",
   "validating": "Validating…",
-
   "errorInvalidUrl": "Invalid URL. It must start with http:// or https://.",
   "errorUnreachable": "Can't reach the server. Check the address and your internet connection.",
   "errorTimeout": "The server took too long to respond. Try again later.",
@@ -78,7 +75,12 @@
   "errorExpired": "This subscription expired on {date}.",
   "@errorExpired": {
     "description": "Account expiry error with the expiry date.",
-    "placeholders": {"date": {"type": "DateTime", "format": "yMMMd"}}
+    "placeholders": {
+      "date": {
+        "type": "DateTime",
+        "format": "yMMMd"
+      }
+    }
   },
   "errorBanned": "This account has been banned by the provider.",
   "errorDisabled": "This account is disabled.",
@@ -86,28 +88,42 @@
   "errorFileRead": "Couldn't read the file.",
   "errorHttpStatus": "The server returned error {code}.",
   "@errorHttpStatus": {
-    "placeholders": {"code": {"type": "int"}}
+    "placeholders": {
+      "code": {
+        "type": "int"
+      }
+    }
   },
-
   "importTitle": "Importing your source",
   "importLiveCount": "{count, plural, =0{No live channels} =1{1 live channel} other{{count} live channels}}",
   "@importLiveCount": {
     "description": "Number of live channels imported so far.",
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "importMoviesCount": "{count, plural, =0{No movies} =1{1 movie} other{{count} movies}}",
   "@importMoviesCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "importSeriesCount": "{count, plural, =0{No series} =1{1 series} other{{count} series}}",
   "@importSeriesCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "importGuide": "Loading the TV guide…",
   "importCancel": "Cancel import",
   "importDone": "Import complete",
   "importFailed": "Import failed",
-
   "navLive": "Live",
   "navGuide": "Guide",
   "navMovies": "Movies",
@@ -118,7 +134,6 @@
   "navSources": "Sources",
   "navMore": "More",
   "navSwitchSource": "Switch source",
-
   "liveAllChannels": "All channels",
   "liveFavorites": "Favorites",
   "liveRecent": "Recent",
@@ -126,19 +141,31 @@
   "liveNoProgrammeInfo": "No programme info",
   "liveNow": "Now",
   "liveNext": "Next",
-  "liveNowTitle": "Now: \u2068{title}\u2069",
+  "liveNowTitle": "Now: ⁨{title}⁩",
   "@liveNowTitle": {
     "description": "{title} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
-    "placeholders": {"title": {"type": "String"}}
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
   },
-  "liveNextTitle": "Next: \u2068{title}\u2069",
+  "liveNextTitle": "Next: ⁨{title}⁩",
   "@liveNextTitle": {
     "description": "{title} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
-    "placeholders": {"title": {"type": "String"}}
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
   },
   "liveChannelCount": "{count, plural, =0{No channels} =1{1 channel} other{{count} channels}}",
   "@liveChannelCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "liveNoChannels": "No channels in this category",
   "liveAddFavorite": "Add to favorites",
@@ -148,9 +175,12 @@
   "livePlayWithOtherPlayer": "Play with the other player",
   "liveChannelNumber": "Channel {number}",
   "@liveChannelNumber": {
-    "placeholders": {"number": {"type": "int"}}
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
   },
-
   "guideToday": "Today",
   "guideTomorrow": "Tomorrow",
   "guideNow": "Now",
@@ -159,46 +189,73 @@
   "guideEmpty": "No guide data yet. Add an EPG URL in Settings.",
   "guideUpdated": "Guide updated {date}",
   "@guideUpdated": {
-    "placeholders": {"date": {"type": "DateTime", "format": "yMMMd"}}
+    "placeholders": {
+      "date": {
+        "type": "DateTime",
+        "format": "yMMMd"
+      }
+    }
   },
-
   "vodContinueWatching": "Continue watching",
   "vodPlay": "Play",
   "vodResumeFrom": "Resume from {time}",
   "@vodResumeFrom": {
     "description": "Resume button; time is a formatted position such as 42:10.",
-    "placeholders": {"time": {"type": "String"}}
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
   },
   "vodStartOver": "Start over",
   "vodSeasons": "Seasons",
   "vodEpisodes": "Episodes",
   "vodSeasonN": "Season {n}",
   "@vodSeasonN": {
-    "placeholders": {"n": {"type": "int"}}
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
   },
   "vodEpisodeN": "Episode {n}",
   "@vodEpisodeN": {
-    "placeholders": {"n": {"type": "int"}}
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
   },
   "vodEpisodeCount": "{count, plural, =0{No episodes} =1{1 episode} other{{count} episodes}}",
   "@vodEpisodeCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "vodNextEpisodeIn": "{seconds, plural, =1{Next episode in 1 second} other{Next episode in {seconds} seconds}}",
   "@vodNextEpisodeIn": {
-    "placeholders": {"seconds": {"type": "int"}}
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
   },
   "vodNextEpisode": "Next episode",
   "vodMinutes": "{minutes} min",
   "@vodMinutes": {
     "description": "Runtime, e.g. 95 min.",
-    "placeholders": {"minutes": {"type": "int"}}
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
   },
   "vodNoEpisodes": "No episodes available",
   "vodWatched": "Watched",
   "vodAddFavorite": "Add to favorites",
   "vodRemoveFavorite": "Remove from favorites",
-
   "playerAudio": "Audio",
   "playerSubtitles": "Subtitles",
   "playerOff": "Off",
@@ -217,7 +274,14 @@
   "playerReconnecting": "Reconnecting… ({n}/{max})",
   "@playerReconnecting": {
     "description": "Reconnect banner with attempt number and maximum attempts.",
-    "placeholders": {"n": {"type": "int"}, "max": {"type": "int"}}
+    "placeholders": {
+      "n": {
+        "type": "int"
+      },
+      "max": {
+        "type": "int"
+      }
+    }
   },
   "playerPlaybackFailed": "Playback failed",
   "playerRetry": "Retry",
@@ -226,14 +290,17 @@
   "playerSubtitlesNeedMpv": "Subtitles need the mpv player.",
   "playerTrackN": "Track {n}",
   "@playerTrackN": {
-    "placeholders": {"n": {"type": "int"}}
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
   },
   "statsEngine": "Engine",
   "statsCodec": "Codec",
   "statsResolution": "Resolution",
   "statsFirstFrame": "Time to first frame",
   "statsDroppedFrames": "Dropped frames",
-
   "settingsGeneral": "General",
   "settingsLanguage": "Language",
   "languageAuto": "Auto (system)",
@@ -262,32 +329,54 @@
   "settingsEpgOffsetMinutes": "{minutes} min",
   "@settingsEpgOffsetMinutes": {
     "description": "EPG time shift; minutes may be negative.",
-    "placeholders": {"minutes": {"type": "int"}}
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
   },
   "settingsRefresh": "Refresh",
   "settingsAddSource": "Add source",
   "settingsEditSource": "Edit source",
   "settingsDeleteSource": "Delete source",
-  "settingsDeleteSourceConfirm": "Delete “\u2068{name}\u2069”? Its channels, favorites and watch progress will be removed from this device.",
+  "settingsDeleteSourceConfirm": "Delete “⁨{name}⁩”? Its channels, favorites and watch progress will be removed from this device.",
   "@settingsDeleteSourceConfirm": {
     "description": "{name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "settingsSetActive": "Set active",
   "settingsActive": "Active",
   "settingsAccountExpires": "Account expires {date}",
   "@settingsAccountExpires": {
-    "placeholders": {"date": {"type": "DateTime", "format": "yMMMd"}}
+    "placeholders": {
+      "date": {
+        "type": "DateTime",
+        "format": "yMMMd"
+      }
+    }
   },
   "settingsAccountNoExpiry": "No expiry date",
   "settingsExpiresSoon": "Your subscription expires soon",
   "settingsExpiresInDays": "{days, plural, =0{Expires today} =1{Expires in 1 day} other{Expires in {days} days}}",
   "@settingsExpiresInDays": {
-    "placeholders": {"days": {"type": "int"}}
+    "placeholders": {
+      "days": {
+        "type": "int"
+      }
+    }
   },
   "settingsLastUpdated": "Last updated {date}",
   "@settingsLastUpdated": {
-    "placeholders": {"date": {"type": "DateTime", "format": "yMMMd"}}
+    "placeholders": {
+      "date": {
+        "type": "DateTime",
+        "format": "yMMMd"
+      }
+    }
   },
   "settingsNoSources": "No sources yet.",
   "settingsHelpLegal": "Help & legal",
@@ -295,18 +384,20 @@
   "settingsAbout": "About",
   "settingsVersion": "Version {version}",
   "@settingsVersion": {
-    "placeholders": {"version": {"type": "String"}}
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
   },
   "settingsLicenses": "Open-source licences",
   "settingsCheckForUpdates": "Check for updates",
-
   "helpTitle": "Help & legal",
   "helpAsOf": "As of 2026",
   "helpLegalBody": "The app is only a player and contains no channels. You add an M3U link or an Xtream login from a source you have the right to use. Free legal sources: the public iptv-org playlists (links published by the broadcasters themselves; some stop working or are geo-blocked), or your own satellite receiver if it can export M3U. Free official apps: Aloula, Shahid's free tier and Thmanyah. Legal paid subscriptions (Shahid VIP, TOD by beIN, stc tv, OSN+) work only in their official apps and don't give you an M3U link or Xtream login. Beware of cheap “IPTV subscriptions” sold on WhatsApp and Telegram: they are usually unlicensed, the new Saudi Copyright Law (in force since August 2026) raises the penalties, and they carry a real risk of fraud and malware.",
   "helpWarningSignsTitle": "Signs of an unlicensed seller",
   "helpWarningSigns": "• Thousands of premium channels for a small yearly fee\n• Sold through WhatsApp, Telegram or social media ads\n• An Xtream code or M3U link instead of an official app\n• No commercial registration and no VAT invoice",
   "helpNotLegalAdvice": "This is general information, not legal advice.",
-
   "diagTitle": "Diagnostics",
   "diagDevice": "Device",
   "diagTvSignals": "TV signals",
@@ -314,7 +405,11 @@
   "diagMemory": "Memory",
   "diagRamMb": "{mb} MB RAM",
   "@diagRamMb": {
-    "placeholders": {"mb": {"type": "int"}}
+    "placeholders": {
+      "mb": {
+        "type": "int"
+      }
+    }
   },
   "diagDecoders": "Decoders",
   "diagSupported": "Supported",
@@ -323,40 +418,48 @@
   "diagRunTest": "Run test",
   "diagFirstFrameMs": "First frame in {ms} ms",
   "@diagFirstFrameMs": {
-    "placeholders": {"ms": {"type": "int"}}
+    "placeholders": {
+      "ms": {
+        "type": "int"
+      }
+    }
   },
   "diagTestPassed": "Passed",
   "diagTestFailed": "Failed",
   "diagLog": "Recent log",
   "diagCopyReport": "Copy report",
   "diagShowQr": "Show QR",
-
   "lanScanWithPhone": "Scan with your phone",
   "lanSameNetwork": "Your phone must be on the same Wi-Fi network as this device.",
   "lanOrOpen": "Or open {url}",
   "@lanOrOpen": {
-    "placeholders": {"url": {"type": "String"}}
+    "placeholders": {
+      "url": {
+        "type": "String"
+      }
+    }
   },
   "lanWaitingForInput": "Waiting for input…",
   "lanReceived": "Received",
   "lanCodeExpired": "The code has expired. Start again.",
   "lanNoNetwork": "No local network found.",
-
   "favoritesEmpty": "No favorites yet. Press Menu on a channel to add it.",
-  "searchNoResults": "No results for “\u2068{query}\u2069”",
+  "searchNoResults": "No results for “⁨{query}⁩”",
   "@searchNoResults": {
     "description": "{query} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
-    "placeholders": {"query": {"type": "String"}}
+    "placeholders": {
+      "query": {
+        "type": "String"
+      }
+    }
   },
   "searchChannels": "Channels",
   "searchMovies": "Movies",
   "searchSeries": "Series",
-
   "errorExpiredNoDate": "This subscription has expired.",
   "@errorExpiredNoDate": {
     "description": "Account expiry error when the provider sent no expiry date."
   },
-
   "sourcesEditorType": "Source type",
   "sourcesKeepPassword": "Leave empty to keep the saved password.",
   "sourcesReenterUrl": "Saved credentials are hidden. Enter the full link again.",
@@ -369,5 +472,225 @@
   "sourcesImportSaving": "Saving…",
   "sourcesImportCancelled": "Import cancelled.",
   "sourcesNeverImported": "Not imported yet",
-  "lanNewCode": "New code"
+  "lanNewCode": "New code",
+  "liveShowHiddenCategories": "Show hidden categories",
+  "liveMoreOptions": "More options",
+  "liveRecentEmpty": "Channels you watch will appear here.",
+  "liveTimeRange": "⁨{start}⁩ – ⁨{end}⁩",
+  "@liveTimeRange": {
+    "description": "Start and end time of a programme. Each time is wrapped in U+2068/U+2069 (first-strong isolate).",
+    "placeholders": {
+      "start": {
+        "type": "String"
+      },
+      "end": {
+        "type": "String"
+      }
+    }
+  },
+  "liveNoChannelNumber": "No channel {number}",
+  "@liveNoChannelNumber": {
+    "description": "Shown when the number typed on the remote matches no channel in the list.",
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
+  },
+  "favoritesEmptyMovies": "No favorite movies yet.",
+  "favoritesEmptySeries": "No favorite series yet.",
+  "player_playNow": "Play now",
+  "player_pause": "Pause",
+  "player_options": "Options",
+  "player_noTracks": "No tracks available",
+  "player_itemUnavailable": "This item can't be played.",
+  "player_noChannelNumber": "No channel {number}",
+  "@player_noChannelNumber": {
+    "description": "Shown when a typed channel number is not in the current list.",
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
+  },
+  "player_favoriteAdded": "Added to favorites",
+  "player_favoriteRemoved": "Removed from favorites",
+  "player_episodeLabel": "Season {season} · Episode {episode}",
+  "@player_episodeLabel": {
+    "placeholders": {
+      "season": {
+        "type": "int"
+      },
+      "episode": {
+        "type": "int"
+      }
+    }
+  },
+  "player_statsBuffer": "Buffer",
+  "player_statsReconnects": "Reconnects",
+  "player_statsVideoOutput": "Video output",
+  "player_statsFormat": "Stream format",
+  "player_statsAudioCodec": "Audio codec",
+  "diagnostics_app": "App",
+  "diagnostics_platform": "Platform",
+  "diagnostics_model": "Model",
+  "diagnostics_chipset": "Chipset",
+  "diagnostics_cpuCores": "CPU cores",
+  "diagnostics_lowRam": "Low-RAM device",
+  "diagnostics_detectedTv": "Detected as TV",
+  "diagnostics_touch": "Touchscreen",
+  "diagnostics_layout": "Layout",
+  "diagnostics_testing": "Testing…",
+  "diagnostics_notRun": "Not run yet",
+  "diagnostics_testStream": "Test stream {n}",
+  "@diagnostics_testStream": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "diagnostics_testStreamsNote": "Public test streams from Apple and Mux. Each engine plays them one after the other.",
+  "diagnostics_unknown": "Unknown",
+  "diagnostics_qrHint": "Scan this code with your phone to share the summary.",
+  "diagnostics_subtitleLanguage": "Preferred subtitle language",
+  "diagnostics_maxConnections": "Max connections",
+  "diagnostics_desktop": "Desktop",
+  "diagnostics_runAgain": "Run again",
+  "vod_allMovies": "All movies",
+  "vod_allSeries": "All series",
+  "vod_noMovies": "No movies here",
+  "vod_noSeries": "No series here",
+  "vod_detailsFailed": "Couldn't load more details.",
+  "vod_cast": "Cast: ⁨{names}⁩",
+  "@vod_cast": {
+    "description": "Cast line on a movie page. {names} is wrapped in U+2068/U+2069 (first-strong isolate).",
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "vod_director": "Director: ⁨{name}⁩",
+  "@vod_director": {
+    "description": "Director line on a movie page. {name} is wrapped in U+2068/U+2069 (first-strong isolate).",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "vod_playEpisode": "Play S{season} E{episode}",
+  "@vod_playEpisode": {
+    "description": "Series page button that plays an episode from the start, e.g. Play S1 E3.",
+    "placeholders": {
+      "season": {
+        "type": "int"
+      },
+      "episode": {
+        "type": "int"
+      }
+    }
+  },
+  "vod_resumeEpisode": "Resume S{season} E{episode}",
+  "@vod_resumeEpisode": {
+    "description": "Series page button that resumes a partly watched episode, e.g. Resume S1 E3.",
+    "placeholders": {
+      "season": {
+        "type": "int"
+      },
+      "episode": {
+        "type": "int"
+      }
+    }
+  },
+  "vod_pageLoadFailed": "Some titles couldn't be loaded. Trying again shortly.",
+  "settings_liteAuto": "Auto ({state})",
+  "@settings_liteAuto": {
+    "description": "Lite mode Auto choice with the value detected on this device (On or Off).",
+    "placeholders": {
+      "state": {
+        "type": "String"
+      }
+    }
+  },
+  "settings_preferredSubtitleLanguage": "Preferred subtitle language",
+  "settings_defaultAspect": "Default aspect ratio",
+  "settings_langArabic": "Arabic",
+  "settings_langEnglish": "English",
+  "settings_langFrench": "French",
+  "settings_langTurkish": "Turkish",
+  "settings_guideFor": "For ⁨{name}⁩",
+  "@settings_guideFor": {
+    "description": "Under the TV guide header: the source these settings belong to. {name} is wrapped in U+2068/U+2069 (first-strong isolate).",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "settings_epgNoUrls": "No guide URLs yet. Sync the source or add one.",
+  "settings_addEpgUrl": "Add guide URL",
+  "settings_epgUrlHint": "http://example.com/guide.xml.gz",
+  "settings_epgUrlExists": "This guide URL is already in the list.",
+  "settings_deleteEpgUrl": "Delete guide URL",
+  "settings_deleteEpgUrlBody": "Its programmes will be removed from this device.",
+  "settings_epgOriginXtream": "From the provider",
+  "settings_epgOriginPlaylist": "From the playlist",
+  "settings_epgOriginManual": "Added by you",
+  "settings_epgStatusNever": "Not loaded yet",
+  "settings_epgStatusOk": "Loaded",
+  "settings_epgStatusNotModified": "Up to date",
+  "settings_epgStatusFailed": "Failed",
+  "settings_epgStatusCancelled": "Cancelled",
+  "settings_programmeCount": "{count, plural, =0{No programmes} =1{1 programme} other{{count} programmes}}",
+  "@settings_programmeCount": {
+    "description": "Programmes stored for one guide URL.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "settings_epgLastImport": "Imported {date}",
+  "@settings_epgLastImport": {
+    "description": "When a guide URL was last downloaded in full.",
+    "placeholders": {
+      "date": {
+        "type": "DateTime",
+        "format": "yMMMd+Hm"
+      }
+    }
+  },
+  "settings_epgOffsetHint": "Moves this source's guide times. Use it when programmes show at the wrong time.",
+  "settings_epgOffsetNone": "No offset",
+  "settings_epgOffsetEarlier": "30 minutes earlier",
+  "settings_epgOffsetLater": "30 minutes later",
+  "settings_epgRefreshNow": "Download the guide again now",
+  "settings_epgRefreshInterval": "Guide refresh interval",
+  "settings_everyHours": "{hours, plural, =1{Every hour} other{Every {hours} hours}}",
+  "@settings_everyHours": {
+    "description": "How often the guide is refreshed.",
+    "placeholders": {
+      "hours": {
+        "type": "int"
+      }
+    }
+  },
+  "settings_saveFailed": "Couldn't save the change.",
+  "help_playerOnlyTitle": "The app is a player only",
+  "help_playerOnlyBody": "IPTV Player contains no channels, playlists or provider links. It plays only the M3U links and Xtream logins you add yourself, from sources you have the right to use.",
+  "help_freeSourcesTitle": "Free legal sources",
+  "help_freeSourcesBody": "The iptv-org project lists public links that broadcasters such as Al Arabiya, Al Jazeera, Sky News Arabia, France 24, DW and BBC Arabic publish themselves. Some links stop working or are geo-blocked, and a public link is not always cleared for use in other apps, so prefer channels hosted on the broadcasters' own sites. The app never adds these lists for you: type a link when you add a source.",
+  "help_iptvOrgSaudi": "Saudi channels",
+  "help_iptvOrgArabic": "Arabic-language channels",
+  "help_addAsSource": "Add as source",
+  "help_receiverBody": "Your own satellite receiver (for example Enigma2 with OpenWebif, Tvheadend or a SAT>IP tuner) can export M3U and XMLTV for the free-to-air channels you already receive. It is the cleanest legal way to get a playlist with a guide.",
+  "help_officialAppsTitle": "Official apps",
+  "help_officialAppsBody": "Free: Aloula (the Saudi channels), Shahid's free tier, Thmanyah and Samsung TV Plus. Paid: Shahid VIP, TOD by beIN, stc tv and OSN+. These services work only in their own apps and don't give M3U links or Xtream logins, so they can't be added here. No licensed Saudi service sells premium channels as M3U or Xtream.",
+  "help_warningSignsMore": "• Free 24-hour trials\n• Payment by transfer to a person, gift cards or crypto\n• Asks you to install apps from outside the store or to use a VPN",
+  "help_legitServices": "Legitimate services are known broadcasters or telecom companies, with official store apps, VAT invoices and official payment methods.",
+  "help_updatesTitle": "How to install updates",
+  "help_updatesBody": "Download the latest version from the project's releases page and install it over the current one; your sources, favorites and watch progress stay. On Android TV or Fire TV, type this link into the Downloader app. On Windows, close the app and extract the new zip into the same folder.",
+  "help_downloadLink": "Download link"
 }
