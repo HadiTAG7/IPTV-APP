@@ -70,6 +70,13 @@ set_target_properties(${BINARY_NAME}
 )
 
 
+# media_kit links mimalloc statically and downloads its source from GitHub at
+# configure time. Sandboxes that block that download can opt out; Linux is only
+# a test target, so the system allocator is fine there.
+if(DEFINED ENV{MEDIA_KIT_NO_MIMALLOC})
+  set(MIMALLOC_USE_STATIC_LIBS OFF)
+endif()
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
