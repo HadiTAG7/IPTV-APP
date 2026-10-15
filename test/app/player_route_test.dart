@@ -2,16 +2,18 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/player/ui/play_request.dart';
 import 'package:iptv_player/player/ui/player_route.dart';
 import 'package:iptv_player/player/ui/player_screen.dart';
 import 'package:iptv_player/sources/models.dart';
 
+import '../player_ui/support/player_harness.dart';
+
 void main() {
   const channel = PlayableRef(
     kind: PlayableKind.live,
     key: '1001',
+    url: 'http://127.0.0.1:9/live/1001.ts',
     title: 'Test News',
   );
 
@@ -39,23 +41,18 @@ void main() {
   });
 
   testWidgets('openPlayer pushes a fullscreen PlayerScreen', (tester) async {
-    late BuildContext home;
+    final rig = PlayerRig()..autoPlay();
+    final id = await seedLive(rig, count: 1);
+    await pumpPlayerApp(tester, rig);
     var closed = false;
-    await tester.pumpWidget(
-      MaterialApp(
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: Builder(
-          builder: (context) {
-            home = context;
-            return const Scaffold(body: Text('home'));
-          },
-        ),
-      ),
+    final request = PlayRequest(sourceId: id, item: channel);
+    unawaited(
+      openPlayer(
+        tester.element(find.byKey(launcherKey)),
+        request,
+      ).then((_) => closed = true),
     );
-    const request = PlayRequest(sourceId: 1, item: channel);
-    unawaited(openPlayer(home, request).then((_) => closed = true));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     final screen = tester.widget<PlayerScreen>(find.byType(PlayerScreen));
     expect(screen.request, same(request));
@@ -68,5 +65,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(PlayerScreen), findsNothing);
     expect(closed, isTrue);
+    await disposeRig(tester, rig);
   });
 }
