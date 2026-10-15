@@ -860,4 +860,29 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'This subscription has expired.';
+
+  @override
+  String get liveShowHiddenCategories => 'Show hidden categories';
+
+  @override
+  String get liveMoreOptions => 'More options';
+
+  @override
+  String get liveRecentEmpty => 'Channels you watch will appear here.';
+
+  @override
+  String liveTimeRange(String start, String end) {
+    return '⁨$start⁩ – ⁨$end⁩';
+  }
+
+  @override
+  String liveNoChannelNumber(int number) {
+    return 'No channel $number';
+  }
+
+  @override
+  String get favoritesEmptyMovies => 'No favorite movies yet.';
+
+  @override
+  String get favoritesEmptySeries => 'No favorite series yet.';
 }

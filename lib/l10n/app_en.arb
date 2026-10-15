@@ -355,5 +355,21 @@
   "errorExpiredNoDate": "This subscription has expired.",
   "@errorExpiredNoDate": {
     "description": "Account expiry error when the provider sent no expiry date."
-  }
+  },
+
+  "liveShowHiddenCategories": "Show hidden categories",
+  "liveMoreOptions": "More options",
+  "liveRecentEmpty": "Channels you watch will appear here.",
+  "liveTimeRange": "\u2068{start}\u2069 – \u2068{end}\u2069",
+  "@liveTimeRange": {
+    "description": "Start and end time of a programme. Each time is wrapped in U+2068/U+2069 (first-strong isolate).",
+    "placeholders": {"start": {"type": "String"}, "end": {"type": "String"}}
+  },
+  "liveNoChannelNumber": "No channel {number}",
+  "@liveNoChannelNumber": {
+    "description": "Shown when the number typed on the remote matches no channel in the list.",
+    "placeholders": {"number": {"type": "int"}}
+  },
+  "favoritesEmptyMovies": "No favorite movies yet.",
+  "favoritesEmptySeries": "No favorite series yet."
 }

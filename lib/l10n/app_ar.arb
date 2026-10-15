@@ -257,5 +257,13 @@
   "searchMovies": "الأفلام",
   "searchSeries": "المسلسلات",
 
-  "errorExpiredNoDate": "انتهى هذا الاشتراك."
+  "errorExpiredNoDate": "انتهى هذا الاشتراك.",
+
+  "liveShowHiddenCategories": "إظهار الفئات المخفية",
+  "liveMoreOptions": "خيارات أخرى",
+  "liveRecentEmpty": "ستظهر هنا القنوات التي تشاهدها.",
+  "liveTimeRange": "\u2068{start}\u2069 – \u2068{end}\u2069",
+  "liveNoChannelNumber": "لا توجد قناة برقم {number}",
+  "favoritesEmptyMovies": "لا توجد أفلام مفضلة بعد.",
+  "favoritesEmptySeries": "لا توجد مسلسلات مفضلة بعد."
 }

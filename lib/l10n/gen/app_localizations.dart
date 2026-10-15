@@ -1543,6 +1543,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This subscription has expired.'**
   String get errorExpiredNoDate;
+
+  /// No description provided for @liveShowHiddenCategories.
+  ///
+  /// In en, this message translates to:
+  /// **'Show hidden categories'**
+  String get liveShowHiddenCategories;
+
+  /// No description provided for @liveMoreOptions.
+  ///
+  /// In en, this message translates to:
+  /// **'More options'**
+  String get liveMoreOptions;
+
+  /// No description provided for @liveRecentEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Channels you watch will appear here.'**
+  String get liveRecentEmpty;
+
+  /// Start and end time of a programme. Each time is wrapped in U+2068/U+2069 (first-strong isolate).
+  ///
+  /// In en, this message translates to:
+  /// **'⁨{start}⁩ – ⁨{end}⁩'**
+  String liveTimeRange(String start, String end);
+
+  /// Shown when the number typed on the remote matches no channel in the list.
+  ///
+  /// In en, this message translates to:
+  /// **'No channel {number}'**
+  String liveNoChannelNumber(int number);
+
+  /// No description provided for @favoritesEmptyMovies.
+  ///
+  /// In en, this message translates to:
+  /// **'No favorite movies yet.'**
+  String get favoritesEmptyMovies;
+
+  /// No description provided for @favoritesEmptySeries.
+  ///
+  /// In en, this message translates to:
+  /// **'No favorite series yet.'**
+  String get favoritesEmptySeries;
 }
 
 class _AppLocalizationsDelegate

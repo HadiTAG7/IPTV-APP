@@ -881,4 +881,29 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'انتهى هذا الاشتراك.';
+
+  @override
+  String get liveShowHiddenCategories => 'إظهار الفئات المخفية';
+
+  @override
+  String get liveMoreOptions => 'خيارات أخرى';
+
+  @override
+  String get liveRecentEmpty => 'ستظهر هنا القنوات التي تشاهدها.';
+
+  @override
+  String liveTimeRange(String start, String end) {
+    return '⁨$start⁩ – ⁨$end⁩';
+  }
+
+  @override
+  String liveNoChannelNumber(int number) {
+    return 'لا توجد قناة برقم $number';
+  }
+
+  @override
+  String get favoritesEmptyMovies => 'لا توجد أفلام مفضلة بعد.';
+
+  @override
+  String get favoritesEmptySeries => 'لا توجد مسلسلات مفضلة بعد.';
 }
