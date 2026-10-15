@@ -860,4 +860,46 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'This subscription has expired.';
+
+  @override
+  String get sourcesEditorType => 'Source type';
+
+  @override
+  String get sourcesKeepPassword => 'Leave empty to keep the saved password.';
+
+  @override
+  String get sourcesReenterUrl =>
+      'Saved credentials are hidden. Enter the full link again.';
+
+  @override
+  String get sourcesXtreamLinkTitle => 'This is an Xtream Codes link';
+
+  @override
+  String get sourcesXtreamLinkBody =>
+      'Save it as an Xtream Codes source to get movie and series details, a short guide for each channel and the provider\'s TV guide.';
+
+  @override
+  String get sourcesXtreamLinkConvert => 'Use Xtream Codes';
+
+  @override
+  String get sourcesXtreamLinkConverted =>
+      'Switched to Xtream Codes. Check the details, then press Test & save.';
+
+  @override
+  String get sourcesUserAgentDefault => 'Default';
+
+  @override
+  String get sourcesReceivedFromPhone => 'Received from your phone.';
+
+  @override
+  String get sourcesImportSaving => 'Saving…';
+
+  @override
+  String get sourcesImportCancelled => 'Import cancelled.';
+
+  @override
+  String get sourcesNeverImported => 'Not imported yet';
+
+  @override
+  String get lanNewCode => 'New code';
 }

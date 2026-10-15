@@ -881,4 +881,47 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'انتهى هذا الاشتراك.';
+
+  @override
+  String get sourcesEditorType => 'نوع المصدر';
+
+  @override
+  String get sourcesKeepPassword =>
+      'اتركه فارغاً للاحتفاظ بكلمة المرور المحفوظة.';
+
+  @override
+  String get sourcesReenterUrl =>
+      'بيانات الدخول المحفوظة مخفية. أدخل الرابط كاملاً مرة أخرى.';
+
+  @override
+  String get sourcesXtreamLinkTitle => 'هذا رابط Xtream Codes';
+
+  @override
+  String get sourcesXtreamLinkBody =>
+      'احفظه كمصدر Xtream Codes لتحصل على تفاصيل الأفلام والمسلسلات، ودليل مختصر لكل قناة، ودليل البرامج من المزوّد.';
+
+  @override
+  String get sourcesXtreamLinkConvert => 'التحويل إلى Xtream Codes';
+
+  @override
+  String get sourcesXtreamLinkConverted =>
+      'تم التحويل إلى Xtream Codes. راجع البيانات ثم اضغط «اختبار وحفظ».';
+
+  @override
+  String get sourcesUserAgentDefault => 'الافتراضي';
+
+  @override
+  String get sourcesReceivedFromPhone => 'تم الاستلام من جوالك.';
+
+  @override
+  String get sourcesImportSaving => 'جارٍ الحفظ…';
+
+  @override
+  String get sourcesImportCancelled => 'تم إلغاء الاستيراد.';
+
+  @override
+  String get sourcesNeverImported => 'لم يُستورد بعد';
+
+  @override
+  String get lanNewCode => 'رمز جديد';
 }
