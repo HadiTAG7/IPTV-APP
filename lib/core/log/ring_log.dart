@@ -25,10 +25,17 @@ class RingLog {
   final _lines = ListQueue<String>();
   final _secrets = <String>{};
 
-  /// Masks [secret] (for example a password) in every later line.
-  /// Values shorter than 3 characters are ignored, as in [redact].
+  /// Masks [secret] (for example a password) in every later line, and in
+  /// the lines already stored. Values shorter than 3 characters are ignored,
+  /// as in [redact].
   void addSecret(String? secret) {
-    if (secret != null && secret.length >= 3) _secrets.add(secret);
+    if (secret == null || secret.length < 3 || !_secrets.add(secret)) return;
+    final masked = [
+      for (final l in _lines) redact(l, secrets: [secret]),
+    ];
+    _lines
+      ..clear()
+      ..addAll(masked);
   }
 
   /// Appends `<UTC time> <LEVEL> <message>`, redacted.

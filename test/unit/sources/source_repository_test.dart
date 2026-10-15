@@ -265,6 +265,96 @@ void main() {
       expect((await repo.byId(id))!.name, 'Renamed');
     });
 
+    test('M3U URL credentials are masked in the log', () async {
+      // Classic Xtream m3u_plus/output=ts entries carry the login as bare
+      // path segments, which URL redaction cannot recognise.
+      final short = '${panel.baseUrl}/$_user/$_pass/12345';
+      log.warn('early: $short');
+      await repo.add(
+        SourceConfig(kind: SourceKind.m3uUrl, url: panel.m3uUrl()),
+      );
+      log.warn('Exo error opening $short');
+      expect(log.dump(), isNot(contains(_pass)));
+      expect(log.dump(), isNot(contains(_user)));
+      expect(
+        log.lines.last,
+        endsWith('opening ${panel.baseUrl}/***/***/12345'),
+      );
+    });
+
+    test('saved credentials are registered after a restart', () async {
+      const url =
+          'http://tv.example:8080/get.php?username=alice77'
+          '&password=S3cretPw&type=m3u_plus&output=ts';
+      final id = await repo.add(
+        const SourceConfig(kind: SourceKind.m3uUrl, url: url),
+      );
+      final xtreamId = await repo.add(xtream());
+      // A new run: a fresh log and repository over the same database.
+      final fresh = RingLog();
+      final restarted = SourceRepository(db, DbSecretStore(db), log: fresh);
+      await restarted.rememberSecretsOf(await restarted.list());
+      fresh.warn('open http://tv.example:8080/alice77/S3cretPw/1 failed');
+      fresh.warn('open ${panel.baseUrl}/$_user/$_pass/2 failed');
+      expect(fresh.dump(), isNot(contains('S3cretPw')));
+      expect(fresh.dump(), isNot(contains(_pass)));
+
+      // configFor (used by sync) registers too.
+      final other = RingLog();
+      await SourceRepository(db, DbSecretStore(db), log: other).configFor(id);
+      other.warn('http://tv.example:8080/alice77/S3cretPw/3');
+      expect(other.dump(), isNot(contains('S3cretPw')));
+      expect(xtreamId, isNot(id));
+    });
+
+    test('sourceSecrets finds every credential of a config', () {
+      expect(
+        sourceSecrets(
+          const SourceConfig(
+            kind: SourceKind.m3uUrl,
+            url: 'https://bob:pa55word@cdn.example/list.m3u?token=t0k3n&x=1',
+          ),
+        ),
+        {'bob', 'pa55word', 't0k3n'},
+      );
+      expect(
+        sourceSecrets(
+          const SourceConfig(
+            kind: SourceKind.m3uUrl,
+            url: 'http://h:80/get.php?username=u%2B1x&password=p%26w',
+          ),
+        ),
+        {'u+1x', 'p&w'},
+      );
+      expect(
+        sourceSecrets(
+          const SourceConfig(
+            kind: SourceKind.xtream,
+            url: 'http://h:80',
+            username: 'xuser',
+            password: 'xpass',
+          ),
+        ),
+        {'xuser', 'xpass'},
+      );
+      // Short values and plain URLs give nothing.
+      expect(
+        sourceSecrets(
+          const SourceConfig(
+            kind: SourceKind.m3uUrl,
+            url: 'http://h/list.m3u?user=ab&pass=%zz9',
+          ),
+        ),
+        {'%zz9'},
+      );
+      expect(
+        sourceSecrets(
+          const SourceConfig(kind: SourceKind.m3uFile, url: '/a/key=abc.m3u'),
+        ),
+        isEmpty,
+      );
+    });
+
     test('a plain playlist URL has no secret', () async {
       final id = await repo.add(
         const SourceConfig(

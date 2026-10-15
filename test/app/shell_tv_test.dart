@@ -268,6 +268,69 @@ void main() {
     await disposeApp(tester, db);
   });
 
+  testWidgets('auto-sync on start uses the saved active source only', (
+    tester,
+  ) async {
+    final db = openAppTestDb();
+    // Both catalogs are stale; the user picked the second source last time.
+    await addTestSource(db, name: 'First');
+    final second = await addTestSource(db, name: 'Second');
+    await db.sourcesDao.setActive(second);
+    final runner = ManualSyncRunner();
+    await pumpApp(
+      tester,
+      db: db,
+      caps: tvCaps,
+      fakePages: true,
+      autoSync: true,
+      runner: runner,
+    );
+    expect(find.byType(TvShell), findsOneWidget);
+    expect(runner.tasks.map((t) => t.sourceId), [second]);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('rail-source')),
+        matching: find.text('Second'),
+      ),
+      findsOneWidget,
+    );
+    runner.finish(SyncProgress(sourceId: second, phase: SyncPhase.done));
+    await settle(tester);
+    await disposeApp(tester, db);
+  });
+
+  testWidgets('large layout on a phone or tablet avoids system bars', (
+    tester,
+  ) async {
+    final db = openAppTestDb();
+    await addTestSource(db, lastSyncAt: DateTime.now());
+    // Edge-to-edge landscape phone: 24 dp status bar, 48 dp gesture bar and
+    // a 32 dp cutout on the left (physical pixels at 2x).
+    tester.view.padding = const FakeViewPadding(top: 48, bottom: 96, left: 64);
+    addTearDown(tester.view.resetPadding);
+    await pumpApp(
+      tester,
+      db: db,
+      logicalSize: const Size(1000, 600),
+      fakePages: true,
+    );
+    expect(find.byType(TvShell), findsOneWidget);
+    final rail = tester.getRect(find.byKey(const ValueKey('rail-source')));
+    expect(rail.top, greaterThanOrEqualTo(24));
+    expect(rail.left, greaterThanOrEqualTo(32));
+    final last = tester.getRect(find.byKey(_railKey(HomeTab.settings)));
+    expect(last.bottom, lessThanOrEqualTo(600 - 48));
+    await disposeApp(tester, db);
+  });
+
+  testWidgets('TV keeps its overscan margins', (tester) async {
+    final db = await pumpTvShell(tester, const AppSettings());
+    final rail = tester.getRect(find.byKey(const ValueKey('rail-source')));
+    expect(rail.top, greaterThanOrEqualTo(27));
+    expect(rail.left, greaterThanOrEqualTo(48));
+    await disposeApp(tester, db);
+  });
+
   testWidgets('no auto-sync when the catalog is fresh', (tester) async {
     final db = openAppTestDb();
     await addTestSource(

@@ -55,6 +55,13 @@ VideoControllerConfiguration mpvVideoConfiguration({
 /// Reads an mpv property as a string; null when unavailable.
 typedef MpvPropertyReader = Future<String?> Function(String name);
 
+/// mpv `alang` / `slang` values: [audio] for both unless [subtitles] gives
+/// a separate subtitle order.
+Map<String, String> mpvLanguageProperties(
+  List<String> audio,
+  List<String>? subtitles,
+) => {'alang': audio.join(','), 'slang': (subtitles ?? audio).join(',')};
+
 /// libmpv through media_kit. One [Player] is reused for the whole session.
 ///
 /// Constructing it needs `MediaKit.ensureInitialized()` and native libraries,
@@ -64,6 +71,7 @@ class MpvEngine implements PlayerEngine {
     this.lite = false,
     this.hardwareDecoding = true,
     this.preferredLanguages = kDefaultPreferredLanguages,
+    this.subtitleLanguages,
   }) : _player = Player(
          configuration: PlayerConfiguration(
            bufferSize: (lite ? 32 : 64) * _mib,
@@ -89,6 +97,7 @@ class MpvEngine implements PlayerEngine {
     this.lite = false,
     this.hardwareDecoding = true,
     this.preferredLanguages = kDefaultPreferredLanguages,
+    this.subtitleLanguages,
     this._readProperty,
   }) {
     _listen();
@@ -98,6 +107,9 @@ class MpvEngine implements PlayerEngine {
   final bool lite;
   final bool hardwareDecoding;
   final List<String> preferredLanguages;
+
+  /// Subtitle language order (`slang`); null uses [preferredLanguages].
+  final List<String>? subtitleLanguages;
 
   final Player _player;
   final MpvPropertyReader? _readProperty;
@@ -284,7 +296,6 @@ class MpvEngine implements PlayerEngine {
   Future<void> _configure(String userAgent) async {
     final native = _player.platform;
     if (native is! NativePlayer) return;
-    final langs = preferredLanguages.join(',');
     final props = {
       'user-agent': userAgent,
       'network-timeout': '15',
@@ -292,8 +303,7 @@ class MpvEngine implements PlayerEngine {
           'reconnect_streamed=1,reconnect_on_network_error=1,'
           'reconnect_delay_max=5',
       'cache-pause-wait': '2',
-      'alang': langs,
-      'slang': langs,
+      ...mpvLanguageProperties(preferredLanguages, subtitleLanguages),
     };
     for (final MapEntry(:key, :value) in props.entries) {
       try {

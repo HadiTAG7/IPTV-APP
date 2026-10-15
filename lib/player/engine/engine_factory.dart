@@ -18,6 +18,7 @@ class EngineOptions {
     this.hardwareDecoding = true,
     this.exoViewType = VideoViewType.textureView,
     this.preferredLanguages = kDefaultPreferredLanguages,
+    this.subtitleLanguages,
   });
 
   /// Low-RAM mode: smaller mpv cache.
@@ -31,6 +32,10 @@ class EngineOptions {
 
   /// Audio/subtitle language order for mpv, e.g. `['ara', 'ar', 'en']`.
   final List<String> preferredLanguages;
+
+  /// Subtitle language order for mpv when it differs from the audio one;
+  /// null uses [preferredLanguages].
+  final List<String>? subtitleLanguages;
 }
 
 /// The production factory: ExoPlayer via `video_player`, mpv via media_kit.
@@ -45,6 +50,7 @@ EngineFactory defaultEngineFactory([
       lite: options.lite,
       hardwareDecoding: options.hardwareDecoding,
       preferredLanguages: options.preferredLanguages,
+      subtitleLanguages: options.subtitleLanguages,
     ),
   };
 }

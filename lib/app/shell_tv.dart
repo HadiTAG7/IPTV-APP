@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -25,7 +27,11 @@ import 'providers.dart';
 /// * Inner panes of a page should leave `onExitStart` unset on their first
 ///   pane: the content pane then takes focus back to the rail.
 class TvShell extends ConsumerStatefulWidget {
-  const TvShell({super.key});
+  const TvShell({super.key, this.pages});
+
+  /// Tab state shared with [PhoneShell] (see [HomePages]); a private one
+  /// when null.
+  final HomePages? pages;
 
   static const railWidth = 176.0;
 
@@ -44,9 +50,10 @@ class TvShellState extends ConsumerState<TvShell> {
   late final List<FocusScopeNode> _pageScopes = [
     for (final t in tabs) FocusScopeNode(debugLabel: 'page:${t.name}'),
   ];
-  final _backs = [for (final _ in tabs) HomeBackRegistry()];
-  final _visited = <int>{0};
-  int _index = 0;
+  late final HomePages _pages = widget.pages ?? HomePages();
+
+  /// The selected tab; a phone-only destination (More) shows Live.
+  late int _index = math.max(0, tabs.indexOf(_pages.selected));
   FocusWatchdogState? _watchdog;
 
   /// The selected tab.
@@ -82,7 +89,7 @@ class TvShellState extends ConsumerState<TvShell> {
   /// rail. On the rail: not handled (the home screen offers to exit).
   bool handleBack() {
     if (!(_contentKey.currentState?.hasFocus ?? false)) return false;
-    if (_backs[_index].handle()) return true;
+    if (_pages.backsOf(current).handle()) return true;
     _focusRail();
     return true;
   }
@@ -96,10 +103,10 @@ class TvShellState extends ConsumerState<TvShell> {
   }
 
   void _select(int i) {
-    if (i == _index && _visited.contains(i)) return;
+    if (i == _index && _pages.visited.contains(tabs[i])) return;
     setState(() {
       _index = i;
-      _visited.add(i);
+      _pages.show(tabs[i]);
     });
   }
 
@@ -120,8 +127,10 @@ class TvShellState extends ConsumerState<TvShell> {
     final pageFor = ref.watch(homePageBuilderProvider);
     final formFactor = FormFactorScope.of(context);
     return Scaffold(
-      body: Padding(
-        padding: overscanPadding(formFactor),
+      // Overscan margins on TV; system bars and cutouts elsewhere (wide
+      // tablets and landscape phones are edge-to-edge).
+      body: SafeArea(
+        minimum: overscanPadding(formFactor),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -160,10 +169,10 @@ class TvShellState extends ConsumerState<TvShell> {
                             FocusScope(
                               node: _pageScopes[i],
                               child: HomeBackScope(
-                                registry: _backs[i],
-                                child: _visited.contains(i)
+                                registry: _pages.backsOf(tab),
+                                child: _pages.visited.contains(tab)
                                     ? KeyedSubtree(
-                                        key: ValueKey(tab),
+                                        key: _pages.keyOf(tab),
                                         child: pageFor(tab),
                                       )
                                     : const SizedBox.shrink(),

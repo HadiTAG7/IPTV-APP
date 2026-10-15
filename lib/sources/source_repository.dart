@@ -185,6 +185,61 @@ SourceAdapter createSourceAdapter(
   };
 }
 
+/// Every credential of [config] (at least 3 characters): the username and
+/// password, and the user info, credential query values (`username`,
+/// `password`, `token`...) and Xtream login of its URL.
+Set<String> sourceSecrets(SourceConfig config) {
+  final found = <String>{?config.username, ?config.password};
+  final link = parseXtreamLink(config.url);
+  if (link != null) found.addAll([link.username, link.password]);
+  final uri = config.kind == SourceKind.m3uFile
+      ? null
+      : Uri.tryParse(config.url.trim());
+  if (uri != null) {
+    for (final part in uri.userInfo.split(':')) {
+      found.add(_decode(part));
+    }
+    for (final MapEntry(:key, :value) in _queryPairs(uri.query)) {
+      if (_credentialParams.contains(key.toLowerCase())) found.add(value);
+    }
+  }
+  return {
+    for (final s in found)
+      if (s.trim().length >= 3) s,
+  };
+}
+
+const _credentialParams = {
+  'username',
+  'user',
+  'password',
+  'pass',
+  'pwd',
+  'token',
+  'auth',
+  'key',
+};
+
+/// Query pairs, tolerant to malformed percent-encoding.
+Iterable<MapEntry<String, String>> _queryPairs(String query) sync* {
+  for (final pair in query.split('&')) {
+    final eq = pair.indexOf('=');
+    if (eq <= 0) continue;
+    yield MapEntry(
+      _decode(pair.substring(0, eq)),
+      _decode(pair.substring(eq + 1)),
+    );
+  }
+}
+
+String _decode(String s) {
+  try {
+    return Uri.decodeQueryComponent(s);
+  } on FormatException {
+    return s;
+  }
+}
+
 Future<String> _defaultAppSupportDir() async =>
     (await getApplicationSupportDirectory()).path;
 
@@ -221,6 +276,9 @@ class SourceRepository {
   /// sets it to cancel a running sync of that source.
   Future<void> Function(int sourceId)? beforeDelete;
 
+  /// Sources whose credentials were registered by [rememberSecretsOf].
+  final _remembered = <int>{};
+
   SourcesDao get _sources => _db.sourcesDao;
 
   /// Whether adapters are built in low-memory (Lite) mode.
@@ -237,7 +295,22 @@ class SourceRepository {
   Future<SourceConfig> configFor(int id) async {
     final config = await _sources.configFor(id, _secrets);
     if (config == null) throw StateError('Unknown source $id');
+    _rememberSecrets(config);
     return config;
+  }
+
+  /// Registers the credentials of every saved source in [rows] with the
+  /// log (once per source), so they are masked in Diagnostics even before
+  /// the source is used in this run. Never throws.
+  Future<void> rememberSecretsOf(Iterable<SourceView> rows) async {
+    for (final row in rows) {
+      if (!_remembered.add(row.id)) continue;
+      try {
+        await configFor(row.id);
+      } on Object {
+        _remembered.remove(row.id);
+      }
+    }
   }
 
   /// A fresh adapter for [config]; close it when done.
@@ -413,13 +486,13 @@ class SourceRepository {
     }
   }
 
-  List<String> _secretValues(SourceConfig c) => [
-    if ((c.username ?? '').length >= 3) c.username!,
-    if ((c.password ?? '').length >= 3) c.password!,
-  ];
+  List<String> _secretValues(SourceConfig c) => sourceSecrets(c).toList();
 
-  /// Passwords are masked in every later log line, wherever they appear.
-  void _rememberSecrets(SourceConfig c) => _log.addSecret(c.password);
+  /// Credentials are masked in every later log line, wherever they appear
+  /// (for example in the short Xtream stream URLs of an M3U playlist,
+  /// `http://host/user/pass/123`, which [redact] cannot recognise).
+  void _rememberSecrets(SourceConfig c) =>
+      sourceSecrets(c).forEach(_log.addSecret);
 
   static String? _blankToNull(String? s) =>
       s == null || s.trim().isEmpty ? null : s.trim();

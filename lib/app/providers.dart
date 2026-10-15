@@ -4,6 +4,7 @@
 // [initialSettingsProvider]; tests override the same with an in-memory
 // database (`AppDatabase(NativeDatabase.memory())`), fake caps and settings.
 import 'dart:async';
+import 'dart:ui' show AppExitType;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -78,10 +79,41 @@ final clockProvider = Provider<Clock>((ref) => const SystemClock());
 final ringLogProvider = Provider<RingLog>((ref) => RingLog.instance);
 
 /// Exits the app (the "press back again" action on the home screen).
-final appExitProvider = Provider<void Function()>(
-  (ref) =>
-      () => unawaited(SystemNavigator.pop()),
-);
+final appExitProvider = Provider<void Function()>((ref) {
+  final platform = ref.watch(targetPlatformProvider);
+  final log = ref.watch(ringLogProvider);
+  return () => unawaited(exitApp(platform, log: log));
+});
+
+/// Closes the app on [platform]. Android finishes the activity
+/// (`SystemNavigator.pop`, or [pop]); the desktop embedders only understand
+/// `System.exitApplication` (they answer anything else with "not
+/// implemented"), so desktop asks for a cancelable exit instead (or calls
+/// [desktopExit]). Failures are logged, never thrown.
+Future<void> exitApp(
+  TargetPlatform platform, {
+  RingLog? log,
+  Future<void> Function()? pop,
+  Future<void> Function()? desktopExit,
+}) async {
+  try {
+    switch (platform) {
+      case TargetPlatform.windows ||
+          TargetPlatform.linux ||
+          TargetPlatform.macOS:
+        await (desktopExit ?? _requestDesktopExit)();
+      case TargetPlatform.android ||
+          TargetPlatform.iOS ||
+          TargetPlatform.fuchsia:
+        await (pop ?? SystemNavigator.pop)();
+    }
+  } on Object catch (e) {
+    (log ?? RingLog.instance).warn('Exit failed: $e');
+  }
+}
+
+Future<void> _requestDesktopExit() =>
+    ServicesBinding.instance.exitApplication(AppExitType.cancelable);
 
 // ---------------------------------------------------------------------------
 // Settings.
@@ -144,9 +176,18 @@ bool isLargeLayout(BuildContext context) =>
 // Sources.
 
 /// Saved sources in display order, updated on every change.
-final sourcesProvider = StreamProvider<List<SourceView>>(
-  (ref) => ref.watch(sourcesDaoProvider).watchAll(),
-);
+///
+/// Each source's credentials are registered with the [RingLog] before the
+/// list is delivered, so Diagnostics masks them from the first frame on
+/// (stream URLs such as `http://host/user/pass/1` are not recognisable
+/// without them).
+final sourcesProvider = StreamProvider<List<SourceView>>((ref) {
+  final repo = ref.watch(sourceRepositoryProvider);
+  return ref.watch(sourcesDaoProvider).watchAll().asyncMap((rows) async {
+    await repo.rememberSecretsOf(rows);
+    return rows;
+  });
+});
 
 /// The id stored under the `activeSourceId` setting (may be stale).
 final storedActiveSourceIdProvider = StreamProvider<int?>(
@@ -156,6 +197,11 @@ final storedActiveSourceIdProvider = StreamProvider<int?>(
 /// The source the UI shows: the stored choice when it still exists, else
 /// the first source, else null. [ActiveSourceController.select] changes and
 /// persists it.
+///
+/// Null until both the sources and the stored choice have loaded (see
+/// [activeSourceReadyProvider]): falling back to the first source in the
+/// meantime would briefly show, and auto-sync, a source the user did not
+/// pick.
 final activeSourceIdProvider = NotifierProvider<ActiveSourceController, int?>(
   ActiveSourceController.new,
 );
@@ -163,6 +209,7 @@ final activeSourceIdProvider = NotifierProvider<ActiveSourceController, int?>(
 class ActiveSourceController extends Notifier<int?> {
   @override
   int? build() {
+    if (!ref.watch(activeSourceReadyProvider)) return null;
     final sources = ref.watch(sourcesProvider).value ?? const <SourceView>[];
     final stored = ref.watch(storedActiveSourceIdProvider).value;
     if (sources.isEmpty) return null;
@@ -176,6 +223,15 @@ class ActiveSourceController extends Notifier<int?> {
     await ref.read(sourcesDaoProvider).setActive(sourceId);
   }
 }
+
+/// Whether the sources and the stored active source id have loaded (or
+/// failed to load), so [activeSourceIdProvider] is final. The root screen
+/// waits for it.
+final activeSourceReadyProvider = Provider<bool>((ref) {
+  bool settled(AsyncValue<Object?> v) => v.hasValue || v.hasError;
+  return settled(ref.watch(sourcesProvider)) &&
+      settled(ref.watch(storedActiveSourceIdProvider));
+});
 
 /// The active source row, or null when there are no sources.
 final activeSourceProvider = Provider<SourceView?>((ref) {

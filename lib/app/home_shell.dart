@@ -131,6 +131,41 @@ class HomeBackRegistry {
   }
 }
 
+/// Tab state shared by [TvShell] and [PhoneShell], owned by [HomeShell].
+///
+/// [HomeShell] swaps the shells when the layout changes (rotating a tablet
+/// or a large phone, split screen, resizing a window). The selected
+/// destination, the visited pages and their back handlers live here, and
+/// every page subtree has a [GlobalKey], so the visited pages move into the
+/// new shell in the same frame with their state (scroll positions, typed
+/// text, inner selection). Pages the new shell has no slot for (Search,
+/// Favorites and Settings live under More on the phone) are rebuilt when
+/// the large layout comes back.
+class HomePages {
+  /// The destination picked last, in either shell.
+  HomeTab selected = HomeTab.live;
+
+  /// Destinations whose page has been built.
+  final visited = <HomeTab>{HomeTab.live};
+
+  final _keys = <HomeTab, GlobalKey>{};
+  final _backs = <HomeTab, HomeBackRegistry>{};
+
+  /// The key of [tab]'s page subtree.
+  GlobalKey keyOf(HomeTab tab) =>
+      _keys.putIfAbsent(tab, () => GlobalKey(debugLabel: 'home:${tab.name}'));
+
+  /// The back handlers of [tab]'s page.
+  HomeBackRegistry backsOf(HomeTab tab) =>
+      _backs.putIfAbsent(tab, HomeBackRegistry.new);
+
+  /// Marks [tab] as selected and visited.
+  void show(HomeTab tab) {
+    selected = tab;
+    visited.add(tab);
+  }
+}
+
 /// Gives a tab page access to its [HomeBackRegistry] (installed by the
 /// shells around every page).
 class HomeBackScope extends InheritedWidget {
@@ -196,6 +231,8 @@ class _HomeTabBackHandlerState extends State<HomeTabBackHandler> {
 
 /// The signed-in home: the TV / large-layout rail shell or the phone shell.
 ///
+/// * The shells share one [HomePages], so switching layouts keeps the
+///   selected tab and the visited pages' state.
 /// * Back: the current tab's [HomeTabBackHandler]s first (on TV only while
 ///   focus is in the page), then the shell (TV: page -> rail; phone: other
 ///   tab -> Live), then "press back again to exit" within 2 s.
@@ -215,6 +252,7 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> {
   final _tvKey = GlobalKey<TvShellState>();
   final _phoneKey = GlobalKey<PhoneShellState>();
+  final _pages = HomePages();
   final _autoSynced = <int>{};
   DateTime? _lastBack;
 
@@ -292,7 +330,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _onBack();
       },
-      child: large ? TvShell(key: _tvKey) : PhoneShell(key: _phoneKey),
+      child: large
+          ? TvShell(key: _tvKey, pages: _pages)
+          : PhoneShell(key: _phoneKey, pages: _pages),
     );
   }
 }

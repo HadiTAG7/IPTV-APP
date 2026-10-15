@@ -11,7 +11,11 @@ import 'providers.dart';
 ///
 /// Tabs are built on first visit and keep their state in an [IndexedStack].
 class PhoneShell extends ConsumerStatefulWidget {
-  const PhoneShell({super.key});
+  const PhoneShell({super.key, this.pages});
+
+  /// Tab state shared with [TvShell] (see [HomePages]); a private one when
+  /// null.
+  final HomePages? pages;
 
   @override
   ConsumerState<PhoneShell> createState() => PhoneShellState();
@@ -20,17 +24,26 @@ class PhoneShell extends ConsumerStatefulWidget {
 class PhoneShellState extends ConsumerState<PhoneShell> {
   static const tabs = HomeTab.phoneTabs;
 
-  final _visited = <int>{0};
-  final _backs = [for (final _ in tabs) HomeBackRegistry()];
+  late final HomePages _pages = widget.pages ?? HomePages();
   int _index = 0;
 
   /// The selected tab.
   HomeTab get current => tabs[_index];
 
+  @override
+  void initState() {
+    super.initState();
+    // A large-layout destination without a bar slot (Search, Favorites,
+    // Settings) is reached through More here.
+    final i = tabs.indexOf(_pages.selected);
+    _index = i >= 0 ? i : tabs.indexOf(HomeTab.more);
+    _pages.visited.add(tabs[_index]);
+  }
+
   /// Back: the tab's [HomeTabBackHandler]s, else another tab returns to
   /// Live. Returns whether it was used.
   bool handleBack() {
-    if (_backs[_index].handle()) return true;
+    if (_pages.backsOf(current).handle()) return true;
     if (_index == 0) return false;
     select(tabs.first);
     return true;
@@ -38,10 +51,10 @@ class PhoneShellState extends ConsumerState<PhoneShell> {
 
   void select(HomeTab tab) {
     final i = tabs.indexOf(tab);
-    if (i < 0 || (i == _index && _visited.contains(i))) return;
+    if (i < 0 || (i == _index && _pages.visited.contains(tab))) return;
     setState(() {
       _index = i;
-      _visited.add(i);
+      _pages.show(tab);
     });
   }
 
@@ -59,12 +72,12 @@ class PhoneShellState extends ConsumerState<PhoneShell> {
                 index: _index,
                 sizing: StackFit.expand,
                 children: [
-                  for (final (i, tab) in tabs.indexed)
+                  for (final tab in tabs)
                     HomeBackScope(
-                      registry: _backs[i],
-                      child: _visited.contains(i)
+                      registry: _pages.backsOf(tab),
+                      child: _pages.visited.contains(tab)
                           ? KeyedSubtree(
-                              key: ValueKey(tab),
+                              key: _pages.keyOf(tab),
                               child: tab == HomeTab.more
                                   ? const MorePage()
                                   : pageFor(tab),

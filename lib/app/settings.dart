@@ -168,6 +168,7 @@ class AppSettings {
     hardwareDecoding: hwdec,
     exoViewType: exoView.viewType,
     preferredLanguages: preferredLanguagesFor(preferredAudioLang),
+    subtitleLanguages: preferredLanguagesFor(preferredSubLang),
   );
 
   @override

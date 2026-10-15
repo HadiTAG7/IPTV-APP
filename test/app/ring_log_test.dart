@@ -28,6 +28,17 @@ void main() {
     expect(log.lines[2], endsWith('typed *** in a form'));
   });
 
+  test('a secret added later masks the lines already stored', () {
+    final log = RingLog(clock: FakeClock(epoch))
+      ..warn('open http://h/alice/S3cretPw/1 failed')
+      ..info('unrelated');
+    log.addSecret('S3cretPw');
+    expect(log.dump(), isNot(contains('S3cretPw')));
+    expect(log.lines.first, endsWith('open http://h/alice/***/1 failed'));
+    expect(log.lines.last, endsWith('INFO unrelated'));
+    expect(log.length, 2);
+  });
+
   test('splits multi-line messages and stack traces', () {
     final log = RingLog(clock: FakeClock(epoch));
     log.error('boom', StateError('bad'), StackTrace.fromString('#0 a\n#1 b\n'));

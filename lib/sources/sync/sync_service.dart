@@ -186,21 +186,30 @@ class IsolateSyncRunner implements SyncRunner {
   };
 }
 
-/// Fetches the catalog of [task] with [adapter] and swaps it in.
+/// Fetches the catalog of [task] with [adapter] and swaps it in, one
+/// content family at a time.
 ///
 /// 1. `verify()`; the account fields are saved and an expired, banned or
 ///    disabled account stops here.
-/// 2. A new catalog generation is opened; every batch is upserted in its own
-///    short transaction while the previous generation stays visible.
-/// 3. After the stream completes: commit (the swap), save guide URLs
-///    (adapter `epgSpecs()` + `EpgHintBatch`es; manual ones are kept and
-///    stale automatic ones removed) and stamp `lastSyncAt`.
+/// 2. Batches are upserted into an open catalog generation, each in its own
+///    short transaction, while the committed catalog stays visible.
+/// 3. When a family is complete ([PhaseDoneBatch]) its generation is
+///    committed at once, so live channels are usable while movies and series
+///    still download, and a later failure keeps them. A playlist that mixes
+///    families in one pass (M3U) commits them together after the last one.
+/// 4. After the stream completes: the remaining families are committed,
+///    guide URLs are saved (adapter `epgSpecs()` + `EpgHintBatch`es; manual
+///    ones are kept and stale automatic ones removed) and `lastSyncAt` is
+///    stamped.
 ///
-/// On an error or [token] cancellation the open generation is aborted, so
-/// the previous catalog (and all favourites and progress) stays as it was.
-/// A sync that returns nothing at all while the source had items is treated
-/// as a failure for the same reason. Never throws; [emit] gets the running
-/// progress and the returned value is the final one. Closes [adapter].
+/// On an error or [token] cancellation the open generation is aborted:
+/// families committed earlier in this run keep their new rows, the others
+/// (and all favourites and progress) stay as they were. A family that comes
+/// back empty while the source had items of it is not committed on its own;
+/// it waits for the next family that has items, and a sync that returns
+/// nothing at all while the source had items fails. Never throws; [emit]
+/// gets the running progress and the returned value is the final one.
+/// Closes [adapter].
 Future<SyncProgress> runSyncPipeline(
   AppDatabase db,
   SyncTask task,
@@ -226,42 +235,70 @@ Future<SyncProgress> runSyncPipeline(
     if (blocked != null) throw blocked;
 
     final kinds = _kindsOf(task.scope);
-    var previous = 0;
-    for (final kind in kinds) {
-      previous += await catalog.totalCount(id, kind);
-    }
+    final previous = <ContentKind, int>{
+      for (final kind in kinds) kind: await catalog.totalCount(id, kind),
+    };
     check();
-    gen = await catalog.beginGeneration(id);
     p = p.copyWith(phase: _firstPhase(task.scope));
     emit(p);
+
+    // Families committed by this run, and the state of the open generation:
+    // families written to it, families finished in it, items written to it.
+    final committed = <ContentKind>{};
+    final touched = <ContentKind>{};
+    final finished = <ContentKind>{};
+    var written = 0;
+    Future<int> open() async => gen ??= await catalog.beginGeneration(id);
+    void touch(ContentKind kind) {
+      if (kinds.contains(kind) && !committed.contains(kind)) touched.add(kind);
+    }
+
+    Future<void> commit(Set<ContentKind> families) async {
+      check();
+      await catalog.commitGeneration(id, gen!, kinds: families);
+      gen = null;
+      committed.addAll(families);
+      touched.clear();
+      finished.clear();
+      written = 0;
+    }
 
     final hints = <String>[];
     await for (final batch in adapter.fetchCatalog(task.scope)) {
       check();
       switch (batch) {
         case CategoriesBatch(:final items):
-          await catalog.upsertCategories(id, gen, items);
+          await catalog.upsertCategories(id, await open(), items);
+          items.map((c) => c.kind).forEach(touch);
           p = p.copyWith(categories: p.categories + items.length);
         case ChannelsBatch(:final items):
-          await catalog.upsertChannels(id, gen, items);
+          await catalog.upsertChannels(id, await open(), items);
+          touch(ContentKind.live);
+          written += items.length;
           p = p.copyWith(
             phase: SyncPhase.live,
             channels: p.channels + items.length,
           );
         case MoviesBatch(:final items):
-          await catalog.upsertMovies(id, gen, items);
+          await catalog.upsertMovies(id, await open(), items);
+          touch(ContentKind.movie);
+          written += items.length;
           p = p.copyWith(
             phase: SyncPhase.movies,
             movies: p.movies + items.length,
           );
         case SeriesBatch(:final items):
-          await catalog.upsertSeries(id, gen, items);
+          await catalog.upsertSeries(id, await open(), items);
+          touch(ContentKind.series);
+          written += items.length;
           p = p.copyWith(
             phase: SyncPhase.series,
             series: p.series + items.length,
           );
         case EpisodesBatch(:final items):
-          await catalog.upsertEpisodes(id, gen, items);
+          await catalog.upsertEpisodes(id, await open(), items);
+          touch(ContentKind.series);
+          written += items.length;
           p = p.copyWith(
             phase: SyncPhase.series,
             episodes: p.episodes + items.length,
@@ -270,20 +307,43 @@ Future<SyncProgress> runSyncPipeline(
           hints.addAll(urls);
           continue;
         case PhaseDoneBatch(:final kind):
+          if (kinds.contains(kind) && !committed.contains(kind)) {
+            if (gen == null && (previous[kind] ?? 0) == 0) {
+              // Nothing written and nothing to remove: no swap needed.
+              committed.add(kind);
+            } else {
+              await open();
+              touched.add(kind);
+              finished.add(kind);
+              final wasFilled = finished.any((k) => (previous[k] ?? 0) > 0);
+              if (finished.containsAll(touched) &&
+                  (written > 0 || !wasFilled)) {
+                await commit({...finished});
+              }
+            }
+          }
           p = p.copyWith(phase: _phaseAfter(kind, task.scope));
       }
       check();
       emit(p);
     }
     check();
-    if (p.items == 0 && previous > 0) {
+    final hadItems = previous.values.any((n) => n > 0);
+    if (p.items == 0 && hadItems) {
       throw const ParseFailure('The source returned an empty catalog');
     }
 
     p = p.copyWith(phase: SyncPhase.saving);
     emit(p);
-    await catalog.commitGeneration(id, gen, kinds: kinds);
-    gen = null;
+    final remaining = kinds.difference(committed);
+    if (remaining.isNotEmpty) {
+      await open();
+      await commit(remaining);
+    } else if (gen case final stray?) {
+      // Rows of families that were already committed: drop them.
+      gen = null;
+      await catalog.abortGeneration(id, stray);
+    }
     // The new catalog is live; bookkeeping below must not undo "done".
     try {
       await saveEpgSources(db, id, adapter.epgSpecs(), hints);
@@ -297,10 +357,10 @@ Future<SyncProgress> runSyncPipeline(
     }
     return p.copyWith(phase: SyncPhase.done);
   } on Object catch (e) {
-    final open = gen;
-    if (open != null) {
+    final pending = gen;
+    if (pending != null) {
       try {
-        await catalog.abortGeneration(id, open);
+        await catalog.abortGeneration(id, pending);
       } on Object {
         // The source may be gone; the next beginGeneration cleans up.
       }
@@ -313,7 +373,7 @@ Future<SyncProgress> runSyncPipeline(
       error: VerifyError.fromError(
         e,
         kind: task.config.kind,
-        secrets: [?task.config.username, ?task.config.password],
+        secrets: sourceSecrets(task.config),
       ),
     );
   } finally {
@@ -436,8 +496,8 @@ class SyncService {
 
   bool isRunning(int sourceId) => _jobs.containsKey(sourceId);
 
-  /// Stops the running sync of [sourceId], if any. Its catalog is left as
-  /// it was before the sync.
+  /// Stops the running sync of [sourceId], if any. Families the run already
+  /// committed keep their new rows; the others stay as they were.
   void cancel(int sourceId) => _jobs[sourceId]?.cancel();
 
   /// [cancel] and wait until the run has stopped.

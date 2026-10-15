@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +7,7 @@ import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/log/ring_log.dart';
 import 'package:iptv_player/core/platform/device_caps.dart';
+import 'package:iptv_player/core/secure/secret_store.dart';
 import 'package:iptv_player/sources/models.dart';
 import 'package:iptv_player/sources/sync/sync_service.dart';
 
@@ -73,6 +74,23 @@ void main() {
       await db.sourcesDao.deleteSource(b);
       expect(await readSettled(activeSourceIdProvider), a);
       expect(container.read(sourcesProvider).value, hasLength(1));
+    });
+
+    test('unresolved until the stored choice has loaded', () async {
+      await addTestSource(db, name: 'A');
+      final b = await addTestSource(db, name: 'B');
+      await db.sourcesDao.setActive(b);
+      final seen = <int?>[];
+      container.listen(
+        activeSourceIdProvider,
+        (_, next) => seen.add(next),
+        fireImmediately: true,
+      );
+      await pumpEventQueue();
+      expect(container.read(activeSourceReadyProvider), isTrue);
+      expect(container.read(activeSourceIdProvider), b);
+      // Never the first source on the way.
+      expect(seen.whereType<int>().toSet(), {b});
     });
 
     test('a stale stored id is ignored', () async {
@@ -179,6 +197,97 @@ void main() {
         FormFactor.desktop,
       );
       expect(container.read(tvModeProvider), isFalse);
+    });
+  });
+
+  group('exit', () {
+    late List<String> calls;
+
+    setUp(() {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      calls = [];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            calls.add(call.method);
+            return call.method == 'System.exitApplication'
+                ? {'response': 'exit'}
+                : null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+    });
+
+    test('Android pops the activity', () async {
+      container.dispose();
+      container = makeContainer();
+      container.read(appExitProvider)();
+      await pumpEventQueue();
+      expect(calls, ['SystemNavigator.pop']);
+    });
+
+    test('desktop asks for an application exit, not a pop', () async {
+      final log = RingLog();
+      container.dispose();
+      container = makeContainer(platform: TargetPlatform.windows);
+      container.read(appExitProvider)();
+      await pumpEventQueue();
+      // The test binding answers exitApplication itself; the Windows
+      // embedder would ignore SystemNavigator.pop.
+      expect(calls, isNot(contains('SystemNavigator.pop')));
+
+      final used = <String>[];
+      for (final platform in [
+        TargetPlatform.windows,
+        TargetPlatform.linux,
+        TargetPlatform.macOS,
+        TargetPlatform.android,
+      ]) {
+        await exitApp(
+          platform,
+          log: log,
+          pop: () async => used.add('pop ${platform.name}'),
+          desktopExit: () async => used.add('exit ${platform.name}'),
+        );
+      }
+      expect(used, ['exit windows', 'exit linux', 'exit macOS', 'pop android']);
+      expect(log.dump(), isEmpty);
+    });
+
+    test('a failing exit is logged, not thrown', () async {
+      final log = RingLog();
+      await exitApp(
+        TargetPlatform.windows,
+        log: log,
+        desktopExit: () async => throw PlatformException(code: 'nope'),
+      );
+      expect(log.dump(), contains('Exit failed'));
+    });
+  });
+
+  group('secrets', () {
+    test('saved sources register their credentials with the log', () async {
+      final log = RingLog();
+      container.dispose();
+      container = ProviderContainer(
+        retry: (_, _) => null,
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          ringLogProvider.overrideWithValue(log),
+          syncRunnerProvider.overrideWithValue(runner),
+        ],
+      );
+      await db.sourcesDao.create(
+        const SourceConfig(
+          kind: SourceKind.m3uUrl,
+          url: 'http://tv.example/get.php?username=alice77&password=S3cretPw',
+        ),
+        secrets: DbSecretStore(db),
+      );
+      expect(await readSettled(sourcesProvider), isA<AsyncData<Object?>>());
+      log.warn('open http://tv.example/alice77/S3cretPw/1 failed');
+      expect(log.dump(), isNot(contains('S3cretPw')));
     });
   });
 

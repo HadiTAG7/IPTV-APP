@@ -193,8 +193,13 @@ void main() {
       final before = (await db.sourcesDao.byId(id))!;
       final channels = await db.catalogDao.allChannelsPage(id, 0, 100);
 
+      // Channels are downloaded, then the connection drops before the live
+      // family is complete.
       final flaky = service(
-        adapters: (c) => _FlakyAdapter(repo.adapterFor(c), failAfter: 1),
+        adapters: (c) => _FlakyAdapter(
+          repo.adapterFor(c),
+          failOn: (b) => b is PhaseDoneBatch && b.kind == ContentKind.live,
+        ),
       );
       final result = await flaky.syncAndWait(id);
       expect(result.phase, SyncPhase.failed);
@@ -211,6 +216,95 @@ void main() {
         channels.map((c) => c.key),
       );
       expect(await count(id, ContentKind.movie), panel.catalog.movies.length);
+    });
+
+    test('live is committed first; a later failure keeps it', () async {
+      final id = await addXtream();
+      final seen = <ContentKind, int>{};
+      final result = await service(
+        adapters: (c) => _FlakyAdapter(
+          repo.adapterFor(c),
+          before: (b) async {
+            if (b is MoviesBatch && seen.isEmpty) {
+              seen[ContentKind.live] = await count(id, ContentKind.live);
+              seen[ContentKind.movie] = await count(id, ContentKind.movie);
+            }
+          },
+          failOn: (b) => b is SeriesBatch,
+        ),
+      ).syncAndWait(id);
+      final catalog = panel.catalog;
+      // Channels were visible while movies were still downloading.
+      expect(seen, {
+        ContentKind.live: catalog.live.length,
+        ContentKind.movie: 0,
+      });
+      expect(result.phase, SyncPhase.failed);
+      expect(result.error!.reason, VerifyErrorReason.unreachable);
+      // The first sync failed in the series family: live and movies stay.
+      expect(await count(id, ContentKind.live), catalog.live.length);
+      expect(await count(id, ContentKind.movie), catalog.movies.length);
+      expect(await count(id, ContentKind.series), 0);
+      expect(
+        (await db.catalogDao.categories(id, ContentKind.live)).length,
+        catalog.liveCategories.length,
+      );
+      expect((await db.sourcesDao.byId(id))!.lastSyncAt, isNull);
+      expect(await db.catalogDao.openGenerationOf(id), isNull);
+
+      // A full sync completes it; a series failure on a re-sync keeps the
+      // previous series and the refreshed live and movie families.
+      expect((await service().syncAndWait(id)).isDone, isTrue);
+      expect(await count(id, ContentKind.series), catalog.series.length);
+      await db.favoritesDao.toggleFavorite(
+        id,
+        ContentKind.series,
+        '${catalog.series.first.id}',
+      );
+      final again = await service(
+        adapters: (c) =>
+            _FlakyAdapter(repo.adapterFor(c), failOn: (b) => b is SeriesBatch),
+      ).syncAndWait(id);
+      expect(again.phase, SyncPhase.failed);
+      expect(await count(id, ContentKind.live), catalog.live.length);
+      expect(await count(id, ContentKind.movie), catalog.movies.length);
+      expect(await count(id, ContentKind.series), catalog.series.length);
+      expect(await db.favoritesDao.favoriteKeys(id, ContentKind.series), [
+        '${catalog.series.first.id}',
+      ]);
+      expect(await db.catalogDao.openGenerationOf(id), isNull);
+    });
+
+    test('a live-only panel needs one swap', () async {
+      final id = await addXtream();
+      bool vod(SyncBatch b) =>
+          b is MoviesBatch ||
+          b is SeriesBatch ||
+          (b is CategoriesBatch &&
+              b.items.every((c) => c.kind != ContentKind.live));
+      final result = await service(
+        adapters: (c) => _FlakyAdapter(repo.adapterFor(c), drop: vod),
+      ).syncAndWait(id);
+      expect(result.phase, SyncPhase.done, reason: '${result.error}');
+      expect(await count(id, ContentKind.live), panel.catalog.live.length);
+      expect(await count(id, ContentKind.movie), 0);
+      final row = (await db.sourcesDao.byId(id))!;
+      expect(row.generation, 1);
+      expect(row.lastSyncAt, clock.now());
+    });
+
+    test('a family that comes back empty is dropped with the others', () async {
+      final id = await addXtream();
+      expect((await service().syncAndWait(id)).isDone, isTrue);
+      final result = await service(
+        adapters: (c) =>
+            _FlakyAdapter(repo.adapterFor(c), drop: (b) => b is MoviesBatch),
+      ).syncAndWait(id);
+      expect(result.phase, SyncPhase.done, reason: '${result.error}');
+      expect(await count(id, ContentKind.movie), 0);
+      expect(await count(id, ContentKind.live), panel.catalog.live.length);
+      expect(await count(id, ContentKind.series), panel.catalog.series.length);
+      expect(await db.catalogDao.openGenerationOf(id), isNull);
     });
 
     test('an expired account stops before touching the catalog', () async {
@@ -402,12 +496,23 @@ void main() {
 }
 
 /// Passes batches through and throws a network error after [failAfter]
-/// item batches.
+/// item batches, or (when given) at the first batch matching [failOn].
+/// [before] runs before each batch is handed on; batches matching [drop]
+/// are left out.
 class _FlakyAdapter implements SourceAdapter {
-  _FlakyAdapter(this.inner, {required this.failAfter});
+  _FlakyAdapter(
+    this.inner, {
+    this.failAfter = 1 << 30,
+    this.failOn,
+    this.before,
+    this.drop,
+  });
 
   final SourceAdapter inner;
   final int failAfter;
+  final bool Function(SyncBatch batch)? failOn;
+  final Future<void> Function(SyncBatch batch)? before;
+  final bool Function(SyncBatch batch)? drop;
 
   @override
   SourceCapabilities get caps => inner.caps;
@@ -419,11 +524,16 @@ class _FlakyAdapter implements SourceAdapter {
   Stream<SyncBatch> fetchCatalog([SyncScope scope = SyncScope.all]) async* {
     var items = 0;
     await for (final batch in inner.fetchCatalog(scope)) {
+      if (failOn?.call(batch) ?? false) {
+        throw const NetworkFailure('connection reset');
+      }
       if (batch is ChannelsBatch || batch is MoviesBatch) {
         if (items++ >= failAfter) {
           throw const NetworkFailure('connection reset');
         }
       }
+      if (drop?.call(batch) ?? false) continue;
+      await before?.call(batch);
       yield batch;
     }
   }

@@ -9,6 +9,7 @@ import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/platform/device_caps.dart';
 import 'package:iptv_player/player/engine/engine_factory.dart';
+import 'package:iptv_player/player/engine/mpv_engine.dart';
 import 'package:iptv_player/player/engine/player_engine.dart';
 
 void main() {
@@ -97,6 +98,28 @@ void main() {
       expect(options.lite, isTrue);
       expect(options.hardwareDecoding, isFalse);
       expect(options.exoViewType, VideoViewType.platformView);
+    });
+
+    test('audio and subtitle languages reach mpv separately', () {
+      final options = const AppSettings(
+        preferredAudioLang: 'en',
+        preferredSubLang: 'ar',
+      ).engineOptions(lite: false);
+      expect(options.preferredLanguages, ['eng', 'en', 'ar']);
+      expect(options.subtitleLanguages, ['ara', 'ar', 'en']);
+      expect(
+        mpvLanguageProperties(
+          options.preferredLanguages,
+          options.subtitleLanguages,
+        ),
+        {'alang': 'eng,en,ar', 'slang': 'ara,ar,en'},
+      );
+      // Without a separate list both follow the audio order.
+      expect(mpvLanguageProperties(const ['ara', 'ar'], null), {
+        'alang': 'ara,ar',
+        'slang': 'ara,ar',
+      });
+      expect(const EngineOptions().subtitleLanguages, isNull);
     });
   });
 
