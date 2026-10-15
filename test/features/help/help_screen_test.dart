@@ -93,6 +93,21 @@ void main() {
     );
   });
 
+  test('the warning signs do not flag how this app itself is updated', () {
+    // Installing an APK from the project's releases page is the documented
+    // update path, so "apps from outside the store" alone is no warning
+    // sign; what is flagged is the seller's app or a modified copy.
+    expect(en.help_warningSignsMore, isNot(contains('outside the store')));
+    expect(en.help_warningSignsMore, contains('seller'));
+    expect(en.help_warningSignsMore, contains('modified'));
+    expect(ar.help_warningSignsMore, isNot(contains('خارج المتجر')));
+    expect(ar.help_warningSignsMore, contains('معدّلة'));
+    // The update note says where the app comes from and that it is not
+    // sold.
+    expect(en.help_updatesBody, contains('never sold'));
+    expect(ar.help_updatesBody, contains('لا يُباع'));
+  });
+
   for (final rtl in [false, true]) {
     final lang = rtl ? 'ar' : 'en';
     final l10n = rtl ? ar : en;

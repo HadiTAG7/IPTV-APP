@@ -405,9 +405,9 @@
   "help_receiverBody": "Your own satellite receiver (for example Enigma2 with OpenWebif, Tvheadend or a SAT>IP tuner) can export M3U and XMLTV for the free-to-air channels you already receive. It is the cleanest legal way to get a playlist with a guide.",
   "help_officialAppsTitle": "Official apps",
   "help_officialAppsBody": "Free: Aloula (the Saudi channels), Shahid's free tier, Thmanyah and Samsung TV Plus. Paid: Shahid VIP, TOD by beIN, stc tv and OSN+. These services work only in their own apps and don't give M3U links or Xtream logins, so they can't be added here. No licensed Saudi service sells premium channels as M3U or Xtream.",
-  "help_warningSignsMore": "• Free 24-hour trials\n• Payment by transfer to a person, gift cards or crypto\n• Asks you to install apps from outside the store or to use a VPN",
+  "help_warningSignsMore": "• Free 24-hour trials\n• Payment by transfer to a person, gift cards or crypto\n• Asks you to install the seller's own app or a modified copy of a known app, or to use a VPN, to get the channels",
   "help_legitServices": "Legitimate services are known broadcasters or telecom companies, with official store apps, VAT invoices and official payment methods.",
   "help_updatesTitle": "How to install updates",
-  "help_updatesBody": "Download the latest version from the project's releases page and install it over the current one; your sources, favorites and watch progress stay. On Android TV or Fire TV, type this link into the Downloader app. On Windows, close the app and extract the new zip into the same folder.",
+  "help_updatesBody": "This app is free and is published only on its project's releases page; it is never sold, so don't get it from a seller. Download the latest version from there and install it over the current one; your sources, favorites and watch progress stay. On Android TV or Fire TV, type this link into the Downloader app. On Windows, close the app and extract the new zip into the same folder.",
   "help_downloadLink": "Download link"
 }

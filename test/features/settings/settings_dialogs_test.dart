@@ -1,9 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/features/settings/settings_dialogs.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
+import 'package:iptv_player/tv/dpad_shortcuts.dart';
+
+import 'settings_harness.dart' show focusDescription, focusedIn;
 
 final _en = lookupAppLocalizations(const Locale('en'));
 
@@ -15,6 +19,7 @@ Future<List<bool?>> _openAddDialog(
   final popped = <bool?>[];
   await tester.pumpWidget(
     MaterialApp(
+      shortcuts: appShortcuts,
       locale: const Locale('en'),
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
@@ -42,6 +47,12 @@ const _add = ValueKey('epg-url-add');
 bool _addEnabled(WidgetTester tester) =>
     tester.widget<FilledButton>(find.byKey(_add)).onPressed != null;
 
+/// The saving spinner inside Add.
+Finder _spinner() => find.descendant(
+  of: find.byKey(_add),
+  matching: find.byType(CircularProgressIndicator),
+);
+
 void main() {
   testWidgets('Add guide URL: a throwing save shows an error and Add works '
       'again', (tester) async {
@@ -67,7 +78,7 @@ void main() {
     expect(popped, [true]);
   });
 
-  testWidgets('Add guide URL: Add is disabled while saving; a duplicate '
+  testWidgets('Add guide URL: Add ignores presses while saving; a duplicate '
       'says so', (tester) async {
     final pending = Completer<AddEpgUrlResult>();
     final urls = <String>[];
@@ -78,14 +89,54 @@ void main() {
     await tester.enterText(find.byKey(_field), ' https://example.com/a.xml ');
     await tester.tap(find.byKey(_add));
     await tester.pump();
-    expect(_addEnabled(tester), isFalse);
     expect(urls, ['https://example.com/a.xml']);
+    expect(_spinner(), findsOneWidget);
+    await tester.tap(find.byKey(_add));
+    await tester.pump();
+    expect(urls, hasLength(1));
 
     pending.complete(AddEpgUrlResult.exists);
     await tester.pumpAndSettle();
     expect(find.text(_en.settings_epgUrlExists), findsOneWidget);
+    expect(_spinner(), findsNothing);
     expect(_addEnabled(tester), isTrue);
     expect(find.byType(AddEpgUrlDialog), findsOneWidget);
+  });
+
+  testWidgets('Add guide URL: with the remote, focus stays on Add during a '
+      'slow save and the keyboard stays closed', (tester) async {
+    final pending = Completer<AddEpgUrlResult>();
+    final urls = <String>[];
+    await _openAddDialog(tester, (url) {
+      urls.add(url);
+      return pending.future;
+    });
+    expect(focusedIn(_field), isTrue);
+    await tester.enterText(find.byKey(_field), 'https://example.com/a.xml');
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(focusedIn(_add), isTrue, reason: focusDescription());
+    expect(tester.testTextInput.isVisible, isFalse);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(urls, ['https://example.com/a.xml']);
+    expect(focusedIn(_add), isTrue, reason: focusDescription());
+    expect(tester.testTextInput.isVisible, isFalse);
+    expect(_spinner(), findsOneWidget);
+    // A second OK while saving does nothing.
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+    expect(urls, hasLength(1));
+
+    pending.complete(AddEpgUrlResult.exists);
+    await tester.pumpAndSettle();
+    expect(find.text(_en.settings_epgUrlExists), findsOneWidget);
+    expect(focusedIn(_add), isTrue, reason: focusDescription());
+    expect(tester.testTextInput.isVisible, isFalse);
   });
 
   testWidgets('Add guide URL: a failed save shows the save error', (

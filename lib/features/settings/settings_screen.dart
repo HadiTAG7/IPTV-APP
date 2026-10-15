@@ -541,7 +541,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             : null,
-        onSelect: refreshing ? null : () => _refreshNow(source.id),
+        // Stays selectable while refreshing (_refreshNow ignores the press):
+        // a phone ListTile without onTap gives up key focus.
+        onSelect: () => _refreshNow(source.id),
       ),
       SettingsTile(
         key: const ValueKey('settings-epgInterval'),
