@@ -69,7 +69,8 @@ ProcessResult _bash(
     'bash',
     ['--noprofile', '--norc', '-eo', 'pipefail', file.path],
     workingDirectory: cwd.path,
-    environment: env,
+    // A manual release run exports RELEASE_VERSION; tests opt in explicitly.
+    environment: {'RELEASE_VERSION': '', ...env},
     stdoutEncoding: utf8,
     stderrEncoding: utf8,
   );
