@@ -500,6 +500,46 @@ void main() {
     await h.dispose(tester);
   });
 
+  testWidgets('phone: Refresh guide keeps key focus while it runs', (
+    tester,
+  ) async {
+    final pending = Completer<void>();
+    final calls = <RefreshCall>[];
+    final h = await pumpSettingsApp(
+      tester,
+      tv: false,
+      refresh: (id, {required force}) {
+        calls.add((sourceId: id, force: force));
+        return pending.future;
+      },
+    );
+    await openSettingsPhone(tester);
+    const row = ValueKey('settings-epgRefresh');
+    Finder spinner() => find.descendant(
+      of: find.byKey(row),
+      matching: find.byType(CircularProgressIndicator),
+    );
+    await moveTo(tester, row);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(calls, [(sourceId: h.sourceId, force: true)]);
+    expect(spinner(), findsOneWidget);
+    expect(focusedIn(row), isTrue, reason: focusDescription());
+    // A second OK while it runs does nothing.
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+    expect(calls, hasLength(1));
+    expect(focusedIn(row), isTrue, reason: focusDescription());
+
+    pending.complete();
+    await settle(tester);
+    expect(spinner(), findsNothing);
+    expect(focusedIn(row), isTrue, reason: focusDescription());
+    await h.dispose(tester);
+  });
+
   testWidgets('a failing guide refresh is logged, not thrown', (tester) async {
     final h = await pumpSettingsApp(
       tester,

@@ -2177,7 +2177,7 @@ abstract class AppLocalizations {
   /// No description provided for @help_warningSignsMore.
   ///
   /// In en, this message translates to:
-  /// **'• Free 24-hour trials\n• Payment by transfer to a person, gift cards or crypto\n• Asks you to install apps from outside the store or to use a VPN'**
+  /// **'• Free 24-hour trials\n• Payment by transfer to a person, gift cards or crypto\n• Asks you to install the seller\'s own app or a modified copy of a known app, or to use a VPN, to get the channels'**
   String get help_warningSignsMore;
 
   /// No description provided for @help_legitServices.
@@ -2195,7 +2195,7 @@ abstract class AppLocalizations {
   /// No description provided for @help_updatesBody.
   ///
   /// In en, this message translates to:
-  /// **'Download the latest version from the project\'s releases page and install it over the current one; your sources, favorites and watch progress stay. On Android TV or Fire TV, type this link into the Downloader app. On Windows, close the app and extract the new zip into the same folder.'**
+  /// **'This app is free and is published only on its project\'s releases page; it is never sold, so don\'t get it from a seller. Download the latest version from there and install it over the current one; your sources, favorites and watch progress stay. On Android TV or Fire TV, type this link into the Downloader app. On Windows, close the app and extract the new zip into the same folder.'**
   String get help_updatesBody;
 
   /// No description provided for @help_downloadLink.

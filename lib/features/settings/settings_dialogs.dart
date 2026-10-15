@@ -523,14 +523,51 @@ class _AddEpgUrlDialogState extends State<AddEpgUrlDialog> {
           onPressed: () => Navigator.of(context).pop(false),
           child: Text(l10n.commonCancel),
         ),
+        // Stays enabled while saving (_submit ignores the press): a
+        // disabled button gives up focus, which falls back to the field
+        // and reopens the soft keyboard over the dialog.
         FilledButton(
           key: const ValueKey('epg-url-add'),
           focusNode: _addNode,
-          onPressed: _busy ? null : _submit,
-          child: Text(l10n.commonAdd),
+          onPressed: _submit,
+          child: _BusyLabel(label: l10n.commonAdd, busy: _busy),
         ),
       ],
     );
     return FocusTraversalGroup(policy: _policy, child: dialog);
+  }
+}
+
+/// A button label that shows a spinner in its place while [busy], keeping
+/// the button's size and spoken label.
+class _BusyLabel extends StatelessWidget {
+  const _BusyLabel({required this.label, required this.busy});
+
+  final String label;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      alignment: AlignmentDirectional.center,
+      children: [
+        Visibility(
+          visible: !busy,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          maintainSemantics: true,
+          child: Text(label),
+        ),
+        if (busy)
+          SizedBox.square(
+            dimension: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: DefaultTextStyle.of(context).style.color,
+            ),
+          ),
+      ],
+    );
   }
 }
