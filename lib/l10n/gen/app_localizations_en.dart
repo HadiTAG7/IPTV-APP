@@ -860,4 +860,39 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'This subscription has expired.';
+
+  @override
+  String get vod_allMovies => 'All movies';
+
+  @override
+  String get vod_allSeries => 'All series';
+
+  @override
+  String get vod_noMovies => 'No movies here';
+
+  @override
+  String get vod_noSeries => 'No series here';
+
+  @override
+  String get vod_detailsFailed => 'Couldn\'t load more details.';
+
+  @override
+  String vod_cast(String names) {
+    return 'Cast: ⁨$names⁩';
+  }
+
+  @override
+  String vod_director(String name) {
+    return 'Director: ⁨$name⁩';
+  }
+
+  @override
+  String vod_playEpisode(int season, int episode) {
+    return 'Play S$season E$episode';
+  }
+
+  @override
+  String vod_resumeEpisode(int season, int episode) {
+    return 'Resume S$season E$episode';
+  }
 }

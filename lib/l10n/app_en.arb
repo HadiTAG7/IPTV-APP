@@ -355,5 +355,31 @@
   "errorExpiredNoDate": "This subscription has expired.",
   "@errorExpiredNoDate": {
     "description": "Account expiry error when the provider sent no expiry date."
+  },
+
+  "vod_allMovies": "All movies",
+  "vod_allSeries": "All series",
+  "vod_noMovies": "No movies here",
+  "vod_noSeries": "No series here",
+  "vod_detailsFailed": "Couldn't load more details.",
+  "vod_cast": "Cast: \u2068{names}\u2069",
+  "@vod_cast": {
+    "description": "Cast line on a movie page. {names} is wrapped in U+2068/U+2069 (first-strong isolate).",
+    "placeholders": {"names": {"type": "String"}}
+  },
+  "vod_director": "Director: \u2068{name}\u2069",
+  "@vod_director": {
+    "description": "Director line on a movie page. {name} is wrapped in U+2068/U+2069 (first-strong isolate).",
+    "placeholders": {"name": {"type": "String"}}
+  },
+  "vod_playEpisode": "Play S{season} E{episode}",
+  "@vod_playEpisode": {
+    "description": "Series page button that plays an episode from the start, e.g. Play S1 E3.",
+    "placeholders": {"season": {"type": "int"}, "episode": {"type": "int"}}
+  },
+  "vod_resumeEpisode": "Resume S{season} E{episode}",
+  "@vod_resumeEpisode": {
+    "description": "Series page button that resumes a partly watched episode, e.g. Resume S1 E3.",
+    "placeholders": {"season": {"type": "int"}, "episode": {"type": "int"}}
   }
 }

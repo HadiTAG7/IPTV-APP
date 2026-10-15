@@ -881,4 +881,39 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'انتهى هذا الاشتراك.';
+
+  @override
+  String get vod_allMovies => 'كل الأفلام';
+
+  @override
+  String get vod_allSeries => 'كل المسلسلات';
+
+  @override
+  String get vod_noMovies => 'لا توجد أفلام هنا';
+
+  @override
+  String get vod_noSeries => 'لا توجد مسلسلات هنا';
+
+  @override
+  String get vod_detailsFailed => 'تعذّر تحميل المزيد من التفاصيل.';
+
+  @override
+  String vod_cast(String names) {
+    return 'البطولة: ⁨$names⁩';
+  }
+
+  @override
+  String vod_director(String name) {
+    return 'الإخراج: ⁨$name⁩';
+  }
+
+  @override
+  String vod_playEpisode(int season, int episode) {
+    return 'تشغيل الموسم $season الحلقة $episode';
+  }
+
+  @override
+  String vod_resumeEpisode(int season, int episode) {
+    return 'استكمال الموسم $season الحلقة $episode';
+  }
 }

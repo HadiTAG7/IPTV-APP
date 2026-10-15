@@ -1543,6 +1543,60 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This subscription has expired.'**
   String get errorExpiredNoDate;
+
+  /// No description provided for @vod_allMovies.
+  ///
+  /// In en, this message translates to:
+  /// **'All movies'**
+  String get vod_allMovies;
+
+  /// No description provided for @vod_allSeries.
+  ///
+  /// In en, this message translates to:
+  /// **'All series'**
+  String get vod_allSeries;
+
+  /// No description provided for @vod_noMovies.
+  ///
+  /// In en, this message translates to:
+  /// **'No movies here'**
+  String get vod_noMovies;
+
+  /// No description provided for @vod_noSeries.
+  ///
+  /// In en, this message translates to:
+  /// **'No series here'**
+  String get vod_noSeries;
+
+  /// No description provided for @vod_detailsFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t load more details.'**
+  String get vod_detailsFailed;
+
+  /// Cast line on a movie page. {names} is wrapped in U+2068/U+2069 (first-strong isolate).
+  ///
+  /// In en, this message translates to:
+  /// **'Cast: ⁨{names}⁩'**
+  String vod_cast(String names);
+
+  /// Director line on a movie page. {name} is wrapped in U+2068/U+2069 (first-strong isolate).
+  ///
+  /// In en, this message translates to:
+  /// **'Director: ⁨{name}⁩'**
+  String vod_director(String name);
+
+  /// Series page button that plays an episode from the start, e.g. Play S1 E3.
+  ///
+  /// In en, this message translates to:
+  /// **'Play S{season} E{episode}'**
+  String vod_playEpisode(int season, int episode);
+
+  /// Series page button that resumes a partly watched episode, e.g. Resume S1 E3.
+  ///
+  /// In en, this message translates to:
+  /// **'Resume S{season} E{episode}'**
+  String vod_resumeEpisode(int season, int episode);
 }
 
 class _AppLocalizationsDelegate

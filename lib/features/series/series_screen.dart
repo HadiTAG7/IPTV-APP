@@ -1,29 +1,16 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/widgets.dart';
 
-import '../../l10n/gen/app_localizations.dart';
-import '../../theme/tokens.dart';
+import '../vod_common/vod_browser.dart';
+import '../vod_common/vod_providers.dart';
 
-/// Series categories, poster grid, seasons and episodes.
+/// Series categories, poster grid and Continue watching (by series); OK
+/// opens the series page with its seasons and episodes.
 ///
-/// Placeholder until the feature is built. Screens render body content only;
-/// the home shells (and pushed routes) provide the Scaffold and app bar.
-class SeriesScreen extends ConsumerWidget {
+/// Body content only: the home shells provide the Scaffold (see
+/// [VodBrowser] for the layout and remote navigation).
+class SeriesScreen extends StatelessWidget {
   const SeriesScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final l10n = AppLocalizations.of(context);
-    final theme = Theme.of(context);
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(l10n.navSeries, style: theme.textTheme.headlineSmall),
-          const SizedBox(height: Spacing.sm),
-          Text(l10n.commonEmpty, style: theme.textTheme.bodyMedium),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const VodBrowser(kind: VodKind.series);
 }
