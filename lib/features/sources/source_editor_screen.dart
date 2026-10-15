@@ -10,6 +10,7 @@ import '../../core/db/app_db.dart';
 import '../../core/net/http.dart';
 import '../../core/net/lan_input_server.dart'
     show deleteTempUpload, writeTempUpload;
+import '../../core/secure/secret_store.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../../sources/models.dart';
 import '../../sources/source_repository.dart';
@@ -197,8 +198,12 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
 
   Future<void> _load() async {
     final id = widget.sourceId!;
+    // Read before the first await: `ref` is unusable once the page closed.
+    final log = ref.read(ringLogProvider);
+    final epg = ref.read(epgDaoProvider);
     try {
-      await _reloadSaved(id);
+      await _reloadSaved(id, _repo, epg);
+      if (!mounted) return;
       final row = _row;
       final saved = _saved;
       if (row == null || saved == null) throw StateError('Unknown source');
@@ -225,7 +230,7 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
           _epg.text.isNotEmpty;
       _link = _detectLink();
     } on Object catch (e) {
-      ref.read(ringLogProvider).warn('Opening source $id failed: $e');
+      log.warn('Opening source $id failed: $e');
       _loadFailed = true;
     }
     if (!mounted) return;
@@ -233,11 +238,10 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
     _registerWatchdog(_typeNodes[_kind]!);
   }
 
-  Future<void> _reloadSaved(int id) async {
-    final repo = _repo;
+  Future<void> _reloadSaved(int id, SourceRepository repo, EpgDao epg) async {
     _row = await repo.byId(id);
     _saved = await repo.configFor(id);
-    final guides = await ref.read(epgDaoProvider).epgSources(id);
+    final guides = await epg.epgSources(id);
     _manualEpg = guides.where((g) => g.origin == EpgOrigin.manual).firstOrNull;
   }
 
@@ -398,11 +402,12 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
   Future<void> _pickFile() async {
     if (_busy) return;
     final l10n = AppLocalizations.of(context);
+    final log = ref.read(ringLogProvider);
     PickedPlaylist? picked;
     try {
       picked = await ref.read(playlistPickerProvider)();
     } on Object catch (e) {
-      ref.read(ringLogProvider).warn('File picker failed: ${e.runtimeType}');
+      log.warn('File picker failed: ${e.runtimeType}');
       if (mounted) setState(() => _error = l10n.errorFileRead);
       return;
     }
@@ -493,14 +498,29 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
       _focusAfterBuild(_nodeFor(first));
       return;
     }
-    setState(() => _busy = true);
+    // One snapshot of the form: the fields stay editable while the check
+    // runs, and only what was checked is saved. Providers are read now too,
+    // as `ref` cannot be used once the page has closed.
+    final kind = _kind;
+    final picked = _picked;
+    var draft = _config(forSaving: false);
+    var config = _config(forSaving: true);
+    final guideUrl = _epg.text.trim();
+    final savedId = _savedId;
+    final previous = _saved;
+    final previousGuide = _manualEpg;
     final repo = _repo;
     final log = ref.read(ringLogProvider);
+    final sync = ref.read(syncServiceProvider);
+    final epg = ref.read(epgDaoProvider);
+    final secrets = ref.read(secretStoreProvider);
+    final hold = ref.read(onboardingHoldProvider.notifier);
+    setState(() => _busy = true);
     String? tempCopy;
+    // A playlist copy made for this save, until the source owns it.
+    String? newCopy;
     try {
-      var draft = _config(forSaving: false);
-      final picked = _picked;
-      if (_kind == SourceKind.m3uFile && picked != null) {
+      if (kind == SourceKind.m3uFile && picked != null) {
         final open = picked.openRead;
         if (picked.path == null && open != null) {
           tempCopy = await writeTempUpload(open());
@@ -516,26 +536,44 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
         });
         return;
       }
-      var config = _config(forSaving: true);
-      if (_kind == SourceKind.m3uFile && picked != null) {
-        final copy = await repo.importM3uFile(draft.url);
-        config = config.copyWith(url: copy);
+      if (kind == SourceKind.m3uFile && picked != null) {
+        newCopy = await repo.importM3uFile(draft.url);
+        config = config.copyWith(url: newCopy);
+      }
+      if (widget.onboarding) hold.set(true);
+      final int id;
+      if (savedId == null) {
+        id = await repo.add(config);
+        _savedId = id;
+      } else {
+        id = savedId;
+        await repo.update(id, config);
+      }
+      newCopy = null;
+      if (kind == SourceKind.m3uFile && picked != null) {
         if (picked.isTemporary) await deleteTempUpload(picked.path);
         _importedFileName = picked.name;
         _picked = null;
       }
-      if (widget.onboarding) {
-        ref.read(onboardingHoldProvider.notifier).set(true);
+      // A sync already running for this source (startup auto-sync, Refresh)
+      // uses the settings it started with: stop it so the import below
+      // starts again with the saved ones.
+      await sync.cancelAndWait(id);
+      // The playlist copy the source no longer uses (replaced by a new
+      // file, or the source is no longer a file).
+      if (previous != null &&
+          previous.kind == SourceKind.m3uFile &&
+          (config.kind != SourceKind.m3uFile || config.url != previous.url)) {
+        await repo.deleteImportedFile(previous.url);
       }
-      final id = _savedId ?? await repo.add(config);
-      if (_savedId == null) {
-        _savedId = id;
-      } else {
-        await repo.update(id, config);
+      await _saveGuideUrl(id, guideUrl, previousGuide, epg, secrets);
+      await _reloadSaved(id, repo, epg);
+      if (!mounted) {
+        // Saved, but the page closed: import in the background (Sources
+        // shows the progress).
+        sync.sync(id);
+        return;
       }
-      await _saveGuideUrl(id);
-      await _reloadSaved(id);
-      if (!mounted) return;
       _url.text = _row?.kind == SourceKind.m3uUrl ? _row!.url : _url.text;
       _password.clear();
       setState(() => _busy = false);
@@ -547,7 +585,7 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
         case ImportOutcome.cancelled:
           setState(() => _info = l10n.sourcesImportCancelled);
         case ImportOutcome.edit:
-          final status = ref.read(syncServiceProvider).statusOf(id);
+          final status = sync.statusOf(id);
           setState(() {
             _error = switch (status) {
               SyncFailed(:final error?) => describeSourceError(l10n, error),
@@ -559,6 +597,7 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
       }
     } on Object catch (e) {
       log.warn('Saving the source failed: $e');
+      if (newCopy != null) await repo.deleteImportedFile(newCopy);
       if (mounted) {
         setState(() {
           _busy = false;
@@ -570,14 +609,16 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
     }
   }
 
-  /// Saves the manual guide URL when it changed (the masked saved copy
-  /// left as is keeps the saved one).
-  Future<void> _saveGuideUrl(int id) async {
-    final text = _epg.text.trim();
-    final previous = _manualEpg;
+  /// Saves the manual guide URL [text] when it changed from [previous] (the
+  /// masked saved copy left as is keeps the saved one).
+  Future<void> _saveGuideUrl(
+    int id,
+    String text,
+    EpgSourceRow? previous,
+    EpgDao epg,
+    SecretStore secrets,
+  ) async {
     if (previous != null && text == previous.url) return;
-    final epg = ref.read(epgDaoProvider);
-    final secrets = ref.read(secretStoreProvider);
     if (previous != null) {
       await epg.deleteEpgSource(previous.id, secrets: secrets);
     }
@@ -594,9 +635,10 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
 
   /// Makes the imported source active and returns to the home screen.
   Future<void> _finish(int id) async {
+    final hold = ref.read(onboardingHoldProvider.notifier);
     await ref.read(activeSourceIdProvider.notifier).select(id);
+    if (widget.onboarding) hold.set(false);
     if (!mounted) return;
-    if (widget.onboarding) ref.read(onboardingHoldProvider.notifier).set(false);
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
 

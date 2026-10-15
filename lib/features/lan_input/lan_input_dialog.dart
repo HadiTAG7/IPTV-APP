@@ -64,6 +64,8 @@ class _LanInputDialogState extends ConsumerState<LanInputDialog> {
     unawaited(_server?.close());
     _server = null;
     if (_phase != _Phase.starting) setState(() => _phase = _Phase.starting);
+    // Read before the await: `ref` is unusable once the dialog closed.
+    final log = ref.read(ringLogProvider);
     final LanInputServer server;
     try {
       server = await ref.read(lanServerStarterProvider)(widget.form);
@@ -73,7 +75,7 @@ class _LanInputDialogState extends ConsumerState<LanInputDialog> {
       }
       return;
     } on Object catch (e) {
-      ref.read(ringLogProvider).warn('Phone input page failed: $e');
+      log.warn('Phone input page failed: $e');
       if (mounted && generation == _generation) {
         setState(() => _phase = _Phase.failed);
       }

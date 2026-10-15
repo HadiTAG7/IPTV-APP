@@ -100,7 +100,9 @@ class _SourcesScreenState extends ConsumerState<SourcesScreen> {
     );
     if (confirmed != true || !mounted) return;
     setState(() => _deleting = true);
+    // Read before the awaits: `ref` is unusable once the page closed.
     final repo = ref.read(sourceRepositoryProvider);
+    final log = ref.read(ringLogProvider);
     try {
       await repo.delete(s.id);
       final left = await repo.list();
@@ -115,7 +117,7 @@ class _SourcesScreenState extends ConsumerState<SourcesScreen> {
         left.any((r) => r.id == active) ? active! : left.first.id,
       );
     } on Object catch (e) {
-      ref.read(ringLogProvider).warn('Deleting source ${s.id} failed: $e');
+      log.warn('Deleting source ${s.id} failed: $e');
       if (mounted) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(

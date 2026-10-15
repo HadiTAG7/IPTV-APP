@@ -95,10 +95,21 @@ typedef InterfaceLister = Future<List<NetworkInterface>> Function({
 
 /// The device's LAN IPv4 address, or null when there is none.
 ///
-/// Takes the first non-loopback IPv4 address of [list], preferring private
-/// ranges (`10/8`, `172.16/12`, `192.168/16`) over others such as carrier
-/// NAT. When that finds nothing, all interfaces are listed again with
-/// link-local addresses included.
+/// Takes a non-loopback IPv4 address of [list], ranked so the phone on the
+/// same Wi-Fi can reach it:
+///
+/// 1. Tunnels, VPNs, mobile data and virtual adapters (`tun0`, `wg0`,
+///    `ppp0`, `rmnet0`, `docker0`, `vEthernet (WSL)`...) come last: a phone
+///    on the home network cannot reach them (VPN apps are common on TV
+///    boxes).
+/// 2. Private ranges (`10/8`, `172.16/12`, `192.168/16`) before others such
+///    as carrier NAT, and link-local last.
+/// 3. Wi-Fi and Ethernet names (`wlan0`, `eth0`, `en0`, `Wi-Fi`...) before
+///    unknown ones.
+/// 4. `192.168/16`, then `172.16/12`, then `10/8` (VPNs favour `10/8`).
+///
+/// Ties keep the listing order. When the first listing has nothing, all
+/// interfaces are listed again with link-local addresses included.
 Future<InternetAddress?> findLanAddress({
   InterfaceLister list = NetworkInterface.list,
 }) async {
@@ -106,10 +117,16 @@ Future<InternetAddress?> findLanAddress({
     final candidates = [
       for (final i in interfaces)
         for (final a in i.addresses)
-          if (a.type == InternetAddressType.IPv4 && !a.isLoopback) a,
+          if (a.type == InternetAddressType.IPv4 && !a.isLoopback)
+            (rank: _lanRank(i.name, a), address: a),
     ];
-    return candidates.where(isPrivateIPv4).firstOrNull ??
-        candidates.firstOrNull;
+    if (candidates.isEmpty) return null;
+    // A stable sort: ties keep the listing order.
+    var best = candidates.first;
+    for (final c in candidates.skip(1)) {
+      if (_compareRanks(c.rank, best.rank) < 0) best = c;
+    }
+    return best.address;
   }
 
   try {
@@ -124,6 +141,45 @@ Future<InternetAddress?> findLanAddress({
     return null;
   }
 }
+
+/// How suitable [address] of the interface [interfaceName] is for the
+/// phone page; lower is better, compared element by element (see
+/// [findLanAddress]).
+List<int> _lanRank(String interfaceName, InternetAddress address) {
+  final name = interfaceName.toLowerCase();
+  final b = address.rawAddress;
+  final private = isPrivateIPv4(address);
+  return [
+    if (_virtualInterface.hasMatch(name)) 1 else 0,
+    if (private) 0 else if (b[0] == 169 && b[1] == 254) 2 else 1,
+    if (_lanInterface.hasMatch(name)) 0 else 1,
+    if (!private || b[0] == 10) 2 else if (b[0] == 172) 1 else 0,
+  ];
+}
+
+int _compareRanks(List<int> a, List<int> b) {
+  for (var i = 0; i < a.length; i++) {
+    final c = a[i].compareTo(b[i]);
+    if (c != 0) return c;
+  }
+  return 0;
+}
+
+/// Interfaces a phone on the home network cannot reach: tunnels and VPNs,
+/// mobile data, and virtual adapters of containers and virtual machines.
+final _virtualInterface = RegExp(
+  r'^(tun|tap|ppp|wg|ipsec|utun|gif|stf|l2tp|pptp|vti|gre|ip6tnl|sit|'
+  r'rmnet|ccmni|clat|v4-|pdp|dummy|docker|br-|veth|virbr|vboxnet|vmnet|'
+  r'lxc|lxd|cni|flannel|zt|nordlynx|awdl|llw|bridge)'
+  r'|vpn|vethernet|virtual|hyper-v|wsl|vmware|vbox|wintun|tap-windows|'
+  r'tailscale|zerotier|wireguard|loopback',
+);
+
+/// Wi-Fi and Ethernet interface names (Linux/Android, macOS, Windows).
+final _lanInterface = RegExp(
+  r'^(wl|eth|en|em|ap|swlan|softap|wi-?fi|ethernet|wireless|'
+  r'local area connection)',
+);
 
 /// Whether [address] is in a private IPv4 range.
 bool isPrivateIPv4(InternetAddress address) {
@@ -222,6 +278,9 @@ class LanInputServer {
   var _accepting = true;
   Future<void>? _stopping;
 
+  /// Temporary files of uploads still being received.
+  final _uploading = <String>{};
+
   /// The bound address and port (kept after the server stops).
   late final InternetAddress address = _server.address;
   late final int port = _server.port;
@@ -265,6 +324,11 @@ class LanInputServer {
     if (!_result.isCompleted) _result.complete(null);
     await _requests?.cancel();
     await _server.close(force: true);
+    // Uploads cut off by the stop: their handlers normally remove the
+    // partial file, this covers a request stream that just ends.
+    for (final path in List.of(_uploading)) {
+      await deleteTempUpload(path);
+    }
     await _statusChanges.close();
     _log.info('Phone input page stopped (${_status.name})');
   }();
@@ -378,6 +442,8 @@ class LanInputServer {
       return _page(response, HttpStatus.requestEntityTooLarge, _Page.tooBig);
     }
     final file = File(_tempPath());
+    // Removed by [_stop] if the server stops while this upload runs.
+    _uploading.add(file.path);
     final sink = file.openWrite();
     var total = 0;
     var tooBig = false;
@@ -390,9 +456,16 @@ class LanInputServer {
         }
         sink.add(chunk);
       }
-    } finally {
       await sink.close();
+    } on Object {
+      // The phone went away mid-upload (or the server was stopped): drop
+      // the partial file.
+      _uploading.remove(file.path);
+      await sink.close().catchError((Object _) {});
+      await deleteTempUpload(file.path);
+      rethrow;
     }
+    _uploading.remove(file.path);
     if (tooBig || total == 0 || !_accepting) {
       await deleteTempUpload(file.path);
       return _page(

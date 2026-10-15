@@ -400,6 +400,11 @@ class SourceRepository {
     return target.path;
   }
 
+  /// Deletes a copy made by [importM3uFile] that no source uses any more
+  /// (the playlist was replaced, or the source changed type). Paths outside
+  /// the import folder are left alone. Never throws.
+  Future<void> deleteImportedFile(String path) => _deleteImportedFile(path);
+
   /// Xtream credentials inside a pasted playlist URL, if any.
   XtreamLink? detectXtreamLink(String url) => parseXtreamLink(url);
 

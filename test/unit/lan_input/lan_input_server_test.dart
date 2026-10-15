@@ -450,6 +450,60 @@ void main() {
       expect(uploads.listSync(), isEmpty);
     });
 
+    /// Starts an upload of 1 MB that sends only its first 16 KB.
+    Future<Socket> partialUpload(LanInputServer server) async {
+      final socket = await Socket.connect(server.address, server.port);
+      socket
+        ..write(
+          'POST /upload?t=${server.token}&name=a.m3u HTTP/1.1\r\n'
+          'Host: tv\r\nContent-Type: application/octet-stream\r\n'
+          'Content-Length: 1000000\r\n\r\n',
+        )
+        ..add(List.filled(16000, 0x41));
+      await socket.flush();
+      // The server has started writing the temp file.
+      final end = DateTime.now().add(const Duration(seconds: 5));
+      while (uploads.listSync().isEmpty && DateTime.now().isBefore(end)) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(uploads.listSync(), hasLength(1));
+      return socket;
+    }
+
+    Future<void> expectNoUploadsLeft() async {
+      final end = DateTime.now().add(const Duration(seconds: 5));
+      while (uploads.listSync().isNotEmpty && DateTime.now().isBefore(end)) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(uploads.listSync(), isEmpty);
+    }
+
+    test('a phone that goes away mid-upload leaves no file', () async {
+      final server = await start();
+      final socket = await partialUpload(server);
+      socket.destroy();
+      await expectNoUploadsLeft();
+      expect(server.status, LanInputStatus.waiting);
+
+      // The page still takes a complete upload afterwards.
+      final ok = await _request(
+        'POST',
+        withToken(server, '/upload', {'name': 'b.m3u'}),
+        body: utf8.encode('#EXTM3U\n'),
+      );
+      expect(ok!.status, HttpStatus.ok);
+      expect((await server.result)!.kind, LanSubmissionKind.m3uFile);
+    });
+
+    test('closing the page mid-upload leaves no file', () async {
+      final server = await start();
+      final socket = await partialUpload(server);
+      await server.close();
+      await expectNoUploadsLeft();
+      expect(await server.result, isNull);
+      socket.destroy();
+    });
+
     test('writeTempUpload copies a stream and enforces its limit', () async {
       final path = await writeTempUpload(
         Stream.fromIterable([
@@ -485,6 +539,62 @@ void main() {
       final address = await findLanAddress(list: list);
       expect(address!.address, '192.168.1.23');
     });
+
+    test(
+      'findLanAddress skips VPNs, mobile data and virtual adapters',
+      () async {
+        Future<InternetAddress?> find(List<NetworkInterface> interfaces) =>
+            findLanAddress(
+              list: ({
+                bool includeLoopback = false,
+                bool includeLinkLocal = false,
+                InternetAddressType type = InternetAddressType.any,
+              }) async => interfaces,
+            );
+
+        // A VPN app on the TV box lists its tunnel first.
+        expect(
+          (await find([
+            _Iface('tun0', ['10.8.0.2']),
+            _Iface('wlan0', ['192.168.1.20']),
+          ]))!.address,
+          '192.168.1.20',
+        );
+        // A home network in 10/8 still wins over a container bridge.
+        expect(
+          (await find([
+            _Iface('docker0', ['172.17.0.1']),
+            _Iface('wg0', ['10.2.0.2']),
+            _Iface('eth0', ['10.0.0.12']),
+          ]))!.address,
+          '10.0.0.12',
+        );
+        // Windows names.
+        expect(
+          (await find([
+            _Iface('vEthernet (WSL)', ['172.29.80.1']),
+            _Iface('Wi-Fi', ['192.168.0.7']),
+          ]))!.address,
+          '192.168.0.7',
+        );
+        // Unknown names: 192.168/16 before 10/8; ties keep the order.
+        expect(
+          (await find([
+            _Iface('if1', ['10.1.1.1']),
+            _Iface('if2', ['192.168.5.5']),
+            _Iface('if3', ['192.168.6.6']),
+          ]))!.address,
+          '192.168.5.5',
+        );
+        // Only a tunnel: better than nothing.
+        expect(
+          (await find([
+            _Iface('tun0', ['10.8.0.2']),
+          ]))!.address,
+          '10.8.0.2',
+        );
+      },
+    );
 
     test('findLanAddress falls back to listing everything', () async {
       final calls = <bool>[];
