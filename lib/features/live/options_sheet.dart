@@ -49,7 +49,7 @@ class OptionsSheet<T> extends StatelessWidget {
     // overscan margin: keep the last choice clear of what TVs crop.
     final overscan = overscanPadding(FormFactorScope.of(context));
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(
+      padding: EdgeInsetsDirectional.fromSTEB(
         Spacing.lg,
         Spacing.lg,
         Spacing.lg,
