@@ -9,6 +9,7 @@ import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/sources/models.dart';
 import 'package:iptv_player/widgets/channel_tile.dart';
 
+import '../../support/text_entry.dart';
 import '../live/support/live_test_utils.dart';
 
 /// Channels, movies and series with "News" in their names, plus Arabic
@@ -92,12 +93,14 @@ void main() {
       expect(find.text(l10n.commonSearchHint), findsWidgets);
 
       // Typing restarts the 300 ms wait; one query runs after the pause.
-      await tester.enterText(
+      await typeText(
+        tester,
         find.descendant(of: field, matching: find.byType(TextField)),
         'Ne',
       );
       await tester.pump(const Duration(milliseconds: 200));
-      await tester.enterText(
+      await typeText(
+        tester,
         find.descendant(of: field, matching: find.byType(TextField)),
         'News',
       );
@@ -166,7 +169,8 @@ void main() {
       expect(focusedIn(const ValueKey('rail-search')), isTrue);
 
       // No match.
-      await tester.enterText(
+      await typeText(
+        tester,
         find.descendant(of: field, matching: find.byType(TextField)),
         'zzz',
       );
@@ -184,7 +188,7 @@ void main() {
     final en = lookupAppLocalizations(const Locale('en'));
     await pumpLiveApp(tester, db);
     await openTab(tester, HomeTab.search);
-    await tester.enterText(find.byType(TextField), 'News');
+    await typeText(tester, find.byType(TextField), 'News');
     await wait(tester, SearchView.debounce);
     for (var i = 0; i < 3; i++) {
       await press(tester, LogicalKeyboardKey.arrowDown);
@@ -215,7 +219,7 @@ void main() {
     final player = FakePlayer();
     await pumpLiveApp(tester, db, overrides: [player.override]);
     await openTab(tester, HomeTab.search);
-    await tester.enterText(find.byType(TextField), 'News');
+    await typeText(tester, find.byType(TextField), 'News');
     await wait(tester, SearchView.debounce);
     await press(tester, LogicalKeyboardKey.arrowDown);
     expectFocusOn('News One');
@@ -254,7 +258,7 @@ void main() {
     final en = lookupAppLocalizations(const Locale('en'));
     await pumpLiveApp(tester, db);
     await openTab(tester, HomeTab.search);
-    await tester.enterText(find.byType(TextField), 'News');
+    await typeText(tester, find.byType(TextField), 'News');
     await tester.pump(SearchView.debounce);
     await tester.pump();
     await tester.pump();
@@ -296,16 +300,16 @@ void main() {
     expect(fieldHasFocus(), isTrue);
 
     final text = find.byType(TextField);
-    await tester.enterText(text, 'الاخبار');
+    await typeText(tester, text, 'الاخبار');
     await wait(tester, SearchView.debounce);
     expect(find.text('قناة الأخبار'), findsOneWidget);
     expect(searchState(tester).results.channels.single.key, 'k4');
 
-    await tester.enterText(text, 'قناه');
+    await typeText(tester, text, 'قناه');
     await wait(tester, SearchView.debounce);
     expect(find.text('قناة الأخبار'), findsOneWidget);
 
-    await tester.enterText(text, 'اختبار');
+    await typeText(tester, text, 'اختبار');
     await wait(tester, SearchView.debounce);
     expect(searchState(tester).results.series.single.key, 's2');
     expect(searchState(tester).results.channels, isEmpty);

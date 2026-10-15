@@ -11,8 +11,10 @@ import 'key_repeat.dart';
 ///
 /// Built on [FocusableActionDetector]: [ActivateIntent] (OK / Enter / Select /
 /// game pad A, see `appShortcuts`) calls [onSelect]. The Menu key calls
-/// [onMenu]. With [onLongSelect] set, a held OK key fires it once and a short
-/// press fires [onSelect] on key up; without it, auto-repeated OK is ignored.
+/// [onMenu]. With [onLongSelect] (or else [onMenu]) set, a held OK key fires
+/// it once and a short press fires [onSelect] on key up, so remotes without
+/// a Menu key reach the options too; without either, auto-repeated OK is
+/// ignored.
 ///
 /// Focus look: scale 1.0 -> [FocusTokens.scale] plus a
 /// [FocusTokens.borderWidth] accent border, no blur. On keyboard focus the
@@ -145,7 +147,9 @@ class _TvFocusableState extends State<TvFocusable> {
   }
 
   KeyEventResult _onSelectKey(KeyEvent event) {
-    final onLong = widget.onLongSelect;
+    // Like a touch long-press: a held OK opens the options when there is no
+    // long-select action of its own.
+    final onLong = widget.onLongSelect ?? widget.onMenu;
     if (onLong == null) {
       // Let the root shortcut turn the key-down into ActivateIntent, but never
       // re-activate on auto-repeat.

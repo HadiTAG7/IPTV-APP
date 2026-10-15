@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/features/vod_common/paged_items.dart';
@@ -220,13 +222,58 @@ void main() {
         async.elapse(const Duration(milliseconds: 200));
         expect(items.itemAt(25), 'v0:25');
         version = 1;
-        items.refresh();
+        unawaited(items.refresh());
         // Old items stay until the new pages arrive.
         expect(items.itemAt(3), 'v0:3');
         async.elapse(const Duration(milliseconds: 20));
         expect(items.itemAt(3), 'v1:3');
         expect(items.itemAt(25), 'v1:25');
         expect(reads, [0, 20, 0, 20]);
+        items.dispose();
+      });
+    });
+
+    test('refresh with a new count resizes in place and completes once '
+        'the pages are read', () {
+      fakeAsync((async) {
+        var count = 30;
+        final items = PagedItems<int>(
+          count: count,
+          pageSize: 10,
+          load: (offset, limit) async {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+            return [
+              for (var i = offset; i < offset + limit && i < count; i++) i,
+            ];
+          },
+        );
+        async.elapse(const Duration(milliseconds: 20));
+        items.itemAt(25);
+        async.elapse(const Duration(milliseconds: 200));
+        expect(items.loadedPages, {0, 2});
+
+        // Fewer items: the page past the end goes, the rest is re-read.
+        count = 15;
+        var done = false;
+        unawaited(items.refresh(count: count).then((_) => done = true));
+        expect(items.count, 15);
+        expect(items.loadedPages, {0});
+        expect(items.itemAt(25), isNull);
+        async.flushMicrotasks();
+        expect(done, isFalse);
+        async.elapse(const Duration(milliseconds: 10));
+        expect(done, isTrue);
+        expect(items.indexWhereLoaded((i) => i == 7), 7);
+        expect(items.indexWhereLoaded((i) => i == 25), isNull);
+
+        // More items: nothing is dropped.
+        count = 40;
+        unawaited(items.refresh(count: count));
+        expect(items.count, 40);
+        async.elapse(const Duration(milliseconds: 10));
+        items.itemAt(35);
+        async.elapse(const Duration(milliseconds: 200));
+        expect(items.itemAt(35), 35);
         items.dispose();
       });
     });

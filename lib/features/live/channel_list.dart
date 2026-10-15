@@ -448,6 +448,17 @@ class ChannelListState extends ConsumerState<ChannelList> {
     });
   }
 
+  /// [action], or committing a typed number when there is one. A row with
+  /// a menu takes OK itself (a held OK opens the menu), so [_onKey] never
+  /// sees that OK.
+  VoidCallback _orCommitDigits(VoidCallback action) => () {
+    if (_digits.isNotEmpty) {
+      unawaited(_commitDigits());
+    } else {
+      action();
+    }
+  };
+
   void _onRowFocus(int index) {
     _current = index;
     widget.onFocusEntry?.call(_pager?.entryAt(index));
@@ -546,10 +557,12 @@ class ChannelListState extends ConsumerState<ChannelList> {
       isFavorite: key != null && widget.favorites.contains(key),
       selected: key != null && key == widget.playingKey,
       showNowLine: row != null,
-      onSelect: row == null ? null : () => widget.onPlay?.call(source, entry!),
+      onSelect: row == null
+          ? null
+          : _orCommitDigits(() => widget.onPlay?.call(source, entry!)),
       onMenu: entry == null || widget.onMenu == null
           ? null
-          : () => widget.onMenu!(source, entry),
+          : _orCommitDigits(() => widget.onMenu!(source, entry)),
       onFocusChange: (focused) {
         if (focused) _onRowFocus(index);
       },

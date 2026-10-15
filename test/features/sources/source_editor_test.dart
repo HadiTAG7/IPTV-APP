@@ -117,7 +117,8 @@ void main() {
       // the caret reaches the end; Up/Down always leave a one-line field.
       await press(tester, _down);
       expectFocus('field-name');
-      await tester.enterText(
+      await typeText(
+        tester,
         find.descendant(
           of: find.byKey(const ValueKey('field-name')),
           matching: find.byType(EditableText),

@@ -88,7 +88,9 @@ class _ImportProgressScreenState extends ConsumerState<ImportProgressScreen> {
     _cancelling = false;
     _sub = ref
         .read(syncServiceProvider)
-        .sync(widget.sourceId)
+        // The user added or edited the source (or retried): its lists
+        // replace the stored ones even when one comes back empty.
+        .sync(widget.sourceId, replaceEmptyFamilies: true)
         .listen(_onProgress);
   }
 

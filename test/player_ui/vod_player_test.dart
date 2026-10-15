@@ -286,6 +286,29 @@ void main() {
       await disposeRig(tester, rig);
     });
 
+    testWidgets('an episode cut off mid-way reopens where it stopped: no '
+        'countdown, no next episode', (tester) async {
+      final rig = PlayerRig()..autoPlay(duration: const Duration(minutes: 40));
+      final id = await seedVod(rig);
+      await pumpPlayerApp(tester, rig);
+      await openPlayerFor(tester, episodeRequest(id));
+      rig.engine.setState(position: const Duration(minutes: 17));
+      await settle(tester);
+      // The connection drops; the engine reports the end of the file.
+      rig.engine.emitEnded();
+      await settle(tester);
+      expect(find.byKey(const ValueKey('player-next-episode')), findsNothing);
+      await tester.pump(const Duration(seconds: 12));
+      await settle(tester);
+      expect(rig.openedUrls, [
+        'http://127.0.0.1:9/series/e1.mp4',
+        'http://127.0.0.1:9/series/e1.mp4',
+      ]);
+      expect(rig.engine.lastRequest?.startAt, const Duration(minutes: 17));
+      expect(find.byKey(const ValueKey('player-next-episode')), findsNothing);
+      await disposeRig(tester, rig);
+    });
+
     testWidgets('«Play now» starts the next episode at once; the last '
         'episode has no countdown', (tester) async {
       final rig = PlayerRig()..autoPlay(duration: const Duration(minutes: 40));

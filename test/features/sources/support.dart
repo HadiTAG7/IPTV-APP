@@ -20,8 +20,10 @@ import 'package:iptv_player/tv/key_repeat.dart';
 
 import '../../app/app_harness.dart';
 import '../../support/fake_epg_service.dart';
+import '../../support/text_entry.dart';
 
 export '../../app/app_harness.dart';
+export '../../support/text_entry.dart';
 
 final enL10n = lookupAppLocalizations(const Locale('en'));
 final arL10n = lookupAppLocalizations(const Locale('ar'));
@@ -96,9 +98,11 @@ void expectFocus(String key) {
   );
 }
 
-/// Types [text] into the field keyed [key] (taps it first).
+/// Types [text] into the field keyed [key] (on TV OK opens it first, see
+/// [typeText]).
 Future<void> typeInto(WidgetTester tester, String key, String text) async {
-  await tester.enterText(
+  await typeText(
+    tester,
     find.descendant(
       of: find.byKey(ValueKey(key)),
       matching: find.byType(EditableText),

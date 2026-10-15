@@ -74,6 +74,7 @@
   "errorDisabled": "هذا الحساب معطّل.",
   "errorNotM3u": "المحتوى ليس قائمة تشغيل M3U صالحة.",
   "errorFileRead": "تعذّرت قراءة الملف.",
+  "errorCatalogIncomplete": "وصلت بعض القوائم فارغة، فاحتفظنا بالقوائم السابقة. حاول مرة أخرى لاحقًا.",
   "errorHttpStatus": "أعاد الخادم الخطأ {code}.",
   "importTitle": "جارٍ استيراد المصدر",
   "importLiveCount": "{count, plural, zero{لا توجد قنوات مباشرة} one{قناة مباشرة واحدة} two{قناتان مباشرتان} few{{count} قنوات مباشرة} many{{count} قناة مباشرة} other{{count} قناة مباشرة}}",

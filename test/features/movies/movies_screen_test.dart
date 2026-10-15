@@ -24,6 +24,36 @@ Key _cwCard(String key) => ValueKey('vod-cw-movie-$key');
 int _index(Widget card) =>
     int.parse((card.key! as ValueKey<String>).value.substring(9));
 
+/// The focused grid poster: its index and title.
+({int index, String title})? _focusedPoster(WidgetTester tester) {
+  final ctx = FocusManager.instance.primaryFocus?.context;
+  if (ctx == null) return null;
+  PosterCard? card;
+  ctx.visitAncestorElements((e) {
+    final w = e.widget;
+    if (w is PosterCard) {
+      card = w;
+      return false;
+    }
+    return true;
+  });
+  final found = card;
+  if (found == null || !'${found.key}'.contains('vod-grid-')) return null;
+  return (index: _index(found), title: found.title);
+}
+
+/// The scroll position of the poster grid (poster [index] is built).
+ScrollPosition _gridScroll(WidgetTester tester, int index) => tester
+    .state<ScrollableState>(
+      find
+          .ancestor(
+            of: find.byKey(_grid(index)),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    )
+    .position;
+
 void main() {
   late FakeClock clock;
 
@@ -288,11 +318,56 @@ void main() {
     expect(find.text('Renamed'), findsWidgets);
     expect(focusedIn(_grid(1)), isTrue, reason: describeFocus());
 
-    // A different count rebuilds the grid; focus stays in the grid pane.
+    // A different count refreshes it in place too; focus stays on the
+    // same title.
     await resync([...dramas, ...movies(2, category: 'drama', prefix: 'x')]);
     expect(find.byKey(_grid(4)), findsOneWidget);
-    expect(focusedIn(_grid(0)), isTrue, reason: describeFocus());
+    expect(focusedIn(_grid(1)), isTrue, reason: describeFocus());
 
+    await disposeVodApp(tester, db);
+  });
+
+  testWidgets('deep in All, a sync that adds a title keeps focus on the same '
+      'poster and the scroll position', (tester) async {
+    final (db, id) = await seed();
+    await pumpVodApp(tester, db: db);
+    await openTabFromRail(tester, 2, rtl: false);
+    await press(tester, toEnd(false)); // the continue watching row
+    await pressN(tester, LogicalKeyboardKey.arrowDown, 11);
+    final before = _focusedPoster(tester);
+    expect(before, isNotNull, reason: describeFocus());
+    expect(before!.index, greaterThan(40));
+    expect(_gridScroll(tester, before.index).pixels, greaterThan(0));
+
+    // The new title sorts first in All, so every poster moves on by one.
+    await seedCatalog(
+      db,
+      id,
+      categories: const [
+        CategoryData(kind: ContentKind.movie, key: 'action', name: 'Action'),
+        CategoryData(
+          kind: ContentKind.movie,
+          key: 'drama',
+          name: 'دراما',
+          sortIndex: 1,
+        ),
+      ],
+      movies: [
+        const MovieData(
+          key: 'new',
+          name: 'Aardvark',
+          ext: 'mkv',
+          categoryKeys: ['action'],
+        ),
+        ...movies(450),
+        ...movies(3, category: 'drama', prefix: 'd', name: 'Drama'),
+      ],
+    );
+    await settle(tester, frames: 16);
+    final after = _focusedPoster(tester);
+    expect(after?.index, before.index + 1, reason: describeFocus());
+    expect(after?.title, before.title);
+    expect(_gridScroll(tester, after!.index).pixels, greaterThan(0));
     await disposeVodApp(tester, db);
   });
 

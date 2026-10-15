@@ -243,6 +243,10 @@ class AppLocalizationsAr extends AppLocalizations {
   String get errorFileRead => 'تعذّرت قراءة الملف.';
 
   @override
+  String get errorCatalogIncomplete =>
+      'وصلت بعض القوائم فارغة، فاحتفظنا بالقوائم السابقة. حاول مرة أخرى لاحقًا.';
+
+  @override
   String errorHttpStatus(int code) {
     return 'أعاد الخادم الخطأ $code.';
   }

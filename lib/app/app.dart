@@ -62,7 +62,9 @@ Locale resolveAppLocale(List<Locale>? preferred, Iterable<Locale> supported) {
 
 /// Wraps the navigator: resolves the [FormFactor] from the screen
 /// ([FormFactorScope]), lays TV out on the 960 dp canvas ([TvViewport]),
-/// keeps remote focus alive ([FocusWatchdog]) and maps Escape to Back.
+/// keeps remote focus alive ([FocusWatchdog]) and handles [BackIntent]
+/// (Escape, the browser Back key) like the system back button: `maybePop`
+/// on the root navigator, so every route's `PopScope` still decides.
 ///
 /// The navigator has a global key, so switching TV mode on or off keeps
 /// the route stack.
@@ -99,7 +101,7 @@ class _AppFrameState extends ConsumerState<AppFrame> {
     if (tv) body = TvViewport(child: body);
     return Actions(
       actions: {
-        DismissIntent: CallbackAction<DismissIntent>(
+        BackIntent: CallbackAction<BackIntent>(
           onInvoke: (_) => navigator.currentState?.maybePop(),
         ),
       },

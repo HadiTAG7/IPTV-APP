@@ -269,9 +269,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       case AppLifecycleState.hidden ||
           AppLifecycleState.paused ||
           AppLifecycleState.detached:
+        _session.onBackground();
         unawaited(_controller.onBackground());
       case AppLifecycleState.resumed:
         unawaited(_controller.onForeground());
+        _session.onForeground();
       case AppLifecycleState.inactive:
         break;
     }
@@ -928,130 +930,122 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       },
       child: Scaffold(
         backgroundColor: Colors.black,
-        // Escape (desktop Back) goes through the PopScope too: the Scaffold's
-        // and the route's DismissIntent actions are disabled here and would
-        // otherwise swallow it before the app-level one.
-        body: Actions(
-          actions: {
-            DismissIntent: CallbackAction<DismissIntent>(
-              onInvoke: (_) => Navigator.of(context).maybePop(),
-            ),
-          },
-          child: Focus(
-            focusNode: _rootNode,
-            autofocus: true,
-            // Arrows never move focus onto the invisible player itself
-            // (from a card or the OSD); it is only focused on purpose.
-            skipTraversal: true,
-            onKeyEvent: _onKey,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                KeyedSubtree(
-                  key: const ValueKey('player-video'),
-                  // A closing player stops showing the shared engine's
-                  // surface (the next player may already show it).
-                  child: _exiting
-                      ? const ColoredBox(
-                          color: Colors.black,
-                          child: SizedBox.expand(),
-                        )
-                      : _controller.buildView(aspect: s.aspect),
+        // Escape (desktop Back) goes through the PopScope too: the app maps
+        // it to BackIntent, which AppFrame turns into maybePop.
+        body: Focus(
+          focusNode: _rootNode,
+          autofocus: true,
+          // Arrows never move focus onto the invisible player itself
+          // (from a card or the OSD); it is only focused on purpose.
+          skipTraversal: true,
+          onKeyEvent: _onKey,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              KeyedSubtree(
+                key: const ValueKey('player-video'),
+                // A closing player stops showing the shared engine's
+                // surface (the next player may already show it).
+                child: _exiting
+                    ? const ColoredBox(
+                        color: Colors.black,
+                        child: SizedBox.expand(),
+                      )
+                    : _controller.buildView(aspect: s.aspect),
+              ),
+              Positioned.fill(child: _gestures()),
+              if (!failed && resume == null)
+                ValueListenableBuilder<PlaybackState>(
+                  valueListenable: _controller.state,
+                  builder: (context, st, _) {
+                    final phase = _controller.phase;
+                    final buffering =
+                        phase == PlaybackPhase.opening ||
+                        (st.buffering && phase == PlaybackPhase.playing);
+                    if (!buffering) return const SizedBox.shrink();
+                    return const Center(
+                      key: ValueKey('player-buffering'),
+                      child: SizedBox.square(
+                        dimension: 44,
+                        child: CircularProgressIndicator(strokeWidth: 3),
+                      ),
+                    );
+                  },
                 ),
-                Positioned.fill(child: _gestures()),
-                if (!failed && resume == null)
-                  ValueListenableBuilder<PlaybackState>(
-                    valueListenable: _controller.state,
-                    builder: (context, st, _) {
-                      final phase = _controller.phase;
-                      final buffering =
-                          phase == PlaybackPhase.opening ||
-                          (st.buffering && phase == PlaybackPhase.playing);
-                      if (!buffering) return const SizedBox.shrink();
-                      return const Center(
-                        key: ValueKey('player-buffering'),
-                        child: SizedBox.square(
-                          dimension: 44,
-                          child: CircularProgressIndicator(strokeWidth: 3),
-                        ),
-                      );
-                    },
+              if (_bannerVisible && !_osdVisible && !_cardShown)
+                Align(
+                  alignment: AlignmentDirectional.bottomCenter,
+                  child: Padding(
+                    padding: overscan + const EdgeInsets.all(Spacing.lg),
+                    child: _banner(),
                   ),
-                if (_bannerVisible && !_osdVisible && !_cardShown)
-                  Align(
-                    alignment: AlignmentDirectional.bottomCenter,
-                    child: Padding(
-                      padding: overscan + const EdgeInsets.all(Spacing.lg),
-                      child: _banner(),
+                ),
+              if (_osdVisible && !_cardShown) _osd(l10n, overscan),
+              SafeArea(
+                minimum: overscan + const EdgeInsets.all(Spacing.lg),
+                child: Stack(
+                  children: [
+                    Align(
+                      alignment: Alignment.topCenter,
+                      child: PlayerReconnectBanner(
+                        status: _controller.reconnectStatus,
+                      ),
                     ),
-                  ),
-                if (_osdVisible && !_cardShown) _osd(l10n, overscan),
-                SafeArea(
-                  minimum: overscan + const EdgeInsets.all(Spacing.lg),
-                  child: Stack(
-                    children: [
+                    if (_statsVisible)
                       Align(
-                        alignment: Alignment.topCenter,
-                        child: PlayerReconnectBanner(
-                          status: _controller.reconnectStatus,
+                        alignment: AlignmentDirectional.topStart,
+                        child: PlayerStatsOverlay(
+                          controller: _controller,
+                          redactValue: _redact,
                         ),
                       ),
-                      if (_statsVisible)
-                        Align(
-                          alignment: AlignmentDirectional.topStart,
-                          child: PlayerStatsOverlay(
-                            controller: _controller,
-                            redactValue: _redact,
-                          ),
+                    if (s.isLive)
+                      Align(
+                        alignment: AlignmentDirectional.topEnd,
+                        child: _numberBadge(),
+                      ),
+                    if (countdown != null && next != null && !failed)
+                      Align(
+                        alignment: AlignmentDirectional.bottomEnd,
+                        child: PlayerNextEpisodeCard(
+                          seconds: countdown,
+                          episode: next,
+                          playNode: _nextNode,
+                          onPlay: () => unawaited(s.playNextEpisode()),
+                          onCancel: s.cancelNextEpisode,
                         ),
-                      if (s.isLive)
-                        Align(
-                          alignment: AlignmentDirectional.topEnd,
-                          child: _numberBadge(),
+                      ),
+                    if (resume != null && !failed)
+                      Center(
+                        child: PlayerResumePrompt(
+                          title: s.title,
+                          position: resume.position,
+                          resumeNode: _resumeNode,
+                          onResume: () =>
+                              unawaited(s.chooseResume(resume: true)),
+                          onStartOver: () =>
+                              unawaited(s.chooseResume(resume: false)),
                         ),
-                      if (countdown != null && next != null && !failed)
-                        Align(
-                          alignment: AlignmentDirectional.bottomEnd,
-                          child: PlayerNextEpisodeCard(
-                            seconds: countdown,
-                            episode: next,
-                            playNode: _nextNode,
-                            onPlay: () => unawaited(s.playNextEpisode()),
-                            onCancel: s.cancelNextEpisode,
-                          ),
+                      ),
+                    if (failed)
+                      Center(
+                        child: PlayerFailureCard(
+                          message: l10n.playerPlaybackFailed,
+                          details: s.error != null
+                              ? l10n.player_itemUnavailable
+                              : _redact(_controller.errorMessage ?? ''),
+                          retryNode: _retryNode,
+                          onRetry: () => unawaited(s.retry()),
+                          onTryOtherFormat: s.canTryOtherFormat
+                              ? () => unawaited(s.tryOtherFormat())
+                              : null,
+                          onCopyReport: () => unawaited(_copyReport()),
                         ),
-                      if (resume != null && !failed)
-                        Center(
-                          child: PlayerResumePrompt(
-                            title: s.title,
-                            position: resume.position,
-                            resumeNode: _resumeNode,
-                            onResume: () =>
-                                unawaited(s.chooseResume(resume: true)),
-                            onStartOver: () =>
-                                unawaited(s.chooseResume(resume: false)),
-                          ),
-                        ),
-                      if (failed)
-                        Center(
-                          child: PlayerFailureCard(
-                            message: l10n.playerPlaybackFailed,
-                            details: s.error != null
-                                ? l10n.player_itemUnavailable
-                                : _redact(_controller.errorMessage ?? ''),
-                            retryNode: _retryNode,
-                            onRetry: () => unawaited(s.retry()),
-                            onTryOtherFormat: s.canTryOtherFormat
-                                ? () => unawaited(s.tryOtherFormat())
-                                : null,
-                            onCopyReport: () => unawaited(_copyReport()),
-                          ),
-                        ),
-                    ],
-                  ),
+                      ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),

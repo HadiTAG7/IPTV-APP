@@ -843,6 +843,93 @@ void main() {
       });
     });
 
+    test('VOD ending well before its duration is a dropped stream: it '
+        'reopens at the last position', () {
+      fakeAsync((async) {
+        final rig = Rig(async)..playsOn(EngineKind.mpv);
+        rig.play(movie, key: 'm');
+        rig.engine.setState(
+          position: const Duration(minutes: 42),
+          duration: const Duration(minutes: 90),
+        );
+        rig.engine.emitEnded();
+        async.flushMicrotasks();
+        expect(rig.controller.phase, PlaybackPhase.playing);
+        expect(
+          rig.controller.reconnectStatus.value,
+          isA<ReconnectWaiting>().having(
+            (s) => s.reason,
+            'reason',
+            ReconnectReason.ended,
+          ),
+        );
+        async.elapse(sec);
+        expect(rig.engine.count('open'), 2);
+        expect(rig.engine.lastRequest?.startAt, const Duration(minutes: 42));
+        expect(rig.controller.reconnectStatus.value, ReconnectStatus.idle);
+        expect(rig.controller.phase, PlaybackPhase.playing);
+
+        // Playing on and dropping again later reconnects again.
+        rig.engine.setState(
+          position: const Duration(minutes: 50),
+          duration: const Duration(minutes: 90),
+        );
+        rig.engine.emitEnded();
+        async.elapse(const Duration(seconds: 3));
+        expect(rig.engine.count('open'), 3);
+        expect(rig.engine.lastRequest?.startAt, const Duration(minutes: 50));
+        expect(rig.progress.map((p) => p.$2), isNot(contains(Duration.zero)));
+        rig.controller.dispose();
+      });
+    });
+
+    test('ending again where the last early end was is the real end '
+        '(a file whose duration is wrong)', () {
+      fakeAsync((async) {
+        final rig = Rig(async)..playsOn(EngineKind.mpv);
+        rig.play(movie, key: 'm');
+        const at = Duration(minutes: 80);
+        rig.engine.setState(position: at, duration: const Duration(hours: 2));
+        rig.engine.emitEnded();
+        async.elapse(sec);
+        expect(rig.engine.count('open'), 2);
+        rig.engine.setState(
+          position: at + const Duration(seconds: 2),
+          duration: const Duration(hours: 2),
+        );
+        rig.engine.emitEnded();
+        async.flushMicrotasks();
+        expect(rig.controller.phase, PlaybackPhase.ended);
+        async.elapse(const Duration(minutes: 1));
+        expect(rig.engine.count('open'), 2);
+        rig.controller.dispose();
+      });
+    });
+
+    test('an end near the duration, or of unknown length, ends', () {
+      fakeAsync((async) {
+        final rig = Rig(async)..playsOn(EngineKind.mpv);
+        rig.play(movie, key: 'm');
+        // Under 2 minutes left counts as the end (credits, rounding).
+        rig.engine.setState(
+          position: const Duration(minutes: 88, seconds: 30),
+          duration: const Duration(minutes: 90),
+        );
+        rig.engine.emitEnded();
+        async.flushMicrotasks();
+        expect(rig.controller.phase, PlaybackPhase.ended);
+
+        rig.play(movie, key: 'm2');
+        rig.engine.setState(position: const Duration(minutes: 5));
+        rig.engine.emitEnded();
+        async.flushMicrotasks();
+        expect(rig.controller.phase, PlaybackPhase.ended);
+        async.elapse(const Duration(minutes: 1));
+        expect(rig.engine.count('open'), 2);
+        rig.controller.dispose();
+      });
+    });
+
     test('seeking back after the end resumes monitoring', () {
       fakeAsync((async) {
         final rig = Rig(async)..playsOn(EngineKind.mpv);
@@ -906,6 +993,48 @@ void main() {
   });
 
   group('app lifecycle', () {
+    test('live started in the background waits for the foreground', () {
+      fakeAsync((async) {
+        final rig = Rig(async)..playsOn(EngineKind.exo);
+        rig.play(liveTs);
+        async.elapse(sec);
+        unawaited(rig.controller.onBackground());
+        async.flushMicrotasks();
+        // A zap that came due in the background.
+        rig.play(liveTs2);
+        async.elapse(const Duration(seconds: 5));
+        expect(rig.engine.opened.map((r) => r.url), [liveTs.url]);
+        expect(rig.wakelock.last, isFalse);
+
+        unawaited(rig.controller.onForeground());
+        async.elapse(sec);
+        expect(rig.engine.lastRequest?.url, liveTs2.url);
+        expect(rig.controller.phase, PlaybackPhase.playing);
+        expect(rig.wakelock.last, isTrue);
+        rig.controller.dispose();
+      });
+    });
+
+    test('VOD started in the background (no session yet) opens paused and '
+        'plays on return', () {
+      fakeAsync((async) {
+        final rig = Rig(async)..playsOn(EngineKind.mpv);
+        unawaited(rig.controller.onBackground());
+        async.flushMicrotasks();
+        rig.play(movie, key: 'm');
+        async.elapse(sec);
+        expect(rig.engine.count('open'), 1);
+        expect(rig.engine.calls.last, 'pause');
+        expect(rig.engine.state.value.playing, isFalse);
+        expect(rig.wakelock, isNot(contains(true)));
+
+        unawaited(rig.controller.onForeground());
+        async.flushMicrotasks();
+        expect(rig.engine.calls.last, 'play');
+        rig.controller.dispose();
+      });
+    });
+
     test('live: background stops the stream, foreground reopens', () {
       fakeAsync((async) {
         final rig = Rig(async)..playsOn(EngineKind.exo);

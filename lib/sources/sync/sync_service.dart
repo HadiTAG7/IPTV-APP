@@ -20,6 +20,7 @@ class SyncTask {
     required this.config,
     this.scope = SyncScope.all,
     this.lowMemory = false,
+    this.replaceEmptyFamilies = false,
     this.clock = const SystemClock(),
   });
 
@@ -29,6 +30,11 @@ class SyncTask {
   final SourceConfig config;
   final SyncScope scope;
   final bool lowMemory;
+
+  /// A family that comes back empty replaces the stored one (the user asked
+  /// for this sync). Otherwise it is kept: a busy panel's blank answer looks
+  /// the same as a provider removing everything.
+  final bool replaceEmptyFamilies;
 
   /// Stamps `sources.lastSyncAt`.
   final Clock clock;
@@ -205,8 +211,10 @@ class IsolateSyncRunner implements SyncRunner {
 /// On an error or [token] cancellation the open generation is aborted:
 /// families committed earlier in this run keep their new rows, the others
 /// (and all favourites and progress) stay as they were. A family that comes
-/// back empty while the source had items of it is not committed on its own;
-/// it waits for the next family that has items, and a sync that returns
+/// back empty while the source had items of it keeps its stored rows unless
+/// [SyncTask.replaceEmptyFamilies]; the run then ends as failed
+/// ([VerifyErrorReason.incomplete], after committing the other families)
+/// without stamping `lastSyncAt`, so it is tried again. A sync that returns
 /// nothing at all while the source had items fails. Never throws; [emit]
 /// gets the running progress and the returned value is the final one.
 /// Closes [adapter].
@@ -242,16 +250,26 @@ Future<SyncProgress> runSyncPipeline(
     p = p.copyWith(phase: _firstPhase(task.scope));
     emit(p);
 
-    // Families committed by this run, and the state of the open generation:
-    // families written to it, families finished in it, items written to it.
+    // Families committed by this run, families that came back empty and
+    // keep their stored rows, and the state of the open generation:
+    // families written to it, families finished in it. Items written per
+    // family in this run.
     final committed = <ContentKind>{};
+    final kept = <ContentKind>{};
     final touched = <ContentKind>{};
     final finished = <ContentKind>{};
-    var written = 0;
+    final written = <ContentKind, int>{};
     Future<int> open() async => gen ??= await catalog.beginGeneration(id);
     void touch(ContentKind kind) {
-      if (kinds.contains(kind) && !committed.contains(kind)) touched.add(kind);
+      if (kinds.contains(kind) &&
+          !committed.contains(kind) &&
+          !kept.contains(kind)) {
+        touched.add(kind);
+      }
     }
+
+    void count(ContentKind kind, int items) =>
+        written[kind] = (written[kind] ?? 0) + items;
 
     Future<void> commit(Set<ContentKind> families) async {
       check();
@@ -260,7 +278,6 @@ Future<SyncProgress> runSyncPipeline(
       committed.addAll(families);
       touched.clear();
       finished.clear();
-      written = 0;
     }
 
     final hints = <String>[];
@@ -274,7 +291,7 @@ Future<SyncProgress> runSyncPipeline(
         case ChannelsBatch(:final items):
           await catalog.upsertChannels(id, await open(), items);
           touch(ContentKind.live);
-          written += items.length;
+          count(ContentKind.live, items.length);
           p = p.copyWith(
             phase: SyncPhase.live,
             channels: p.channels + items.length,
@@ -282,7 +299,7 @@ Future<SyncProgress> runSyncPipeline(
         case MoviesBatch(:final items):
           await catalog.upsertMovies(id, await open(), items);
           touch(ContentKind.movie);
-          written += items.length;
+          count(ContentKind.movie, items.length);
           p = p.copyWith(
             phase: SyncPhase.movies,
             movies: p.movies + items.length,
@@ -290,7 +307,7 @@ Future<SyncProgress> runSyncPipeline(
         case SeriesBatch(:final items):
           await catalog.upsertSeries(id, await open(), items);
           touch(ContentKind.series);
-          written += items.length;
+          count(ContentKind.series, items.length);
           p = p.copyWith(
             phase: SyncPhase.series,
             series: p.series + items.length,
@@ -298,7 +315,7 @@ Future<SyncProgress> runSyncPipeline(
         case EpisodesBatch(:final items):
           await catalog.upsertEpisodes(id, await open(), items);
           touch(ContentKind.series);
-          written += items.length;
+          count(ContentKind.series, items.length);
           p = p.copyWith(
             phase: SyncPhase.series,
             episodes: p.episodes + items.length,
@@ -307,17 +324,26 @@ Future<SyncProgress> runSyncPipeline(
           hints.addAll(urls);
           continue;
         case PhaseDoneBatch(:final kind):
-          if (kinds.contains(kind) && !committed.contains(kind)) {
+          if (kinds.contains(kind) &&
+              !committed.contains(kind) &&
+              !kept.contains(kind)) {
+            final emptied =
+                (written[kind] ?? 0) == 0 && (previous[kind] ?? 0) > 0;
             if (gen == null && (previous[kind] ?? 0) == 0) {
               // Nothing written and nothing to remove: no swap needed.
               committed.add(kind);
+            } else if (emptied && !task.replaceEmptyFamilies) {
+              // Left out of every commit, so its stored rows are carried.
+              kept.add(kind);
+              touched.remove(kind);
+              if (touched.isNotEmpty && finished.containsAll(touched)) {
+                await commit({...finished});
+              }
             } else {
               await open();
               touched.add(kind);
               finished.add(kind);
-              final wasFilled = finished.any((k) => (previous[k] ?? 0) > 0);
-              if (finished.containsAll(touched) &&
-                  (written > 0 || !wasFilled)) {
+              if (finished.containsAll(touched)) {
                 await commit({...finished});
               }
             }
@@ -335,12 +361,12 @@ Future<SyncProgress> runSyncPipeline(
 
     p = p.copyWith(phase: SyncPhase.saving);
     emit(p);
-    final remaining = kinds.difference(committed);
+    final remaining = kinds.difference(committed).difference(kept);
     if (remaining.isNotEmpty) {
       await open();
       await commit(remaining);
     } else if (gen case final stray?) {
-      // Rows of families that were already committed: drop them.
+      // Rows of families that were already committed (or kept): drop them.
       gen = null;
       await catalog.abortGeneration(id, stray);
     }
@@ -349,6 +375,17 @@ Future<SyncProgress> runSyncPipeline(
       await saveEpgSources(db, id, adapter.epgSpecs(), hints);
     } on Object {
       // Guide URLs are found again on the next sync.
+    }
+    if (kept.isNotEmpty) {
+      // Not stamped as synced: the next launch tries again.
+      final names = [for (final k in kept) k.name].join(', ');
+      return p.copyWith(
+        phase: SyncPhase.failed,
+        error: VerifyError(
+          VerifyErrorReason.incomplete,
+          message: 'Came back empty, previous items kept: $names',
+        ),
+      );
     }
     try {
       await db.sourcesDao.markSynced(id, task.clock.now());
@@ -483,16 +520,32 @@ class SyncService {
   /// returns its progress, starting with the latest snapshot. The stream
   /// ends after the final [SyncPhase.done] / [SyncPhase.failed] /
   /// [SyncPhase.cancelled] event; it never emits errors.
-  Stream<SyncProgress> sync(int sourceId, {SyncScope scope = SyncScope.all}) {
+  ///
+  /// [replaceEmptyFamilies]: the user asked for this sync, so a family that
+  /// comes back empty is removed rather than kept
+  /// ([SyncTask.replaceEmptyFamilies]). Joining a running sync keeps its
+  /// setting.
+  Stream<SyncProgress> sync(
+    int sourceId, {
+    SyncScope scope = SyncScope.all,
+    bool replaceEmptyFamilies = false,
+  }) {
     if (_disposed) throw StateError('SyncService disposed');
-    return (_jobs[sourceId] ?? _start(sourceId, scope)).watch();
+    return (_jobs[sourceId] ??
+            _start(sourceId, scope, replaceEmptyFamilies: replaceEmptyFamilies))
+        .watch();
   }
 
   /// [sync] and wait for the final progress.
   Future<SyncProgress> syncAndWait(
     int sourceId, {
     SyncScope scope = SyncScope.all,
-  }) => sync(sourceId, scope: scope).last;
+    bool replaceEmptyFamilies = false,
+  }) => sync(
+    sourceId,
+    scope: scope,
+    replaceEmptyFamilies: replaceEmptyFamilies,
+  ).last;
 
   bool isRunning(int sourceId) => _jobs.containsKey(sourceId);
 
@@ -532,16 +585,24 @@ class SyncService {
     unawaited(_synced.close());
   }
 
-  _SyncJob _start(int sourceId, SyncScope scope) {
+  _SyncJob _start(
+    int sourceId,
+    SyncScope scope, {
+    required bool replaceEmptyFamilies,
+  }) {
     final job = _SyncJob(sourceId);
     _jobs[sourceId] = job;
     _setStatus(sourceId, SyncRunning(job.latest));
     _log.info('Sync of source $sourceId started');
-    unawaited(_run(job, scope));
+    unawaited(_run(job, scope, replaceEmptyFamilies: replaceEmptyFamilies));
     return job;
   }
 
-  Future<void> _run(_SyncJob job, SyncScope scope) async {
+  Future<void> _run(
+    _SyncJob job,
+    SyncScope scope, {
+    required bool replaceEmptyFamilies,
+  }) async {
     final id = job.sourceId;
     SyncProgress result;
     try {
@@ -556,6 +617,7 @@ class SyncService {
             config: config,
             scope: scope,
             lowMemory: _repo.lowMemory,
+            replaceEmptyFamilies: replaceEmptyFamilies,
             clock: _clock,
           ),
           (p) => _onProgress(job, p),

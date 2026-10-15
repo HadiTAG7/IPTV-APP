@@ -179,6 +179,42 @@ void main() {
     });
   }
 
+  testWidgets('a held OK shows the programme on air instead of playing it', (
+    tester,
+  ) async {
+    // Remotes without a Menu or Info key reach the details this way.
+    final db = openGuideDb();
+    await seedGuide(db);
+    final player = PlayerLog();
+    await pumpGuideApp(tester, db: db, player: player, rtl: false);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    await press(tester, LogicalKeyboardKey.arrowRight);
+    expect(_gridFocused, isTrue);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+    for (var i = 0; i < 10; i++) {
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.select);
+    }
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+    await settle(tester);
+    expect(find.byKey(const ValueKey('guide-info')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('guide-info')),
+        matching: find.text('About ${progTitle(1, 0)}'),
+      ),
+      findsOneWidget,
+    );
+    expect(player.requests, isEmpty);
+    await press(tester, LogicalKeyboardKey.select); // Close
+    expect(find.byKey(const ValueKey('guide-info')), findsNothing);
+
+    // A short press still plays it.
+    await press(tester, LogicalKeyboardKey.select);
+    expect(player.requests.single.item.key, 'c1');
+    await disposeApp(tester, db);
+  });
+
   testWidgets('a channel without guide data plays on OK', (tester) async {
     final db = openGuideDb();
     await seedGuide(db, withGuide: 1);

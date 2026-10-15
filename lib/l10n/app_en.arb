@@ -86,6 +86,7 @@
   "errorDisabled": "This account is disabled.",
   "errorNotM3u": "This doesn't look like an M3U playlist.",
   "errorFileRead": "Couldn't read the file.",
+  "errorCatalogIncomplete": "Some lists came back empty, so the previous ones were kept. Try again later.",
   "errorHttpStatus": "The server returned error {code}.",
   "@errorHttpStatus": {
     "placeholders": {

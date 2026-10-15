@@ -148,6 +148,42 @@ void main() {
       'news.one|N',
     );
     expect(baseStableKey('', name: 'N'), '|N');
+    expect(baseStableKey('http://h/a.ts#x?y=1', name: 'A'), 'http://h/a.ts');
+  });
+
+  group('baseStableKey keeps the parameters that pick the stream', () {
+    test('one script for every channel (Stalker / PHP panels)', () {
+      String key(int stream) => baseStableKey(
+        'http://h/play/live.php?mac=00:1A:79:00:00:01&stream=$stream'
+        '&extension=ts&play_token=Ab12Cd34',
+        name: 'Any',
+      );
+      expect(key(100), 'http://h/play/live.php?extension=ts&stream=100');
+      expect(key(101), isNot(key(100)));
+    });
+
+    test('credentials and per-download values are dropped', () {
+      for (final url in [
+        'http://h/live/ch.m3u8?username=u&password=p',
+        'http://h/live/ch.m3u8?wmsAuthSign=c2VydmVyX3RpbWU9MTAvMTUvMjAyNg',
+        'http://h/live/ch.m3u8?hdnts=exp=1;acl=*~hmac=ab12',
+        'http://h/live/ch.m3u8?Expires=1760000000&Signature=abc&'
+            'Key-Pair-Id=K1',
+        'http://h/live/ch.m3u8?X-Amz-Signature=ab12&X-Amz-Date=20261015',
+        'http://h/live/ch.m3u8?_=1760000000123',
+        'http://h/live/ch.m3u8?s=8f7e6d5c4b3a2918171615141312',
+        'http://h/live/ch.m3u8?md5=Zm9vYmFy&expires=1760000000',
+      ]) {
+        expect(baseStableKey(url, name: 'A'), 'http://h/live/ch.m3u8');
+      }
+    });
+
+    test('the order of the parameters does not matter', () {
+      expect(
+        baseStableKey('http://h/p.php?b=2&a=1', name: 'A'),
+        baseStableKey('http://h/p.php?a=1&b=2', name: 'A'),
+      );
+    });
   });
 
   test('extractYear', () {

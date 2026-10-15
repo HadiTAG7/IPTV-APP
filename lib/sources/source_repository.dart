@@ -47,6 +47,10 @@ enum VerifyErrorReason {
 
   /// A picked playlist file is missing or unreadable.
   fileUnreadable,
+
+  /// A sync got an empty list where the source had items (a busy panel's
+  /// blank answer); the stored ones were kept.
+  incomplete,
   unknown,
 }
 

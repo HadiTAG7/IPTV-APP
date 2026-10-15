@@ -253,10 +253,19 @@ void main() {
         shortcuts[const SingleActivator(LogicalKeyboardKey.arrowUp)],
         isA<DirectionalFocusIntent>(),
       );
-      expect(
-        shortcuts[const SingleActivator(LogicalKeyboardKey.escape)],
-        isA<DismissIntent>(),
-      );
+      // Back, not DismissIntent: every route's (disabled) DismissIntent
+      // action would swallow it before the app's Back action.
+      for (final key in backKeys) {
+        final back = shortcuts.entries
+            .where(
+              (e) =>
+                  e.key is SingleActivator &&
+                  (e.key as SingleActivator).trigger == key,
+            )
+            .toList();
+        expect(back, hasLength(1), reason: key.debugName);
+        expect(back.single.value, isA<BackIntent>(), reason: key.debugName);
+      }
     });
 
     testWidgets('long OK fires onLongSelect once, short OK fires onSelect', (
@@ -283,6 +292,31 @@ void main() {
       await tester.sendKeyRepeatEvent(LogicalKeyboardKey.enter);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
       expect((short, long), (1, 1));
+    });
+
+    testWidgets('without onLongSelect a held OK calls onMenu', (tester) async {
+      // Remotes without a Menu key (Chromecast with Google TV, Mi Box)
+      // reach the options by holding OK, like a touch long-press.
+      var short = 0;
+      var menu = 0;
+      await pumpTv(
+        tester,
+        TvFocusable(
+          autofocus: true,
+          onSelect: () => short++,
+          onMenu: () => menu++,
+          child: const SizedBox(width: 100, height: 50),
+        ),
+      );
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+      for (var i = 0; i < 10; i++) {
+        await tester.sendKeyRepeatEvent(LogicalKeyboardKey.select);
+      }
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+      expect((short, menu), (0, 1));
+
+      await press(tester, LogicalKeyboardKey.select);
+      expect((short, menu), (1, 1));
     });
 
     testWidgets('Menu key calls onMenu', (tester) async {

@@ -109,6 +109,9 @@ class PlayerSession extends ChangeNotifier {
   int? _countdown;
   Timer? _countdownTimer;
 
+  /// The app is in the background: no countdown runs or starts.
+  bool _backgrounded = false;
+
   static const _channelCacheSize = 200;
   static const _guideCacheSize = 300;
 
@@ -612,6 +615,7 @@ class PlayerSession extends ChangeNotifier {
 
   void _onPlaybackState() {
     if (isClosed ||
+        _backgrounded ||
         _nextEpisode == null ||
         _nextCancelled ||
         _countdownTimer != null ||
@@ -627,8 +631,8 @@ class PlayerSession extends ChangeNotifier {
     if (ended || nearEnd) _startCountdown();
   }
 
-  void _startCountdown() {
-    _countdown = nextEpisodeCountdown;
+  void _startCountdown({int? from}) {
+    _countdown = from ?? nextEpisodeCountdown;
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       final left = (_countdown ?? 1) - 1;
       _countdown = left;
@@ -636,6 +640,30 @@ class PlayerSession extends ChangeNotifier {
       if (left <= 0) unawaited(playNextEpisode());
     });
     _notify();
+  }
+
+  /// The app went to the background: a pending zap or typed number is
+  /// dropped and the next-episode countdown holds, so nothing starts
+  /// playing there. Reads already in flight start their item held
+  /// ([PlaybackController.onBackground]).
+  void onBackground() {
+    if (isClosed || _backgrounded) return;
+    _backgrounded = true;
+    _zap?.cancelPending();
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
+  }
+
+  /// Back in the foreground: a held countdown goes on from where it was.
+  void onForeground() {
+    if (isClosed || !_backgrounded) return;
+    _backgrounded = false;
+    final left = _countdown;
+    if (left != null && _countdownTimer == null && !_nextCancelled) {
+      _startCountdown(from: left);
+    } else {
+      _onPlaybackState();
+    }
   }
 
   /// Stops the countdown; it does not come back for this episode.

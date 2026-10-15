@@ -501,6 +501,41 @@ void main() {
     ]);
   });
 
+  test('channels told apart by the query keep their keys when the '
+      'playlist changes order', () async {
+    String entry(String name, int stream) =>
+        '#EXTINF:-1,$name\n'
+        'http://127.0.0.1:9/play/live.php?stream=$stream&extension=ts';
+    Future<Map<String, String>> keys(List<String> entries) async {
+      final batches = await adapterFor(playlist(entries))
+          .fetchCatalog()
+          .toList();
+      return {
+        for (final c in batches.whereType<ChannelsBatch>().expand(
+          (b) => b.items,
+        ))
+          c.name: c.key,
+      };
+    }
+
+    final before = await keys([
+      entry('Alpha', 100),
+      entry('Bravo', 101),
+      entry('Charlie', 102),
+    ]);
+    final after = await keys([
+      entry('Zulu', 99),
+      entry('Alpha', 100),
+      entry('Bravo', 101),
+      entry('Charlie', 102),
+    ]);
+    expect(before.values.toSet(), hasLength(3));
+    for (final name in ['Alpha', 'Bravo', 'Charlie']) {
+      expect(after[name], before[name], reason: name);
+    }
+    expect(before.values, isNot(contains(after['Zulu'])));
+  });
+
   test('batches hold at most 2000 items', () async {
     final adapter = adapterFor(
       playlist([

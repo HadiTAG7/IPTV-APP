@@ -413,6 +413,46 @@ void main() {
       });
     }
 
+    testWidgets('a held OK opens the category options (no Menu key)', (
+      tester,
+    ) async {
+      final db = openAppTestDb();
+      await seedThreeCategories(db);
+      await pumpLiveApp(
+        tester,
+        db,
+        overrides: [
+          targetPlatformProvider.overrideWithValue(TargetPlatform.linux),
+        ],
+      );
+      await press(tester, toEnd(false));
+      await press(tester, toStart(false));
+      for (var i = 0; i < 6 && !focusedShows('Sports'); i++) {
+        await press(tester, LogicalKeyboardKey.arrowDown);
+      }
+      expectFocusOn('Sports');
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+      for (var i = 0; i < 10; i++) {
+        await tester.sendKeyRepeatEvent(LogicalKeyboardKey.select);
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+      await settle(tester);
+      expectFocusOn(en.liveHideCategory);
+      await press(tester, LogicalKeyboardKey.select);
+      await wait(tester, const Duration(seconds: 1)); // the sheet closes
+      expect(find.text('Sports'), findsNothing);
+
+      // A held OK on a channel opens its options too.
+      await press(tester, toEnd(false));
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.select);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+      await settle(tester);
+      expectFocusOn(en.liveAddFavorite);
+      await disposeApp(tester, db);
+    });
+
     testWidgets('"Play with the other player" saves the engine and plays', (
       tester,
     ) async {

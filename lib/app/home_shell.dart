@@ -498,5 +498,6 @@ String describeSourceError(AppLocalizations l10n, VerifyError error) =>
       VerifyErrorReason.disabled => l10n.errorDisabled,
       VerifyErrorReason.notM3u => l10n.errorNotM3u,
       VerifyErrorReason.fileUnreadable => l10n.errorFileRead,
+      VerifyErrorReason.incomplete => l10n.errorCatalogIncomplete,
       VerifyErrorReason.unknown => l10n.commonErrorGeneric,
     };

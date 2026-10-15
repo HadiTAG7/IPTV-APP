@@ -93,6 +93,12 @@ class GuideGridState extends ConsumerState<GuideGrid> {
   /// Whether the position follows the clock (nothing moved in time yet).
   bool _follow = true;
   bool _focused = false;
+
+  /// OK is down on the grid (pressed here, not on the view before), and
+  /// whether holding it already showed the details.
+  bool _selectHeld = false;
+  bool _longFired = false;
+
   Timer? _tick;
   FocusWatchdogState? _watchdog;
   double _drag = 0;
@@ -306,6 +312,10 @@ class GuideGridState extends ConsumerState<GuideGrid> {
   // Focus and keys.
 
   void _onFocusChange(bool focused) {
+    if (!focused) {
+      _selectHeld = false;
+      _longFired = false;
+    }
     setState(() => _focused = focused);
     if (focused) _watchdog?.register(_gridNode);
   }
@@ -335,12 +345,28 @@ class GuideGridState extends ConsumerState<GuideGrid> {
           ? KeyEventResult.handled
           : KeyEventResult.ignored;
     }
-    if (event is KeyUpEvent) return KeyEventResult.ignored;
-    final down = event is KeyDownEvent;
+    // A short OK plays or shows details on key up; a held OK shows the
+    // details (remotes without a Menu or Info key).
     if (selectKeys.contains(key)) {
-      if (down) _activate();
+      switch (event) {
+        case KeyDownEvent():
+          _selectHeld = true;
+          _longFired = false;
+        case KeyRepeatEvent():
+          if (_selectHeld && !_longFired) {
+            _longFired = true;
+            _showInfo();
+          }
+        case KeyUpEvent():
+          final fire = _selectHeld && !_longFired;
+          _selectHeld = false;
+          _longFired = false;
+          if (fire) _activate();
+      }
       return KeyEventResult.handled;
     }
+    if (event is KeyUpEvent) return KeyEventResult.ignored;
+    final down = event is KeyDownEvent;
     if (key == menuKey || key == LogicalKeyboardKey.info) {
       if (down) _showInfo();
       return KeyEventResult.handled;

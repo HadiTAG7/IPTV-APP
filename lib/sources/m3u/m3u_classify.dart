@@ -108,12 +108,101 @@ EpisodeMatch? matchEpisode(String title) {
 String seriesKeyFor(String seriesName) =>
     'series:${normalizeForSearch(seriesName)}';
 
-/// Stable item key before collision handling: the URL without its query, or
-/// `lower(tvg-id)|name` when that is empty.
+/// Stable item key before collision handling: the URL without its fragment
+/// and without credential or volatile query parameters
+/// ([stableQueryParams]), or `lower(tvg-id)|name` when it has no path.
+///
+/// Parameters that pick the stream stay: panels that serve every channel
+/// from one script (`live.php?stream=100`) would otherwise give all of them
+/// one key, told apart only by playlist position, so favourites and
+/// progress would move to other channels when the playlist changes order.
 String baseStableKey(String url, {String? tvgId, required String name}) {
-  final key = stripQuery(url).trim();
-  if (key.isNotEmpty) return key;
-  return '${(tvgId ?? '').toLowerCase()}|$name';
+  final base = stripQuery(url).trim();
+  if (base.isEmpty) return '${(tvgId ?? '').toLowerCase()}|$name';
+  final params = stableQueryParams(url);
+  return params.isEmpty ? base : '$base?${params.join('&')}';
+}
+
+/// Query parameters that are neither credentials nor change from one
+/// download to the next (tokens, signatures, expiry, cache busters,
+/// session ids), sorted. Kept as written (not decoded).
+List<String> stableQueryParams(String url) {
+  final q = url.indexOf('?');
+  if (q < 0) return const [];
+  final h = url.indexOf('#');
+  if (h >= 0 && h < q) return const [];
+  final query = url.substring(q + 1, h > q ? h : url.length);
+  return [
+    for (final param in query.split('&'))
+      if (param.isNotEmpty && !_volatileParam(param)) param,
+  ]..sort();
+}
+
+/// Credentials and per-download values, by (lower-case) parameter name.
+const _volatileNames = {
+  '_',
+  '__token__',
+  'access_token',
+  'api_key',
+  'apikey',
+  'auth',
+  'auth_token',
+  'authtoken',
+  'cb',
+  'exp',
+  'expire',
+  'expires',
+  'hash',
+  'hdnea',
+  'hdnts',
+  'jwt',
+  'key',
+  'key-pair-id',
+  'login',
+  'mac',
+  'md5',
+  'nocache',
+  'nonce',
+  'pass',
+  'password',
+  'play_token',
+  'policy',
+  'pwd',
+  'rand',
+  'random',
+  'secret',
+  'session',
+  'sessionid',
+  'sig',
+  'signature',
+  'sn',
+  't',
+  'time',
+  'timestamp',
+  'token',
+  'ts',
+  'user',
+  'username',
+  'wmsauthsign',
+};
+
+final _tokenValue = RegExp(r'^[A-Za-z0-9_\-+/=%]{20,}$');
+final _letter = RegExp('[A-Za-z]');
+final _digit = RegExp('[0-9]');
+final _timestamp = RegExp(r'^[0-9]{10,}$');
+
+/// A credential or a value that changes per download: a known name, a
+/// long random-looking value or a Unix time.
+bool _volatileParam(String param) {
+  final eq = param.indexOf('=');
+  final name = (eq < 0 ? param : param.substring(0, eq)).toLowerCase();
+  if (_volatileNames.contains(name) || name.startsWith('x-amz-')) return true;
+  if (eq < 0) return false;
+  final value = param.substring(eq + 1);
+  return _timestamp.hasMatch(value) ||
+      (_tokenValue.hasMatch(value) &&
+          _letter.hasMatch(value) &&
+          _digit.hasMatch(value));
 }
 
 /// Release year written as `(2019)` in a title, or null.

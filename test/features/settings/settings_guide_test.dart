@@ -13,6 +13,7 @@ import 'package:iptv_player/features/settings/settings_screen.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/sources/models.dart';
 
+import '../../support/text_entry.dart';
 import 'settings_harness.dart';
 
 const _xtreamUrl =
@@ -317,7 +318,8 @@ void main() {
       await moveTo(tester, const ValueKey('settings-epgAdd'));
       await press(tester, LogicalKeyboardKey.select);
       expect(focusedIn(const ValueKey('epg-url-field')), isTrue);
-      await tester.enterText(
+      await typeText(
+        tester,
         find.byKey(const ValueKey('epg-url-field')),
         'https://example.com/guide.xml',
       );
@@ -385,13 +387,13 @@ void main() {
 
     final field = find.byKey(const ValueKey('epg-url-field'));
     final add = find.byKey(const ValueKey('epg-url-add'));
-    await tester.enterText(field, 'not a url');
+    await typeText(tester, field, 'not a url');
     await tester.tap(add);
     await settle(tester);
     expect(find.text(en.errorInvalidUrl), findsOneWidget);
 
     // A URL that is already listed.
-    await tester.enterText(field, _playlistUrl);
+    await typeText(tester, field, _playlistUrl);
     await settle(tester);
     expect(find.text(en.errorInvalidUrl), findsNothing);
     await tester.testTextInput.receiveAction(TextInputAction.done);
@@ -401,7 +403,7 @@ void main() {
 
     // A new one, with credentials.
     const typed = 'http://127.0.0.1:9/epg.xml?username=bob&password=pw123';
-    await tester.enterText(field, typed);
+    await typeText(tester, field, typed);
     await tester.tap(add);
     await settle(tester);
     expect(find.byType(AddEpgUrlDialog), findsNothing);
@@ -437,7 +439,8 @@ void main() {
     expect(find.byKey(const ValueKey('settings-epg-empty')), findsOneWidget);
     expect(find.text(en.settings_epgNoUrls), findsOneWidget);
     await press(tester, LogicalKeyboardKey.select);
-    await tester.enterText(
+    await typeText(
+      tester,
       find.byKey(const ValueKey('epg-url-field')),
       'https://example.com/a.xml',
     );
@@ -635,7 +638,8 @@ void main() {
     expect(find.byType(SettingsScreen), findsNothing);
     expect(find.byType(AddEpgUrlDialog), findsOneWidget);
 
-    await tester.enterText(
+    await typeText(
+      tester,
       find.byKey(const ValueKey('epg-url-field')),
       'https://example.com/a.xml',
     );

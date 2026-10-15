@@ -607,7 +607,7 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
       if (!mounted) {
         // Saved, but the page closed: import in the background (Sources
         // shows the progress).
-        sync.sync(id);
+        sync.sync(id, replaceEmptyFamilies: true);
         return;
       }
       _url.text = _row?.kind == SourceKind.m3uUrl ? _row!.url : _url.text;

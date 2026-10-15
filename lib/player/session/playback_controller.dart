@@ -83,6 +83,9 @@ class _Session {
   bool resumeOnForeground = false;
   Duration lastPosition = Duration.zero;
 
+  /// Where the last early end ([PlaybackController._endedEarly]) happened.
+  Duration? earlyEndAt;
+
   bool get isLive => original.isLive;
 }
 
@@ -145,6 +148,10 @@ class PlaybackController extends ChangeNotifier {
   bool _wakelock = false;
   bool _disposed = false;
 
+  /// The app is in the background ([onBackground] .. [onForeground]), with
+  /// or without a session: items started meanwhile start backgrounded.
+  bool _appBackground = false;
+
   /// Mirrors the current engine's state.
   ValueListenable<PlaybackState> get state => _state;
 
@@ -185,6 +192,13 @@ class PlaybackController extends ChangeNotifier {
       maxConnections: maxConnections,
       channelPref: channelPref,
     );
+    // Started in the background (a zap or the next episode that came due
+    // there): live waits for onForeground, VOD opens paused.
+    if (_appBackground) {
+      s
+        ..backgrounded = true
+        ..resumeOnForeground = true;
+    }
     _session = s;
     _lastSession = s;
     final kind = _policy.pick(request.kind, _input(s));
@@ -302,10 +316,13 @@ class PlaybackController extends ChangeNotifier {
 
   /// App went to the background: live is stopped to free the connection,
   /// VOD is paused and its position saved. Nothing reopened meanwhile (by a
-  /// fallback or reconnect) starts playing until [onForeground].
+  /// fallback or reconnect) or started by [play] meanwhile plays until
+  /// [onForeground].
   Future<void> onBackground() async {
+    if (_disposed) return;
+    _appBackground = true;
     final s = _session;
-    if (s == null || s.backgrounded || _disposed) return;
+    if (s == null || s.backgrounded) return;
     s.backgrounded = true;
     _syncWatchdogPause();
     _setWakelock(false);
@@ -328,8 +345,10 @@ class PlaybackController extends ChangeNotifier {
 
   /// Back in the foreground: reopens live, resumes VOD if it was playing.
   Future<void> onForeground() async {
+    if (_disposed) return;
+    _appBackground = false;
     final s = _session;
-    if (s == null || !s.backgrounded || _disposed) return;
+    if (s == null || !s.backgrounded) return;
     s.backgrounded = false;
     if (s.isLive) {
       if (!s.resumeOnForeground) return;
@@ -584,10 +603,34 @@ class PlaybackController extends ChangeNotifier {
       _watchdog.onEvent(e);
       return;
     }
+    if (_endedEarly(s)) {
+      // A dropped connection the engine took for the end of the file (mpv
+      // after ffmpeg's own reconnects give up): reopen at the last position
+      // instead of ending, auto-playing the next episode or restarting.
+      s.earlyEndAt = s.lastPosition;
+      _watchdog.report(ReconnectReason.ended);
+      return;
+    }
     _watchdog.cancel();
     _setPhase(PlaybackPhase.ended);
     final progress = _progress;
     if (progress != null) unawaited(progress.flush());
+  }
+
+  /// Gap of playback after a reopen that makes another early end count as
+  /// a new drop. Ending again sooner (a file whose duration is wrong) is
+  /// the real end.
+  static const _earlyEndProgress = Duration(seconds: 5);
+
+  /// Whether a VOD end came well before the known duration (not even
+  /// [ProgressSaver.isFinished]). Unknown durations end normally.
+  bool _endedEarly(_Session s) {
+    final duration = _state.value.duration;
+    final at = s.lastPosition;
+    if (duration <= Duration.zero || at <= Duration.zero) return false;
+    if (ProgressSaver.isFinished(at, duration)) return false;
+    final previous = s.earlyEndAt;
+    return previous == null || at - previous >= _earlyEndProgress;
   }
 
   Future<void> _reconnect(int attempt) async {

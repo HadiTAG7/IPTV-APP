@@ -293,19 +293,77 @@ void main() {
       expect(row.lastSyncAt, clock.now());
     });
 
-    test('a family that comes back empty is dropped with the others', () async {
+    test('a family that comes back empty keeps its items; the run is '
+        'incomplete and not stamped, so it is tried again', () async {
       final id = await addXtream();
       expect((await service().syncAndWait(id)).isDone, isTrue);
+      final synced = (await db.sourcesDao.byId(id))!.lastSyncAt;
+      final movie = panel.catalog.movies.first.id.toString();
+      await db.favoritesDao.toggleFavorite(id, ContentKind.movie, movie);
+      await db.progressDao.saveProgress(
+        id,
+        PlayableKind.movie,
+        movie,
+        10 * 60 * 1000,
+        90 * 60 * 1000,
+      );
+      clock.advance(const Duration(days: 2));
+      // A busy panel answers get_vod_streams with 200 and nothing in it.
       final result = await service(
         adapters: (c) =>
             _FlakyAdapter(repo.adapterFor(c), drop: (b) => b is MoviesBatch),
       ).syncAndWait(id);
-      expect(result.phase, SyncPhase.done, reason: '${result.error}');
-      expect(await count(id, ContentKind.movie), 0);
+      expect(result.phase, SyncPhase.failed);
+      expect(result.error?.reason, VerifyErrorReason.incomplete);
+      expect(await count(id, ContentKind.movie), panel.catalog.movies.length);
       expect(await count(id, ContentKind.live), panel.catalog.live.length);
       expect(await count(id, ContentKind.series), panel.catalog.series.length);
+      expect(await db.catalogDao.categories(id, ContentKind.movie), isNotEmpty);
+      expect((await db.sourcesDao.byId(id))!.lastSyncAt, synced);
+      expect(await db.catalogDao.openGenerationOf(id), isNull);
+      expect(await db.catalogDao.movieByKey(id, movie), isNotNull);
+      expect(await db.progressDao.continueWatching(id), hasLength(1));
+
+      // The next sync gets the list again and is done.
+      final again = await service().syncAndWait(id);
+      expect(again.phase, SyncPhase.done, reason: '${again.error}');
+      expect(await count(id, ContentKind.movie), panel.catalog.movies.length);
+      expect((await db.sourcesDao.byId(id))!.lastSyncAt, clock.now());
+    });
+
+    test('an empty live list with VOD keeps the channels', () async {
+      final id = await addXtream();
+      expect((await service().syncAndWait(id)).isDone, isTrue);
+      final result = await service(
+        adapters: (c) =>
+            _FlakyAdapter(repo.adapterFor(c), drop: (b) => b is ChannelsBatch),
+      ).syncAndWait(id);
+      expect(result.phase, SyncPhase.failed);
+      expect(result.error?.reason, VerifyErrorReason.incomplete);
+      expect(await count(id, ContentKind.live), panel.catalog.live.length);
+      expect(await count(id, ContentKind.movie), panel.catalog.movies.length);
       expect(await db.catalogDao.openGenerationOf(id), isNull);
     });
+
+    test(
+      'a sync the user asked for drops a family that came back empty',
+      () async {
+        final id = await addXtream();
+        expect((await service().syncAndWait(id)).isDone, isTrue);
+        final result = await service(
+          adapters: (c) =>
+              _FlakyAdapter(repo.adapterFor(c), drop: (b) => b is MoviesBatch),
+        ).syncAndWait(id, replaceEmptyFamilies: true);
+        expect(result.phase, SyncPhase.done, reason: '${result.error}');
+        expect(await count(id, ContentKind.movie), 0);
+        expect(await count(id, ContentKind.live), panel.catalog.live.length);
+        expect(
+          await count(id, ContentKind.series),
+          panel.catalog.series.length,
+        );
+        expect(await db.catalogDao.openGenerationOf(id), isNull);
+      },
+    );
 
     test('an expired account stops before touching the catalog', () async {
       final id = await addXtream();

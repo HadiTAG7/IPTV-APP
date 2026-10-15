@@ -325,9 +325,9 @@ class VodBrowserState extends ConsumerState<VodBrowser> {
     } else {
       final showRow = current.id == allId && continueItems.isNotEmpty;
       grid = _PagedGrid(
-        // A sync that keeps the item count refreshes the grid in place, so
+        // A sync refreshes the grid in place (the count may change), so
         // focus and scroll position stay.
-        key: ValueKey('vod-grid:$sourceId:${current.id}:${current.count}'),
+        key: ValueKey('vod-grid:$sourceId:${current.id}'),
         generation: generation,
         count: current.count,
         load: _loaderFor(sourceId, current.id),
@@ -501,15 +501,73 @@ class _PagedGridState extends State<_PagedGrid> {
     load: (offset, limit) => widget.load(offset, limit),
   );
 
+  /// Focus nodes of the posters built so far, by index.
+  final _nodes = <int, FocusNode>{};
+
+  /// The poster that had focus last.
+  int? _focused;
+
   @override
   void didUpdateWidget(_PagedGrid oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.generation != widget.generation) _items.refresh();
+    if (oldWidget.generation == widget.generation &&
+        oldWidget.count == widget.count) {
+      return;
+    }
+    // A sync: re-read the pages in place, then keep focus on the same title
+    // (titles added above it move it down).
+    final from = _focused;
+    final hadFocus = from != null && (_nodes[from]?.hasFocus ?? false);
+    final key = hadFocus ? _items.itemAt(from)?.key : null;
+    final done = _items.refresh(count: widget.count);
+    if (hadFocus) unawaited(done.then((_) => _refocus(from, key)));
+  }
+
+  /// Moves focus from poster [from] to where the title [key] is now, or to
+  /// the last poster when [from] is past the end. Leaves it alone when the
+  /// user moved on meanwhile or the title's poster is not built.
+  void _refocus(int from, String? key) {
+    if (!mounted || _focused != from) return;
+    final count = widget.count;
+    if (count == 0) return;
+    final gone = from >= count;
+    if (!gone && !(_nodes[from]?.hasPrimaryFocus ?? false)) return;
+    var target = key == null
+        ? null
+        : _items.indexWhereLoaded((tile) => tile.key == key);
+    if (target == null || target >= count) {
+      if (!gone) return;
+      target = count - 1;
+    }
+    if (target == from) return;
+    final node = _nodes[target];
+    if (node != null && node.parent != null) node.requestFocus();
+  }
+
+  FocusNode _nodeFor(int index) {
+    final existing = _nodes[index];
+    if (existing != null) return existing;
+    if (_nodes.length >= 300) _pruneNodes();
+    return _nodes[index] = FocusNode(debugLabel: 'vod-grid-$index');
+  }
+
+  /// Drops nodes of posters no longer built, away from the focused one.
+  void _pruneNodes() {
+    final focused = _focused ?? 0;
+    _nodes.removeWhere((i, node) {
+      final drop =
+          (i - focused).abs() > 60 && node.parent == null && !node.hasFocus;
+      if (drop) node.dispose();
+      return drop;
+    });
   }
 
   @override
   void dispose() {
     _items.dispose();
+    for (final node in _nodes.values) {
+      node.dispose();
+    }
     super.dispose();
   }
 
@@ -545,11 +603,15 @@ class _PagedGridState extends State<_PagedGrid> {
                           final tile = _items.itemAt(i);
                           return PosterCard(
                             key: ValueKey('vod-grid-$i'),
+                            focusNode: _nodeFor(i),
                             title: tile?.name ?? '',
                             posterUrl: tile?.poster,
                             onSelect: tile == null
                                 ? null
                                 : () => widget.onOpen(tile),
+                            onFocusChange: (focused) {
+                              if (focused) _focused = i;
+                            },
                           );
                         },
                         childCount: widget.count,

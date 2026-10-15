@@ -1,6 +1,11 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../app/form_factor.dart';
+import 'dpad_shortcuts.dart';
 import 'key_repeat.dart';
 
 /// Whether an arrow press towards [direction] should move focus away from
@@ -38,10 +43,13 @@ bool arrowLeavesTextField(FocusNode node, TraversalDirection direction) {
 /// fresh press only. A press with nowhere to go inside the pane is left to an
 /// enclosing `PaneScope`, so a pane holding only a field never traps focus.
 ///
-/// OK / Select opens the soft keyboard. [textInputAction] `next` moves to
-/// [nextFocusNode] (or the next field in traversal order); `done` and other
-/// actions hide the keyboard but keep focus on the field, so a TV never ends
-/// up with nothing focused.
+/// OK / Select opens the soft keyboard. On Android TV focus alone never
+/// does: a field the D-pad passes through (or an autofocused one) stays
+/// read-only until OK or a tap, so the soft keyboard (often fullscreen) does
+/// not pop up at every field and capture the D-pad. [textInputAction] `next`
+/// moves to [nextFocusNode] (or the next field in traversal order) and keeps
+/// the keyboard open there; `done` and other actions hide the keyboard but
+/// keep focus on the field, so a TV never ends up with nothing focused.
 class TvTextField extends StatefulWidget {
   const TvTextField({
     super.key,
@@ -89,24 +97,66 @@ class TvTextField extends StatefulWidget {
 }
 
 class _TvTextFieldState extends State<TvTextField> {
+  /// Set while Next/Previous on the soft keyboard moves focus, so the field
+  /// that gets it opens the keyboard too.
+  static bool _keyboardHandoff = false;
+
   FocusNode? _ownNode;
+  FocusNode? _listening;
+
+  /// Android TV: the field is read-only (no input connection, so no soft
+  /// keyboard) until [_editing].
+  bool _deferKeyboard = false;
+
+  /// OK, a tap or Next opened the keyboard; ends when the field loses focus.
+  bool _editing = false;
 
   FocusNode get _node =>
       widget.focusNode ?? (_ownNode ??= FocusNode(debugLabel: 'TvTextField'));
 
   @override
+  void initState() {
+    super.initState();
+    _listen();
+  }
+
+  void _listen() {
+    final node = _node;
+    if (identical(node, _listening)) return;
+    _listening?.removeListener(_onFocusChange);
+    _listening = node..addListener(_onFocusChange);
+  }
+
+  @override
   void didUpdateWidget(TvTextField oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.focusNode != null && _ownNode != null) {
-      _ownNode!.dispose();
-      _ownNode = null;
-    }
+    final stale = widget.focusNode != null ? _ownNode : null;
+    if (stale != null) _ownNode = null;
+    _listen();
+    stale?.dispose();
   }
 
   @override
   void dispose() {
+    _listening?.removeListener(_onFocusChange);
     _ownNode?.dispose();
     super.dispose();
+  }
+
+  void _onFocusChange() {
+    if (!_node.hasFocus) {
+      if (_editing) setState(() => _editing = false);
+    } else if (_keyboardHandoff) {
+      _keyboardHandoff = false;
+      _startEditing();
+    }
+  }
+
+  /// Makes the field editable; once it is laid out with focus, EditableText
+  /// opens the input connection and shows the keyboard.
+  void _startEditing() {
+    if (_editing || !mounted) return;
+    setState(() => _editing = true);
   }
 
   KeyEventResult _onKey(FocusNode _, KeyEvent event) {
@@ -128,15 +178,26 @@ class _TvTextFieldState extends State<TvTextField> {
           ? KeyEventResult.handled
           : KeyEventResult.ignored;
     }
-    if (key == LogicalKeyboardKey.select ||
-        key == LogicalKeyboardKey.gameButtonA) {
+    // Enter goes to the open keyboard; on a read-only field it opens it
+    // (some remotes send Enter for OK).
+    final opens =
+        key == LogicalKeyboardKey.select ||
+        key == LogicalKeyboardKey.gameButtonA ||
+        (selectKeys.contains(key) && _readOnly);
+    if (opens) {
       if (event is KeyDownEvent) _requestKeyboard();
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
   }
 
+  bool get _readOnly => _deferKeyboard && !_editing;
+
   void _requestKeyboard() {
+    if (_readOnly) {
+      _startEditing();
+      return;
+    }
     _node.context
         ?.findAncestorStateOfType<EditableTextState>()
         ?.requestKeyboard();
@@ -144,24 +205,39 @@ class _TvTextFieldState extends State<TvTextField> {
 
   void _onEditingComplete() {
     if (widget.textInputAction == TextInputAction.next) {
-      final next = widget.nextFocusNode;
-      if (next != null) {
-        next.requestFocus();
-      } else {
-        _node.nextFocus();
-      }
+      _handOffKeyboard(() {
+        final next = widget.nextFocusNode;
+        if (next != null) {
+          next.requestFocus();
+        } else {
+          _node.nextFocus();
+        }
+      });
       return;
     }
     if (widget.textInputAction == TextInputAction.previous) {
-      _node.previousFocus();
+      _handOffKeyboard(_node.previousFocus);
       return;
     }
     // Keep focus on TV; just close the keyboard.
     SystemChannels.textInput.invokeMethod<void>('TextInput.hide').ignore();
   }
 
+  /// Runs [moveFocus] so that the field it focuses opens the keyboard too.
+  /// The focus change is applied in a microtask queued by the request (or
+  /// earlier); the flag is cleared in one queued after it, in case no field
+  /// took it.
+  void _handOffKeyboard(void Function() moveFocus) {
+    _keyboardHandoff = _deferKeyboard;
+    moveFocus();
+    scheduleMicrotask(() => _keyboardHandoff = false);
+  }
+
   @override
   Widget build(BuildContext context) {
+    _deferKeyboard =
+        defaultTargetPlatform == TargetPlatform.android &&
+        FormFactorScope.isTv(context);
     return Focus(
       canRequestFocus: false,
       skipTraversal: true,
@@ -186,6 +262,10 @@ class _TvTextFieldState extends State<TvTextField> {
         onChanged: widget.onChanged,
         onSubmitted: widget.onSubmitted,
         onEditingComplete: _onEditingComplete,
+        // Read-only keeps the caret, so Left/Right still show where it is.
+        readOnly: _readOnly,
+        showCursor: true,
+        onTap: _startEditing,
       ),
     );
   }

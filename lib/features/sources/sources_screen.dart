@@ -88,7 +88,8 @@ class _SourcesScreenState extends ConsumerState<SourcesScreen> {
     if (sync.isRunning(s.id)) {
       sync.cancel(s.id);
     } else {
-      sync.sync(s.id);
+      // Asked for: a list that comes back empty replaces the stored one.
+      sync.sync(s.id, replaceEmptyFamilies: true);
     }
   }
 

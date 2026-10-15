@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/app/form_factor.dart';
 import 'package:iptv_player/tv/pane_scope.dart';
 import 'package:iptv_player/tv/tv_focusable.dart';
 import 'package:iptv_player/tv/tv_text_field.dart';
@@ -183,6 +184,104 @@ void main() {
       });
     });
   }
+
+  group('TV: the soft keyboard waits for OK', () {
+    Widget tv(Widget child) =>
+        FormFactorScope(formFactor: FormFactor.tv, child: child);
+
+    /// Methods sent on the text input channel since the last [clear].
+    List<String> sent(WidgetTester tester) => [
+      for (final call in tester.testTextInput.log) call.method,
+    ];
+
+    void clear(WidgetTester tester) => tester.testTextInput.log.clear();
+
+    testWidgets('D-pad focus opens no keyboard; OK does, Next keeps it', (
+      tester,
+    ) async {
+      await pumpTv(tester, tv(form()));
+      above.requestFocus();
+      await tester.pumpAndSettle();
+      clear(tester);
+
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(first.hasPrimaryFocus, isTrue);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(second.hasPrimaryFocus, isTrue);
+      await press(tester, LogicalKeyboardKey.arrowUp);
+      expect(first.hasPrimaryFocus, isTrue);
+      expect(sent(tester), isNot(contains('TextInput.show')));
+      expect(sent(tester), isNot(contains('TextInput.setClient')));
+      expect(tester.testTextInput.isVisible, isFalse);
+
+      await press(tester, LogicalKeyboardKey.select);
+      expect(
+        sent(tester),
+        containsAllInOrder(['TextInput.setClient', 'TextInput.show']),
+      );
+      expect(tester.testTextInput.isVisible, isTrue);
+      await tester.enterText(find.byType(TextField).first, 'host');
+      expect(find.text('host'), findsOneWidget);
+
+      // Next on the keyboard moves on and keeps it open for the next field.
+      clear(tester);
+      await tester.testTextInput.receiveAction(TextInputAction.next);
+      await tester.pumpAndSettle();
+      expect(second.hasPrimaryFocus, isTrue);
+      expect(sent(tester), contains('TextInput.show'));
+      expect(tester.testTextInput.isVisible, isTrue);
+
+      // Done closes it and keeps focus; the D-pad leaves without reopening.
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(second.hasPrimaryFocus, isTrue);
+      expect(tester.testTextInput.isVisible, isFalse);
+      clear(tester);
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(below.hasPrimaryFocus, isTrue);
+      await press(tester, LogicalKeyboardKey.arrowUp);
+      expect(second.hasPrimaryFocus, isTrue);
+      expect(sent(tester), isNot(contains('TextInput.show')));
+      expect(tester.testTextInput.isVisible, isFalse);
+    });
+
+    testWidgets('an autofocused field waits for OK too', (tester) async {
+      final node = FocusNode();
+      addTearDown(node.dispose);
+      await pumpTv(
+        tester,
+        tv(
+          SizedBox(
+            width: 300,
+            child: TvTextField(focusNode: node, autofocus: true),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(node.hasPrimaryFocus, isTrue);
+      expect(sent(tester), isNot(contains('TextInput.show')));
+
+      await press(tester, LogicalKeyboardKey.select);
+      expect(tester.testTextInput.isVisible, isTrue);
+    });
+
+    testWidgets('a tap opens the keyboard', (tester) async {
+      await pumpTv(tester, tv(form()));
+      await tester.tap(find.byType(TextField).last);
+      await tester.pumpAndSettle();
+      expect(second.hasPrimaryFocus, isTrue);
+      expect(tester.testTextInput.isVisible, isTrue);
+    });
+
+    testWidgets('elsewhere focus still opens the keyboard', (tester) async {
+      await pumpTv(tester, form());
+      above.requestFocus();
+      await tester.pumpAndSettle();
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(first.hasPrimaryFocus, isTrue);
+      expect(tester.testTextInput.isVisible, isTrue);
+    });
+  });
 
   for (final locale in testLocales) {
     final rtl = locale == ar;

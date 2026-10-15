@@ -20,7 +20,7 @@ typedef PageLoader<T> = Future<List<T>> Function(int offset, int limit);
 /// failed page has been read.
 class PagedItems<T> extends ChangeNotifier {
   PagedItems({
-    required this.count,
+    required int count,
     required this._load,
     this.pageSize = 200,
     this.maxPages = 10,
@@ -28,12 +28,13 @@ class PagedItems<T> extends ChangeNotifier {
     this.debounce = const Duration(milliseconds: 120),
     this.retryBackoff = const Duration(seconds: 2),
     this.maxRetryBackoff = const Duration(seconds: 30),
-  }) {
-    if (count > 0) _loadPage(0);
+  }) : _count = count {
+    if (count > 0) unawaited(_loadPage(0));
   }
 
   /// Number of items in the list.
-  final int count;
+  int get count => _count;
+  int _count;
   final int pageSize;
   final int maxPages;
   final int maxConcurrent;
@@ -90,15 +91,35 @@ class PagedItems<T> extends ChangeNotifier {
 
   /// Reads the pages in memory again (after a sync), keeping their items
   /// until the new ones arrive. Failed pages may be asked for at once.
-  void refresh() {
+  /// [count], when given, is the list's new length: pages past it are
+  /// dropped. Completes when the pages have been read.
+  Future<void> refresh({int? count}) async {
     if (_disposed) return;
+    if (count != null && count != _count) {
+      _count = count;
+      final pages = count == 0 ? 0 : (count - 1) ~/ pageSize + 1;
+      _pages.removeWhere((page, _) => page >= pages);
+      _wanted.removeWhere((page) => page >= pages);
+      if (_pages.isEmpty && count > 0) _request(0);
+    }
     // Earlier failures are stale now; pages on screen are asked for again.
     _unblockAll();
     _failures.clear();
     error = null;
-    for (final page in _pages.keys.toList()) {
-      if (!_loading.contains(page)) _loadPage(page);
+    await Future.wait([
+      for (final page in _pages.keys.toList())
+        if (!_loading.contains(page)) _loadPage(page),
+    ]);
+  }
+
+  /// The index of the first item in memory that passes [test], if any.
+  int? indexWhereLoaded(bool Function(T item) test) {
+    for (final MapEntry(key: page, value: items) in _pages.entries) {
+      for (final (i, item) in items.indexed) {
+        if (test(item)) return page * pageSize + i;
+      }
     }
+    return null;
   }
 
   /// Reads the requested pages again after a failure, without waiting for
@@ -145,14 +166,14 @@ class PagedItems<T> extends ChangeNotifier {
     final pages = _wanted.toList().reversed.take(maxConcurrent).toList();
     _wanted.clear();
     for (final page in pages) {
-      _loadPage(page);
+      unawaited(_loadPage(page));
     }
   }
 
-  void _loadPage(int page) {
+  Future<void> _loadPage(int page) {
     _loading.add(page);
     _loads++;
-    unawaited(_read(page));
+    return _read(page);
   }
 
   Future<void> _read(int page) async {

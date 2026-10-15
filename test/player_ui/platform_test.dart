@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/player/ui/player_screen.dart';
 import 'package:iptv_player/sources/models.dart';
@@ -56,6 +57,61 @@ void main() {
         'http://127.0.0.1:9/live/ch1.ts',
       ]);
       expect(rig.wakelock.last, isTrue);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('a zap pending when the app leaves is dropped', (tester) async {
+      final rig = PlayerRig()..autoPlay();
+      final id = await seedLive(rig);
+      await pumpPlayerApp(tester, rig);
+      await openPlayerFor(tester, liveRequest(id));
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump(const Duration(milliseconds: 100));
+      await _background(tester);
+      await tester.pump(const Duration(seconds: 2));
+      expect(rig.openedUrls, ['http://127.0.0.1:9/live/ch1.ts']);
+      expect(rig.wakelock.last, isFalse);
+
+      // Back on the channel that was playing.
+      await _foreground(tester);
+      const ch1 = 'http://127.0.0.1:9/live/ch1.ts';
+      expect(rig.openedUrls, [ch1, ch1]);
+
+      // A typed number is dropped too.
+      await tester.sendKeyEvent(LogicalKeyboardKey.digit3);
+      await tester.pump();
+      await _background(tester);
+      await tester.pump(const Duration(seconds: 3));
+      expect(rig.openedUrls, [ch1, ch1]);
+      await _foreground(tester);
+      await tester.pump(const Duration(seconds: 3));
+      expect(rig.openedUrls, [ch1, ch1, ch1]);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('the next-episode countdown holds in the background', (
+      tester,
+    ) async {
+      final rig = PlayerRig()..autoPlay(duration: const Duration(minutes: 40));
+      final id = await seedVod(rig);
+      await pumpPlayerApp(tester, rig);
+      await openPlayerFor(tester, episodeRequest(id));
+      rig.engine.setState(position: const Duration(minutes: 39, seconds: 50));
+      await settle(tester);
+      expect(find.byKey(const ValueKey('player-next-episode')), findsOneWidget);
+      await tester.pump(const Duration(seconds: 2));
+
+      await _background(tester);
+      await tester.pump(const Duration(seconds: 11));
+      expect(rig.openedUrls, ['http://127.0.0.1:9/series/e1.mp4']);
+
+      // Back: the countdown goes on from where it stopped.
+      await _foreground(tester);
+      expect(rig.openedUrls, ['http://127.0.0.1:9/series/e1.mp4']);
+      await tester.pump(const Duration(seconds: 9));
+      await settle(tester);
+      expect(rig.openedUrls.last, 'http://127.0.0.1:9/series/e2.mp4');
+      expect(rig.engine.state.value.playing, isTrue);
       await disposeRig(tester, rig);
     });
 

@@ -542,6 +542,12 @@ abstract class AppLocalizations {
   /// **'Couldn\'t read the file.'**
   String get errorFileRead;
 
+  /// No description provided for @errorCatalogIncomplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Some lists came back empty, so the previous ones were kept. Try again later.'**
+  String get errorCatalogIncomplete;
+
   /// No description provided for @errorHttpStatus.
   ///
   /// In en, this message translates to:

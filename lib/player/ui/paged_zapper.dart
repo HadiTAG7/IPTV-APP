@@ -372,6 +372,15 @@ class PagedZapper {
     return true;
   }
 
+  /// Drops a pending zap and a half-typed number (also one whose lookup is
+  /// still running): nothing is tuned, the banner shows the tuned channel.
+  void cancelPending() {
+    if (_closed) return;
+    _action++;
+    _cancelPending();
+    _publish(item: _tuned, index: _tunedIndex);
+  }
+
   /// Returns to the previously watched channel.
   void recall() {
     if (_closed) return;

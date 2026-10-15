@@ -244,6 +244,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get errorFileRead => 'Couldn\'t read the file.';
 
   @override
+  String get errorCatalogIncomplete =>
+      'Some lists came back empty, so the previous ones were kept. Try again later.';
+
+  @override
   String errorHttpStatus(int code) {
     return 'The server returned error $code.';
   }
