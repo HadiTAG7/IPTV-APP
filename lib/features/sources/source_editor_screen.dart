@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/form_factor.dart';
@@ -443,8 +444,19 @@ class _SourceEditorScreenState extends ConsumerState<SourceEditorScreen> {
     try {
       picked = await ref.read(playlistPickerProvider)();
     } on Object catch (e) {
-      log.warn('File picker failed: ${e.runtimeType}');
-      if (mounted) setState(() => _error = l10n.errorFileRead);
+      // Usual on TV boxes, where nothing was read: point to the upload from
+      // the phone instead.
+      final noPicker = e is PlatformException && e.code == noFilePickerCode;
+      log.warn(
+        noPicker
+            ? 'No file picker on this device'
+            : 'File picker failed: ${e.runtimeType}',
+      );
+      if (!mounted) return;
+      setState(
+        () => _error = noPicker ? l10n.sourcesNoFilePicker : l10n.errorFileRead,
+      );
+      if (noPicker) _focusAfterBuild(_phoneNode);
       return;
     }
     if (picked == null || !mounted) return;

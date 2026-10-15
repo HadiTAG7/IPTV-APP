@@ -1604,6 +1604,12 @@ abstract class AppLocalizations {
   /// **'Received from your phone.'**
   String get sourcesReceivedFromPhone;
 
+  /// No description provided for @sourcesNoFilePicker.
+  ///
+  /// In en, this message translates to:
+  /// **'This device has no file picker. Use Type on your phone to send the playlist file.'**
+  String get sourcesNoFilePicker;
+
   /// No description provided for @sourcesImportSaving.
   ///
   /// In en, this message translates to:

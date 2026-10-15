@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/epg/epg_matcher.dart';
 import 'package:iptv_player/epg/epg_models.dart';
@@ -184,6 +186,147 @@ void main() {
       expect(m['k1'], const EpgMatch('ch1.example', MatchKind.tvgName));
       expect(m['k2'], const EpgMatch('ch2.example', MatchKind.name));
       expect(m.containsKey('k3'), isFalse);
+    });
+  });
+
+  group('IncrementalMatcher', () {
+    List<EpgChannel> sortedById(Iterable<EpgChannel> channels) =>
+        channels.toList()..sort((a, b) => a.id.compareTo(b.id));
+
+    test('a later channel wins by a stronger rule, then by a smaller id; '
+        'add returns the changes', () {
+      final channels = [
+        channel('twin', 'Twin'),
+        channel('up', 'Upgrade', tvgId: 'UP.tv'),
+        channel('same', 'Same'),
+      ];
+      final matcher = IncrementalMatcher(channels);
+
+      expect(
+        matcher.add([
+          guide('m.twin', ['Twin']),
+          guide('name.up', ['Upgrade']),
+          guide('a.same', ['Same']),
+        ]),
+        {
+          'twin': const EpgMatch('m.twin', MatchKind.name),
+          'up': const EpgMatch('name.up', MatchKind.name),
+          'same': const EpgMatch('a.same', MatchKind.name),
+        },
+      );
+      // Larger ids by the same rule do not win.
+      expect(
+        matcher.add([
+          guide('z.twin', ['Twin']),
+          guide('z.same', ['Same']),
+        ]),
+        isEmpty,
+      );
+      expect(
+        matcher.add([
+          guide('a.twin', ['Twin']),
+          guide('up.TV', ['Other']),
+        ]),
+        {
+          'twin': const EpgMatch('a.twin', MatchKind.name),
+          'up': const EpgMatch('up.TV', MatchKind.tvgId),
+        },
+      );
+      // A smaller id by a weaker rule does not win either.
+      expect(
+        matcher.add([
+          guide('a.up', ['Upgrade']),
+        ]),
+        isEmpty,
+      );
+      expect(matcher.matches, {
+        'twin': const EpgMatch('a.twin', MatchKind.name),
+        'up': const EpgMatch('up.TV', MatchKind.tvgId),
+        'same': const EpgMatch('a.same', MatchKind.name),
+      });
+      expect(
+        matcher.matches,
+        matchChannels(
+          channels,
+          sortedById([
+            guide('m.twin', ['Twin']),
+            guide('name.up', ['Upgrade']),
+            guide('a.same', ['Same']),
+            guide('z.twin', ['Twin']),
+            guide('z.same', ['Same']),
+            guide('a.twin', ['Twin']),
+            guide('up.TV', ['Other']),
+            guide('a.up', ['Upgrade']),
+          ]),
+        ),
+      );
+    });
+
+    test('continues from the matches it is given', () {
+      final channels = [channel('1', 'Example News'), channel('2', 'Twin')];
+      final first = [
+        guide('news.example', ['Example News']),
+      ];
+      final matcher = IncrementalMatcher(
+        channels,
+        matches: matchChannels(channels, first),
+      );
+      expect(matcher.matches, {
+        '1': const EpgMatch('news.example', MatchKind.name),
+      });
+      expect(
+        matcher.add([
+          guide('z.news', ['Example News']),
+        ]),
+        isEmpty,
+      );
+      expect(
+        matcher.add([
+          guide('twin.example', ['Twin']),
+        ]),
+        {'2': const EpgMatch('twin.example', MatchKind.name)},
+      );
+    });
+
+    test('equals matchChannels over everything added, sorted by id', () {
+      final random = Random(7);
+      const names = ['Alpha', 'Beta HD', 'الجزيرة', 'Gamma', 'HD', ''];
+      const ids = ['a.tv', 'A.TV', 'b.tv', 'c.tv', 'd.tv', ' ', 'e.tv'];
+      String? pick(List<String> from, {bool nullable = false}) =>
+          nullable && random.nextBool()
+          ? null
+          : from[random.nextInt(from.length)];
+
+      for (var round = 0; round < 200; round++) {
+        final channels = [
+          for (var i = 0; i < 8; i++)
+            channel(
+              'k$i',
+              pick(names)!,
+              tvgId: pick(ids, nullable: true),
+              tvgName: pick(names, nullable: true),
+            ),
+        ];
+        final matcher = IncrementalMatcher(channels);
+        final added = <EpgChannel>[];
+        for (var part = 0; part < 4; part++) {
+          final batch = [
+            for (var i = random.nextInt(4); i > 0; i--)
+              guide(pick(ids)!, [
+                for (var n = random.nextInt(3); n > 0; n--) pick(names)!,
+              ]),
+          ];
+          final before = Map.of(matcher.matches);
+          final changed = matcher.add(batch);
+          added.addAll(batch);
+          final expected = matchChannels(channels, sortedById(added));
+          expect(matcher.matches, expected, reason: 'round $round');
+          expect(changed, {
+            for (final MapEntry(:key, :value) in expected.entries)
+              if (before[key] != value) key: value,
+          }, reason: 'round $round');
+        }
+      }
     });
   });
 }

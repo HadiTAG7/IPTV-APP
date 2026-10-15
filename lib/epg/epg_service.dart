@@ -103,11 +103,12 @@ List<EpgProgramme> shiftProgrammes(
 ///    guide claimed and no manual link covers. Programmes are then kept when
 ///    their channel is linked, plus (tentatively) when their channel has not
 ///    been declared yet. Non-standard files are handled at the cost of some
-///    extra writes: late `<channel>` elements trigger a re-match, ids that
-///    are never declared become guide channels without names (matched by
-///    tvg-id at the end), and programmes of ids that end up unlinked are
-///    deleted at the end. With a parser filter, undeclared ids outside the
-///    filter are not seen at all.
+///    extra writes: late `<channel>` elements are matched as they come
+///    ([IncrementalMatcher]; an earlier link changes only when one of them
+///    wins it), ids that are never declared become guide channels without
+///    names (matched by tvg-id at the end), and programmes of ids that end
+///    up unlinked are deleted at the end. With a parser filter, undeclared
+///    ids outside the filter are not seen at all.
 /// 5. Writes: batches are upserted over the stored programmes (at most
 ///    [writeBatchSize] per transaction), so readers keep seeing a complete
 ///    guide during the import. At the end, the guide's rows this import did
@@ -1336,8 +1337,11 @@ class _GuideImport {
 
   var _matches = const <String, EpgMatch>{};
 
+  /// Matches channels declared after the first match (see [_matchMore]).
+  IncrementalMatcher? _matcher;
+
   /// Lower-cased ids whose programmes are kept.
-  var _wanted = const <String>{};
+  var _wanted = <String>{};
   bool _matched = false;
   int _reportedMatches = -1;
   int _written = 0;
@@ -1383,8 +1387,8 @@ class _GuideImport {
             channels: _channels.length,
           ),
         );
-        // Channels after programmes (not DTD order): match again.
-        if (_matched) _match(_channels.values);
+        // Channels after programmes (not DTD order): match them too.
+        if (_matched) _matchMore(batch.channels);
       }
       if (batch.programmes.isEmpty) continue;
       sawProgrammes = true;
@@ -1463,15 +1467,45 @@ class _GuideImport {
 
   void _match(Iterable<EpgChannel> channels) {
     _matched = true;
+    _matcher = null;
     _matches = matchChannels(remaining, _sortedById(channels.toList()));
     _wanted = {
       for (final m in _matches.values) m.xmltvId.toLowerCase(),
       for (final id in manualIds) id.toLowerCase(),
     };
-    // The parser dropped programmes of ids outside the filter.
-    if (prefilter case final ids? when !ids.containsAll(_wanted)) {
+    _checkFilter(_wanted);
+    _reportMatches();
+  }
+
+  /// Matches [channels], declared after [_match] ran, without matching the
+  /// earlier ones again: interleaved guides bring a few channels per batch.
+  ///
+  /// [_wanted] only grows here; ids a better match replaced stay wanted
+  /// until the final [_match].
+  void _matchMore(List<EpgChannel> channels) {
+    final matcher = _matcher ??= IncrementalMatcher(
+      remaining,
+      matches: _matches,
+    );
+    final changed = matcher.add(channels);
+    if (changed.isEmpty) return;
+    _matches = matcher.matches;
+    final added = {for (final m in changed.values) m.xmltvId.toLowerCase()}
+      ..removeAll(_wanted);
+    _checkFilter(added);
+    _wanted.addAll(added);
+    _reportMatches();
+  }
+
+  /// Throws [_Restart] when [ids] (lower-cased) are not all in [prefilter]:
+  /// the parser dropped their programmes.
+  void _checkFilter(Set<String> ids) {
+    if (prefilter case final filter? when !filter.containsAll(ids)) {
       throw const _Restart();
     }
+  }
+
+  void _reportMatches() {
     final matched = _matches.length + manualIds.length;
     if (matched != _reportedMatches) {
       _reportedMatches = matched;

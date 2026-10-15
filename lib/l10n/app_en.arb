@@ -470,6 +470,7 @@
   "sourcesXtreamLinkConverted": "Switched to Xtream Codes. Check the details, then press Test & save.",
   "sourcesUserAgentDefault": "Default",
   "sourcesReceivedFromPhone": "Received from your phone.",
+  "sourcesNoFilePicker": "This device has no file picker. Use Type on your phone to send the playlist file.",
   "sourcesImportSaving": "Saving…",
   "sourcesImportCancelled": "Import cancelled.",
   "sourcesNeverImported": "Not imported yet",

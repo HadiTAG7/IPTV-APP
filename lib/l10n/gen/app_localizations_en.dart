@@ -896,6 +896,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get sourcesReceivedFromPhone => 'Received from your phone.';
 
   @override
+  String get sourcesNoFilePicker =>
+      'This device has no file picker. Use Type on your phone to send the playlist file.';
+
+  @override
   String get sourcesImportSaving => 'Saving…';
 
   @override

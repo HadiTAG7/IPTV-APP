@@ -36,6 +36,11 @@ final playlistPickerProvider = Provider<PlaylistPicker>(
   (ref) => pickPlaylistFile,
 );
 
+/// `PlatformException.code` of [pickPlaylistFile] when the device has no
+/// system file picker: Fire TV and most Android TV builds lack the document
+/// picker that `file_picker` opens.
+const noFilePickerCode = 'explorer_not_found';
+
 /// [PlaylistPicker] backed by `file_picker`. Any file type is allowed:
 /// Android has no reliable MIME type for `.m3u`, and playlists are often
 /// saved as `.txt`.

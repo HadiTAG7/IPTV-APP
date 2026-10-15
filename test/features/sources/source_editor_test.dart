@@ -457,6 +457,49 @@ void main() {
     await disposeApp(tester, db);
   });
 
+  testWidgets('TV without a file picker: Choose file points to the phone '
+      'upload; other picker failures still say the file was not read', (
+    tester,
+  ) async {
+    final db = openAppTestDb();
+    Object failure = PlatformException(
+      code: noFilePickerCode,
+      message: "Can't find a valid activity to handle the request.",
+    );
+    await pumpAppWith(
+      tester,
+      db: db,
+      caps: tvCaps,
+      overrides: [
+        playlistPickerProvider.overrideWithValue(() async => throw failure),
+      ],
+    );
+    await pressN(tester, _down, 2);
+    await press(tester, LogicalKeyboardKey.select);
+    await settleRoute(tester);
+    expectFocus('type-m3uUrl');
+    await press(tester, LogicalKeyboardKey.arrowRight);
+    expectFocus('type-m3uFile');
+    await press(tester, LogicalKeyboardKey.select);
+    await pressN(tester, _down, 2);
+    expectFocus('pick-file');
+
+    await press(tester, LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.text(enL10n.sourcesNoFilePicker), findsOneWidget);
+    expect(find.text(enL10n.errorFileRead), findsNothing);
+    expectFocus('type-on-phone');
+
+    failure = PlatformException(code: 'unknown_path');
+    await press(tester, _up);
+    expectFocus('pick-file');
+    await press(tester, LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.text(enL10n.errorFileRead), findsOneWidget);
+    expect(find.text(enL10n.sourcesNoFilePicker), findsNothing);
+    await disposeApp(tester, db);
+  });
+
   testWidgets('import progress counts and can be cancelled', (tester) async {
     final panel = (await tester.runAsync(
       () => FakePanel.start(mediaDir: null, liveCount: 3, vodCount: 0),

@@ -95,6 +95,63 @@ class _SpyParser extends XmltvParser {
   }
 }
 
+/// A guide channel that reports every read of its names.
+class _CountedChannel extends EpgChannel {
+  _CountedChannel(EpgChannel c, this._onRead)
+    : super(id: c.id, displayNames: c.displayNames, icon: c.icon);
+
+  final void Function(String id) _onRead;
+
+  @override
+  List<String> get displayNames {
+    _onRead(id);
+    return super.displayNames;
+  }
+}
+
+/// Counts the reads of each guide channel's names while the guide is
+/// parsed, which is when matching runs per batch.
+class _NameReadsParser extends XmltvParser {
+  _NameReadsParser();
+
+  final reads = <String, int>{};
+  var _parsing = false;
+
+  void _onRead(String id) {
+    if (_parsing) reads.update(id, (n) => n + 1, ifAbsent: () => 1);
+  }
+
+  @override
+  Stream<XmltvBatch> parse(
+    Stream<List<int>> bytes, {
+    Set<String>? wantedChannelIds,
+    DateTime? windowStart,
+    DateTime? windowEnd,
+    int batchSize = 5000,
+    int Function(String channelId)? shiftMinutesFor,
+    int offsetMinutes = 0,
+    List<String> preferredLangs = const ['ar', 'en'],
+  }) async* {
+    _parsing = true;
+    await for (final batch in super.parse(
+      bytes,
+      wantedChannelIds: wantedChannelIds,
+      windowStart: windowStart,
+      windowEnd: windowEnd,
+      batchSize: batchSize,
+      shiftMinutesFor: shiftMinutesFor,
+      offsetMinutes: offsetMinutes,
+      preferredLangs: preferredLangs,
+    )) {
+      yield XmltvBatch(
+        channels: [for (final c in batch.channels) _CountedChannel(c, _onRead)],
+        programmes: batch.programmes,
+      );
+    }
+    _parsing = false;
+  }
+}
+
 /// Programmes per channel inside now-12h .. now+3d for [_standardGuide].
 const _perChannel = 12 + 72;
 
@@ -306,6 +363,70 @@ void main() {
       );
       final gamma = channels.firstWhere((c) => c.xmltvId == 'gamma.id');
       expect(gamma.displayNamesNorm, ['gamma one', 'gamma plus']);
+    });
+
+    test('an interleaved guide matches each channel once as it comes; a '
+        'later channel still wins by rule, then by smaller id', () async {
+      const late = 30;
+      final from = _now.subtract(const Duration(hours: 1));
+      // Each <channel> followed by its programmes.
+      server.body = xmltvDoc([
+        channelXml('zz.twin', ['Twin']),
+        ...hourly('zz.twin', from, 2),
+        channelXml('name.up', ['Upgrade']),
+        ...hourly('name.up', from, 2),
+        for (var i = 0; i < late; i++) ...[
+          channelXml('late$i.tv', ['Late $i']),
+          ...hourly('late$i.tv', from, 2),
+        ],
+        // Same rule as zz.twin, smaller id.
+        channelXml('aa.twin', ['Twin']),
+        ...hourly('aa.twin', from, 2),
+        // Stronger rule (tvg-id) than name.up.
+        channelXml('up.tv', ['Something else']),
+        ...hourly('up.tv', from, 2),
+      ]);
+      await syncChannels(db, source, [
+        const ChannelData(key: 't', name: 'Twin', categoryKeys: ['all']),
+        const ChannelData(
+          key: 'u',
+          name: 'Upgrade',
+          tvgId: 'up.tv',
+          categoryKeys: ['all'],
+        ),
+        for (var i = 0; i < late; i++)
+          ChannelData(key: 'l$i', name: 'Late $i', categoryKeys: const ['all']),
+      ]);
+      final parser = _NameReadsParser();
+      service = EpgService(
+        db: db,
+        dioFactory: createDio,
+        clock: clock,
+        batchSize: 2,
+        parser: parser,
+      );
+
+      final events = await runRefresh(service, source);
+
+      expect(events.last, isA<EpgRefreshDone>());
+      final links = await db.epgDao.linksFor(source);
+      expect(links['t']!.xmltvId, 'aa.twin');
+      expect(links['u']!.xmltvId, 'up.tv');
+      expect(links['u']!.kind, EpgMatchKind.tvgId);
+      for (var i = 0; i < late; i++) {
+        expect(links['l$i']!.xmltvId, 'late$i.tv');
+      }
+      // The ids that lost their channel lose their programmes at the end.
+      final lateIds = [for (var i = 0; i < late; i++) 'late$i.tv'];
+      expect(await storedIds(db, guide), {'aa.twin', 'up.tv', ...lateIds});
+      expect(await storedProgrammes(db, guide), hasLength((late + 2) * 2));
+      // Matching read each channel's names once during the download, not
+      // once per later batch.
+      expect(parser.reads, {
+        for (final id in ['zz.twin', 'name.up', ...lateIds, 'aa.twin', 'up.tv'])
+          id: 1,
+      });
+      expect(lastOf<EpgChannelsMatched>(events).matched, late + 2);
     });
 
     test('a body that is not XMLTV fails and keeps the stored guide', () async {

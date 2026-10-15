@@ -918,6 +918,10 @@ class AppLocalizationsAr extends AppLocalizations {
   String get sourcesReceivedFromPhone => 'تم الاستلام من جوالك.';
 
   @override
+  String get sourcesNoFilePicker =>
+      'لا يتوفر على هذا الجهاز مستعرض للملفات. استخدم «اكتب من جوالك» لإرسال ملف قائمة التشغيل.';
+
+  @override
   String get sourcesImportSaving => 'جارٍ الحفظ…';
 
   @override

@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import '../core/text/normalize.dart';
 import 'epg_models.dart';
 
@@ -108,4 +110,86 @@ Map<String, EpgMatch> matchChannels(
     if (nameMatch != null) result[c.key] = EpgMatch(nameMatch, MatchKind.name);
   }
   return result;
+}
+
+/// [matchChannels] for guide channels that arrive in parts (XMLTV files
+/// that interleave `<channel>` and `<programme>` elements), without manual
+/// overrides and with ties going to the smallest id, as for guide channels
+/// sorted by id. After any series of [add] calls, [matches] equals
+/// `matchChannels(channels, sortedById(added))`, a channel added twice
+/// counting with the names of both.
+///
+/// The playlist is indexed once, so an [add] costs time linear in the guide
+/// channels it adds rather than in the playlist.
+class IncrementalMatcher {
+  /// Starts from [matches], which must be what [matchChannels] gives
+  /// [channels] for the guide channels matched so far (sorted by id).
+  IncrementalMatcher(
+    List<MatchCandidate> channels, {
+    Map<String, EpgMatch> matches = const {},
+  }) : _matches = Map.of(matches) {
+    for (final c in channels) {
+      final tvgId = c.tvgId?.trim();
+      if (tvgId != null && tvgId.isNotEmpty) {
+        (_byTvgId[tvgId.toLowerCase()] ??= []).add(c.key);
+      }
+      if (_normalized(c.tvgName) case final norm?) {
+        (_byTvgName[norm] ??= []).add(c.key);
+      }
+      // As in matchChannels: a name equal to tvg-name adds nothing.
+      if (c.name == c.tvgName) continue;
+      if (_normalized(c.name) case final norm?) {
+        (_byName[norm] ??= []).add(c.key);
+      }
+    }
+  }
+
+  /// Candidate keys by lower-cased tvg-id, normalized tvg-name and
+  /// normalized name.
+  final _byTvgId = <String, List<String>>{};
+  final _byTvgName = <String, List<String>>{};
+  final _byName = <String, List<String>>{};
+
+  final Map<String, EpgMatch> _matches;
+
+  /// Current matches, keyed by [MatchCandidate.key].
+  late final Map<String, EpgMatch> matches = UnmodifiableMapView(_matches);
+
+  /// Matches [guideChannels] too and returns the matches that changed. A
+  /// match changes when a new channel qualifies by a stronger rule, or by
+  /// the same rule with a smaller id.
+  Map<String, EpgMatch> add(Iterable<EpgChannel> guideChannels) {
+    final changed = <String, EpgMatch>{};
+    void offer(List<String>? keys, String id, MatchKind kind) {
+      if (keys == null) return;
+      for (final key in keys) {
+        final current = _matches[key];
+        if (current != null &&
+            (current.kind.index < kind.index ||
+                (current.kind == kind && current.xmltvId.compareTo(id) <= 0))) {
+          continue;
+        }
+        _matches[key] = changed[key] = EpgMatch(id, kind);
+      }
+    }
+
+    for (final g in guideChannels) {
+      final id = g.id.trim();
+      if (id.isEmpty) continue;
+      offer(_byTvgId[id.toLowerCase()], g.id, MatchKind.tvgId);
+      for (final display in g.displayNames) {
+        final norm = normalizeForEpg(display);
+        if (norm.isEmpty) continue;
+        offer(_byTvgName[norm], g.id, MatchKind.tvgName);
+        offer(_byName[norm], g.id, MatchKind.name);
+      }
+    }
+    return changed;
+  }
+
+  static String? _normalized(String? text) {
+    if (text == null) return null;
+    final norm = normalizeForEpg(text);
+    return norm.isEmpty ? null : norm;
+  }
 }

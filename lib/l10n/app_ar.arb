@@ -251,6 +251,7 @@
   "sourcesXtreamLinkConverted": "تم التحويل إلى Xtream Codes. راجع البيانات ثم اضغط «اختبار وحفظ».",
   "sourcesUserAgentDefault": "الافتراضي",
   "sourcesReceivedFromPhone": "تم الاستلام من جوالك.",
+  "sourcesNoFilePicker": "لا يتوفر على هذا الجهاز مستعرض للملفات. استخدم «اكتب من جوالك» لإرسال ملف قائمة التشغيل.",
   "sourcesImportSaving": "جارٍ الحفظ…",
   "sourcesImportCancelled": "تم إلغاء الاستيراد.",
   "sourcesNeverImported": "لم يُستورد بعد",
