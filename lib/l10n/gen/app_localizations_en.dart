@@ -860,4 +860,111 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'This subscription has expired.';
+
+  @override
+  String get player_playNow => 'Play now';
+
+  @override
+  String get player_pause => 'Pause';
+
+  @override
+  String get player_options => 'Options';
+
+  @override
+  String get player_noTracks => 'No tracks available';
+
+  @override
+  String get player_itemUnavailable => 'This item can\'t be played.';
+
+  @override
+  String player_noChannelNumber(int number) {
+    return 'No channel $number';
+  }
+
+  @override
+  String get player_favoriteAdded => 'Added to favorites';
+
+  @override
+  String get player_favoriteRemoved => 'Removed from favorites';
+
+  @override
+  String player_episodeLabel(int season, int episode) {
+    return 'Season $season · Episode $episode';
+  }
+
+  @override
+  String get player_statsBuffer => 'Buffer';
+
+  @override
+  String get player_statsReconnects => 'Reconnects';
+
+  @override
+  String get player_statsVideoOutput => 'Video output';
+
+  @override
+  String get player_statsFormat => 'Stream format';
+
+  @override
+  String get player_statsAudioCodec => 'Audio codec';
+
+  @override
+  String get diagnostics_app => 'App';
+
+  @override
+  String get diagnostics_platform => 'Platform';
+
+  @override
+  String get diagnostics_model => 'Model';
+
+  @override
+  String get diagnostics_chipset => 'Chipset';
+
+  @override
+  String get diagnostics_cpuCores => 'CPU cores';
+
+  @override
+  String get diagnostics_lowRam => 'Low-RAM device';
+
+  @override
+  String get diagnostics_detectedTv => 'Detected as TV';
+
+  @override
+  String get diagnostics_touch => 'Touchscreen';
+
+  @override
+  String get diagnostics_layout => 'Layout';
+
+  @override
+  String get diagnostics_testing => 'Testing…';
+
+  @override
+  String get diagnostics_notRun => 'Not run yet';
+
+  @override
+  String diagnostics_testStream(int n) {
+    return 'Test stream $n';
+  }
+
+  @override
+  String get diagnostics_testStreamsNote =>
+      'Public test streams from Apple and Mux. Each engine plays them one after the other.';
+
+  @override
+  String get diagnostics_unknown => 'Unknown';
+
+  @override
+  String get diagnostics_qrHint =>
+      'Scan this code with your phone to share the summary.';
+
+  @override
+  String get diagnostics_subtitleLanguage => 'Preferred subtitle language';
+
+  @override
+  String get diagnostics_maxConnections => 'Max connections';
+
+  @override
+  String get diagnostics_desktop => 'Desktop';
+
+  @override
+  String get diagnostics_runAgain => 'Run again';
 }

@@ -881,4 +881,110 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'انتهى هذا الاشتراك.';
+
+  @override
+  String get player_playNow => 'شغّل الآن';
+
+  @override
+  String get player_pause => 'إيقاف مؤقت';
+
+  @override
+  String get player_options => 'الخيارات';
+
+  @override
+  String get player_noTracks => 'لا توجد مسارات متاحة';
+
+  @override
+  String get player_itemUnavailable => 'لا يمكن تشغيل هذا العنصر.';
+
+  @override
+  String player_noChannelNumber(int number) {
+    return 'لا توجد قناة برقم $number';
+  }
+
+  @override
+  String get player_favoriteAdded => 'أُضيفت إلى المفضلة';
+
+  @override
+  String get player_favoriteRemoved => 'أُزيلت من المفضلة';
+
+  @override
+  String player_episodeLabel(int season, int episode) {
+    return 'الموسم $season · الحلقة $episode';
+  }
+
+  @override
+  String get player_statsBuffer => 'التخزين المؤقت';
+
+  @override
+  String get player_statsReconnects => 'مرات إعادة الاتصال';
+
+  @override
+  String get player_statsVideoOutput => 'عرض الفيديو';
+
+  @override
+  String get player_statsFormat => 'صيغة البث';
+
+  @override
+  String get player_statsAudioCodec => 'ترميز الصوت';
+
+  @override
+  String get diagnostics_app => 'التطبيق';
+
+  @override
+  String get diagnostics_platform => 'النظام';
+
+  @override
+  String get diagnostics_model => 'الطراز';
+
+  @override
+  String get diagnostics_chipset => 'الشريحة';
+
+  @override
+  String get diagnostics_cpuCores => 'أنوية المعالج';
+
+  @override
+  String get diagnostics_lowRam => 'جهاز بذاكرة منخفضة';
+
+  @override
+  String get diagnostics_detectedTv => 'مُكتشَف كتلفزيون';
+
+  @override
+  String get diagnostics_touch => 'شاشة لمس';
+
+  @override
+  String get diagnostics_layout => 'التخطيط';
+
+  @override
+  String get diagnostics_testing => 'جارٍ الاختبار…';
+
+  @override
+  String get diagnostics_notRun => 'لم يُشغَّل بعد';
+
+  @override
+  String diagnostics_testStream(int n) {
+    return 'بث الاختبار $n';
+  }
+
+  @override
+  String get diagnostics_testStreamsNote =>
+      'بثوث اختبار عامة من Apple و Mux. يشغّلها كل مشغّل واحداً تلو الآخر.';
+
+  @override
+  String get diagnostics_unknown => 'غير معروف';
+
+  @override
+  String get diagnostics_qrHint => 'امسح هذا الرمز بجوالك لمشاركة الملخص.';
+
+  @override
+  String get diagnostics_subtitleLanguage => 'لغة الترجمة المفضلة';
+
+  @override
+  String get diagnostics_maxConnections => 'الحد الأقصى للاتصالات';
+
+  @override
+  String get diagnostics_desktop => 'سطح المكتب';
+
+  @override
+  String get diagnostics_runAgain => 'إعادة الاختبار';
 }

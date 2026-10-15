@@ -1543,6 +1543,204 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This subscription has expired.'**
   String get errorExpiredNoDate;
+
+  /// No description provided for @player_playNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Play now'**
+  String get player_playNow;
+
+  /// No description provided for @player_pause.
+  ///
+  /// In en, this message translates to:
+  /// **'Pause'**
+  String get player_pause;
+
+  /// No description provided for @player_options.
+  ///
+  /// In en, this message translates to:
+  /// **'Options'**
+  String get player_options;
+
+  /// No description provided for @player_noTracks.
+  ///
+  /// In en, this message translates to:
+  /// **'No tracks available'**
+  String get player_noTracks;
+
+  /// No description provided for @player_itemUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This item can\'t be played.'**
+  String get player_itemUnavailable;
+
+  /// Shown when a typed channel number is not in the current list.
+  ///
+  /// In en, this message translates to:
+  /// **'No channel {number}'**
+  String player_noChannelNumber(int number);
+
+  /// No description provided for @player_favoriteAdded.
+  ///
+  /// In en, this message translates to:
+  /// **'Added to favorites'**
+  String get player_favoriteAdded;
+
+  /// No description provided for @player_favoriteRemoved.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed from favorites'**
+  String get player_favoriteRemoved;
+
+  /// No description provided for @player_episodeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Season {season} · Episode {episode}'**
+  String player_episodeLabel(int season, int episode);
+
+  /// No description provided for @player_statsBuffer.
+  ///
+  /// In en, this message translates to:
+  /// **'Buffer'**
+  String get player_statsBuffer;
+
+  /// No description provided for @player_statsReconnects.
+  ///
+  /// In en, this message translates to:
+  /// **'Reconnects'**
+  String get player_statsReconnects;
+
+  /// No description provided for @player_statsVideoOutput.
+  ///
+  /// In en, this message translates to:
+  /// **'Video output'**
+  String get player_statsVideoOutput;
+
+  /// No description provided for @player_statsFormat.
+  ///
+  /// In en, this message translates to:
+  /// **'Stream format'**
+  String get player_statsFormat;
+
+  /// No description provided for @player_statsAudioCodec.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio codec'**
+  String get player_statsAudioCodec;
+
+  /// No description provided for @diagnostics_app.
+  ///
+  /// In en, this message translates to:
+  /// **'App'**
+  String get diagnostics_app;
+
+  /// No description provided for @diagnostics_platform.
+  ///
+  /// In en, this message translates to:
+  /// **'Platform'**
+  String get diagnostics_platform;
+
+  /// No description provided for @diagnostics_model.
+  ///
+  /// In en, this message translates to:
+  /// **'Model'**
+  String get diagnostics_model;
+
+  /// No description provided for @diagnostics_chipset.
+  ///
+  /// In en, this message translates to:
+  /// **'Chipset'**
+  String get diagnostics_chipset;
+
+  /// No description provided for @diagnostics_cpuCores.
+  ///
+  /// In en, this message translates to:
+  /// **'CPU cores'**
+  String get diagnostics_cpuCores;
+
+  /// No description provided for @diagnostics_lowRam.
+  ///
+  /// In en, this message translates to:
+  /// **'Low-RAM device'**
+  String get diagnostics_lowRam;
+
+  /// No description provided for @diagnostics_detectedTv.
+  ///
+  /// In en, this message translates to:
+  /// **'Detected as TV'**
+  String get diagnostics_detectedTv;
+
+  /// No description provided for @diagnostics_touch.
+  ///
+  /// In en, this message translates to:
+  /// **'Touchscreen'**
+  String get diagnostics_touch;
+
+  /// No description provided for @diagnostics_layout.
+  ///
+  /// In en, this message translates to:
+  /// **'Layout'**
+  String get diagnostics_layout;
+
+  /// No description provided for @diagnostics_testing.
+  ///
+  /// In en, this message translates to:
+  /// **'Testing…'**
+  String get diagnostics_testing;
+
+  /// No description provided for @diagnostics_notRun.
+  ///
+  /// In en, this message translates to:
+  /// **'Not run yet'**
+  String get diagnostics_notRun;
+
+  /// No description provided for @diagnostics_testStream.
+  ///
+  /// In en, this message translates to:
+  /// **'Test stream {n}'**
+  String diagnostics_testStream(int n);
+
+  /// No description provided for @diagnostics_testStreamsNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Public test streams from Apple and Mux. Each engine plays them one after the other.'**
+  String get diagnostics_testStreamsNote;
+
+  /// No description provided for @diagnostics_unknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown'**
+  String get diagnostics_unknown;
+
+  /// No description provided for @diagnostics_qrHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Scan this code with your phone to share the summary.'**
+  String get diagnostics_qrHint;
+
+  /// No description provided for @diagnostics_subtitleLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Preferred subtitle language'**
+  String get diagnostics_subtitleLanguage;
+
+  /// No description provided for @diagnostics_maxConnections.
+  ///
+  /// In en, this message translates to:
+  /// **'Max connections'**
+  String get diagnostics_maxConnections;
+
+  /// No description provided for @diagnostics_desktop.
+  ///
+  /// In en, this message translates to:
+  /// **'Desktop'**
+  String get diagnostics_desktop;
+
+  /// No description provided for @diagnostics_runAgain.
+  ///
+  /// In en, this message translates to:
+  /// **'Run again'**
+  String get diagnostics_runAgain;
 }
 
 class _AppLocalizationsDelegate

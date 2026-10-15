@@ -355,5 +355,50 @@
   "errorExpiredNoDate": "This subscription has expired.",
   "@errorExpiredNoDate": {
     "description": "Account expiry error when the provider sent no expiry date."
-  }
+  },
+
+  "player_playNow": "Play now",
+  "player_pause": "Pause",
+  "player_options": "Options",
+  "player_noTracks": "No tracks available",
+  "player_itemUnavailable": "This item can't be played.",
+  "player_noChannelNumber": "No channel {number}",
+  "@player_noChannelNumber": {
+    "description": "Shown when a typed channel number is not in the current list.",
+    "placeholders": {"number": {"type": "int"}}
+  },
+  "player_favoriteAdded": "Added to favorites",
+  "player_favoriteRemoved": "Removed from favorites",
+  "player_episodeLabel": "Season {season} · Episode {episode}",
+  "@player_episodeLabel": {
+    "placeholders": {"season": {"type": "int"}, "episode": {"type": "int"}}
+  },
+  "player_statsBuffer": "Buffer",
+  "player_statsReconnects": "Reconnects",
+  "player_statsVideoOutput": "Video output",
+  "player_statsFormat": "Stream format",
+  "player_statsAudioCodec": "Audio codec",
+
+  "diagnostics_app": "App",
+  "diagnostics_platform": "Platform",
+  "diagnostics_model": "Model",
+  "diagnostics_chipset": "Chipset",
+  "diagnostics_cpuCores": "CPU cores",
+  "diagnostics_lowRam": "Low-RAM device",
+  "diagnostics_detectedTv": "Detected as TV",
+  "diagnostics_touch": "Touchscreen",
+  "diagnostics_layout": "Layout",
+  "diagnostics_testing": "Testing…",
+  "diagnostics_notRun": "Not run yet",
+  "diagnostics_testStream": "Test stream {n}",
+  "@diagnostics_testStream": {
+    "placeholders": {"n": {"type": "int"}}
+  },
+  "diagnostics_testStreamsNote": "Public test streams from Apple and Mux. Each engine plays them one after the other.",
+  "diagnostics_unknown": "Unknown",
+  "diagnostics_qrHint": "Scan this code with your phone to share the summary.",
+  "diagnostics_subtitleLanguage": "Preferred subtitle language",
+  "diagnostics_maxConnections": "Max connections",
+  "diagnostics_desktop": "Desktop",
+  "diagnostics_runAgain": "Run again"
 }
