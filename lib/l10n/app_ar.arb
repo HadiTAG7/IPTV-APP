@@ -257,5 +257,9 @@
   "searchMovies": "الأفلام",
   "searchSeries": "المسلسلات",
 
-  "errorExpiredNoDate": "انتهى هذا الاشتراك."
+  "errorExpiredNoDate": "انتهى هذا الاشتراك.",
+
+  "guideRefreshFailed": "تعذّر تحديث الدليل",
+  "guideMinutesLeft": "{minutes, plural, zero{ينتهي الآن} one{تبقّت دقيقة واحدة} two{تبقّت دقيقتان} few{تبقّت {minutes} دقائق} many{تبقّت {minutes} دقيقة} other{تبقّت {minutes} دقيقة}}",
+  "guideWatchChannel": "مشاهدة القناة"
 }

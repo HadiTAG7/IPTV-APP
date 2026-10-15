@@ -355,5 +355,19 @@
   "errorExpiredNoDate": "This subscription has expired.",
   "@errorExpiredNoDate": {
     "description": "Account expiry error when the provider sent no expiry date."
+  },
+
+  "guideRefreshFailed": "Couldn't update the guide",
+  "@guideRefreshFailed": {
+    "description": "Snack bar when a guide refresh fails as a whole."
+  },
+  "guideMinutesLeft": "{minutes, plural, =0{Ending now} =1{1 min left} other{{minutes} min left}}",
+  "@guideMinutesLeft": {
+    "description": "Time left of the programme on air, in the guide's info panel.",
+    "placeholders": {"minutes": {"type": "int"}}
+  },
+  "guideWatchChannel": "Watch channel",
+  "@guideWatchChannel": {
+    "description": "Button in the programme info of the guide: plays the programme's channel live."
   }
 }

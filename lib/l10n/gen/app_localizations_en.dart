@@ -860,4 +860,22 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'This subscription has expired.';
+
+  @override
+  String get guideRefreshFailed => 'Couldn\'t update the guide';
+
+  @override
+  String guideMinutesLeft(int minutes) {
+    String _temp0 = intl.Intl.pluralLogic(
+      minutes,
+      locale: localeName,
+      other: '$minutes min left',
+      one: '1 min left',
+      zero: 'Ending now',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get guideWatchChannel => 'Watch channel';
 }

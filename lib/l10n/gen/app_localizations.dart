@@ -1543,6 +1543,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This subscription has expired.'**
   String get errorExpiredNoDate;
+
+  /// Snack bar when a guide refresh fails as a whole.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t update the guide'**
+  String get guideRefreshFailed;
+
+  /// Time left of the programme on air, in the guide's info panel.
+  ///
+  /// In en, this message translates to:
+  /// **'{minutes, plural, =0{Ending now} =1{1 min left} other{{minutes} min left}}'**
+  String guideMinutesLeft(int minutes);
+
+  /// Button in the programme info of the guide: plays the programme's channel live.
+  ///
+  /// In en, this message translates to:
+  /// **'Watch channel'**
+  String get guideWatchChannel;
 }
 
 class _AppLocalizationsDelegate

@@ -881,4 +881,25 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'انتهى هذا الاشتراك.';
+
+  @override
+  String get guideRefreshFailed => 'تعذّر تحديث الدليل';
+
+  @override
+  String guideMinutesLeft(int minutes) {
+    String _temp0 = intl.Intl.pluralLogic(
+      minutes,
+      locale: localeName,
+      other: 'تبقّت $minutes دقيقة',
+      many: 'تبقّت $minutes دقيقة',
+      few: 'تبقّت $minutes دقائق',
+      two: 'تبقّت دقيقتان',
+      one: 'تبقّت دقيقة واحدة',
+      zero: 'ينتهي الآن',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get guideWatchChannel => 'مشاهدة القناة';
 }
