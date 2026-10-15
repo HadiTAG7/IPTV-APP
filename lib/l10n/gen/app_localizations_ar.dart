@@ -881,4 +881,188 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'انتهى هذا الاشتراك.';
+
+  @override
+  String settings_liteAuto(String state) {
+    return 'تلقائي ($state)';
+  }
+
+  @override
+  String get settings_preferredSubtitleLanguage => 'لغة الترجمة المفضّلة';
+
+  @override
+  String get settings_defaultAspect => 'نسبة العرض الافتراضية';
+
+  @override
+  String get settings_langArabic => 'العربية';
+
+  @override
+  String get settings_langEnglish => 'الإنجليزية';
+
+  @override
+  String get settings_langFrench => 'الفرنسية';
+
+  @override
+  String get settings_langTurkish => 'التركية';
+
+  @override
+  String settings_guideFor(String name) {
+    return 'للمصدر ⁨$name⁩';
+  }
+
+  @override
+  String get settings_epgNoUrls =>
+      'لا توجد روابط دليل بعد. حدّث المصدر أو أضف رابطاً.';
+
+  @override
+  String get settings_addEpgUrl => 'إضافة رابط دليل';
+
+  @override
+  String get settings_epgUrlHint => 'http://example.com/guide.xml.gz';
+
+  @override
+  String get settings_epgUrlExists => 'رابط الدليل هذا موجود في القائمة.';
+
+  @override
+  String get settings_deleteEpgUrl => 'حذف رابط الدليل';
+
+  @override
+  String get settings_deleteEpgUrlBody => 'ستُحذف برامجه من هذا الجهاز.';
+
+  @override
+  String get settings_epgOriginXtream => 'من المزوّد';
+
+  @override
+  String get settings_epgOriginPlaylist => 'من قائمة التشغيل';
+
+  @override
+  String get settings_epgOriginManual => 'أضفته أنت';
+
+  @override
+  String get settings_epgStatusNever => 'لم يُحمَّل بعد';
+
+  @override
+  String get settings_epgStatusOk => 'تم التحميل';
+
+  @override
+  String get settings_epgStatusNotModified => 'محدَّث';
+
+  @override
+  String get settings_epgStatusFailed => 'فشل التحميل';
+
+  @override
+  String get settings_epgStatusCancelled => 'أُلغي';
+
+  @override
+  String settings_programmeCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count برنامج',
+      many: '$count برنامجاً',
+      few: '$count برامج',
+      two: 'برنامجان',
+      one: 'برنامج واحد',
+      zero: 'لا توجد برامج',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String settings_epgLastImport(DateTime date) {
+    final intl.DateFormat dateDateFormat = intl.DateFormat.yMMMd(localeName)
+        .add_Hm();
+    final String dateString = dateDateFormat.format(date);
+
+    return 'آخر تنزيل $dateString';
+  }
+
+  @override
+  String get settings_epgOffsetHint =>
+      'يقدّم أو يؤخّر أوقات دليل هذا المصدر. استخدمه إذا ظهرت البرامج في وقت غير صحيح.';
+
+  @override
+  String get settings_epgOffsetNone => 'بدون فرق';
+
+  @override
+  String get settings_epgOffsetEarlier => 'تقديم نصف ساعة';
+
+  @override
+  String get settings_epgOffsetLater => 'تأخير نصف ساعة';
+
+  @override
+  String get settings_epgRefreshNow => 'تنزيل الدليل من جديد الآن';
+
+  @override
+  String get settings_epgRefreshInterval => 'فترة تحديث الدليل';
+
+  @override
+  String settings_everyHours(int hours) {
+    String _temp0 = intl.Intl.pluralLogic(
+      hours,
+      locale: localeName,
+      other: 'كل $hours ساعة',
+      many: 'كل $hours ساعة',
+      few: 'كل $hours ساعات',
+      two: 'كل ساعتين',
+      one: 'كل ساعة',
+      zero: 'كل $hours ساعة',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get settings_saveFailed => 'تعذّر حفظ التغيير.';
+
+  @override
+  String get help_playerOnlyTitle => 'التطبيق مشغّل فقط';
+
+  @override
+  String get help_playerOnlyBody =>
+      'لا يحتوي التطبيق على أي قنوات أو قوائم تشغيل أو روابط مزوّدين. يشغّل فقط روابط M3U وبيانات دخول Xtream التي تضيفها بنفسك من مصدر يحق لك استخدامه.';
+
+  @override
+  String get help_freeSourcesTitle => 'مصادر مجانية نظامية';
+
+  @override
+  String get help_freeSourcesBody =>
+      'مشروع iptv-org ينشر قوائم عامة بروابط تتيحها القنوات نفسها، مثل العربية والجزيرة وسكاي نيوز عربية وفرانس 24 ودويتشه فيله وبي بي سي عربي. بعض الروابط يتوقف أو يكون محجوباً جغرافياً، والرابط العام لا يعني دائماً أن استخدامه في تطبيقات أخرى مسموح، فالأفضل اختيار القنوات المستضافة على مواقع القنوات نفسها. التطبيق لا يضيف هذه القوائم من تلقاء نفسه: اكتب الرابط بنفسك عند إضافة مصدر.';
+
+  @override
+  String get help_iptvOrgSaudi => 'القنوات السعودية';
+
+  @override
+  String get help_iptvOrgArabic => 'القنوات الناطقة بالعربية';
+
+  @override
+  String get help_addAsSource => 'إضافة كمصدر';
+
+  @override
+  String get help_receiverBody =>
+      'يمكن لجهاز الاستقبال الفضائي الخاص بك (مثل ⁦Enigma2⁩ مع ⁦OpenWebif⁩ أو ⁦Tvheadend⁩ أو موالف ⁦SAT>IP⁩) تصدير M3U و XMLTV للقنوات المجانية التي تستقبلها أصلاً، وهي أنظف طريقة نظامية للحصول على قائمة تشغيل مع دليل برامج.';
+
+  @override
+  String get help_officialAppsTitle => 'التطبيقات الرسمية';
+
+  @override
+  String get help_officialAppsBody =>
+      'المجانية: «الأولى» (القنوات السعودية)، والباقة المجانية في «شاهد»، و«ثمانية»، و⁦Samsung TV Plus⁩. المدفوعة: شاهد ⁦VIP⁩، و⁦TOD by beIN⁩، و⁦stc tv⁩، و⁦OSN+⁩. هذه الخدمات تعمل من تطبيقاتها الرسمية فقط ولا تعطيك رابط M3U أو بيانات Xtream، لذلك لا يمكن إضافتها هنا. ولا توجد خدمة سعودية مرخّصة تبيع القنوات المدفوعة بصيغة M3U أو Xtream.';
+
+  @override
+  String get help_warningSignsMore =>
+      '• تجربة مجانية لمدة 24 ساعة\n• الدفع بتحويل لشخص أو ببطاقات هدايا أو عملات رقمية\n• يطلب منك تثبيت تطبيقات من خارج المتجر أو استخدام ⁦VPN⁩';
+
+  @override
+  String get help_legitServices =>
+      'الخدمات النظامية تقدّمها قنوات أو شركات اتصالات معروفة، ولها تطبيقات رسمية في المتاجر وفواتير ضريبية ووسائل دفع رسمية.';
+
+  @override
+  String get help_updatesTitle => 'طريقة تثبيت التحديثات';
+
+  @override
+  String get help_updatesBody =>
+      'نزّل أحدث إصدار من صفحة الإصدارات في المشروع وثبّته فوق النسخة الحالية، وتبقى مصادرك ومفضلتك وسجل المشاهدة كما هي. على أندرويد TV أو ⁦Fire TV⁩ اكتب هذا الرابط في تطبيق ⁦Downloader⁩. على ويندوز أغلق التطبيق وفك ضغط ملف zip الجديد في المجلد نفسه.';
+
+  @override
+  String get help_downloadLink => 'رابط التنزيل';
 }

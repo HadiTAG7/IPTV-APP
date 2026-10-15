@@ -1543,6 +1543,288 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This subscription has expired.'**
   String get errorExpiredNoDate;
+
+  /// Lite mode Auto choice with the value detected on this device (On or Off).
+  ///
+  /// In en, this message translates to:
+  /// **'Auto ({state})'**
+  String settings_liteAuto(String state);
+
+  /// No description provided for @settings_preferredSubtitleLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Preferred subtitle language'**
+  String get settings_preferredSubtitleLanguage;
+
+  /// No description provided for @settings_defaultAspect.
+  ///
+  /// In en, this message translates to:
+  /// **'Default aspect ratio'**
+  String get settings_defaultAspect;
+
+  /// No description provided for @settings_langArabic.
+  ///
+  /// In en, this message translates to:
+  /// **'Arabic'**
+  String get settings_langArabic;
+
+  /// No description provided for @settings_langEnglish.
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get settings_langEnglish;
+
+  /// No description provided for @settings_langFrench.
+  ///
+  /// In en, this message translates to:
+  /// **'French'**
+  String get settings_langFrench;
+
+  /// No description provided for @settings_langTurkish.
+  ///
+  /// In en, this message translates to:
+  /// **'Turkish'**
+  String get settings_langTurkish;
+
+  /// Under the TV guide header: the source these settings belong to. {name} is wrapped in U+2068/U+2069 (first-strong isolate).
+  ///
+  /// In en, this message translates to:
+  /// **'For ⁨{name}⁩'**
+  String settings_guideFor(String name);
+
+  /// No description provided for @settings_epgNoUrls.
+  ///
+  /// In en, this message translates to:
+  /// **'No guide URLs yet. Sync the source or add one.'**
+  String get settings_epgNoUrls;
+
+  /// No description provided for @settings_addEpgUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Add guide URL'**
+  String get settings_addEpgUrl;
+
+  /// No description provided for @settings_epgUrlHint.
+  ///
+  /// In en, this message translates to:
+  /// **'http://example.com/guide.xml.gz'**
+  String get settings_epgUrlHint;
+
+  /// No description provided for @settings_epgUrlExists.
+  ///
+  /// In en, this message translates to:
+  /// **'This guide URL is already in the list.'**
+  String get settings_epgUrlExists;
+
+  /// No description provided for @settings_deleteEpgUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete guide URL'**
+  String get settings_deleteEpgUrl;
+
+  /// No description provided for @settings_deleteEpgUrlBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Its programmes will be removed from this device.'**
+  String get settings_deleteEpgUrlBody;
+
+  /// No description provided for @settings_epgOriginXtream.
+  ///
+  /// In en, this message translates to:
+  /// **'From the provider'**
+  String get settings_epgOriginXtream;
+
+  /// No description provided for @settings_epgOriginPlaylist.
+  ///
+  /// In en, this message translates to:
+  /// **'From the playlist'**
+  String get settings_epgOriginPlaylist;
+
+  /// No description provided for @settings_epgOriginManual.
+  ///
+  /// In en, this message translates to:
+  /// **'Added by you'**
+  String get settings_epgOriginManual;
+
+  /// No description provided for @settings_epgStatusNever.
+  ///
+  /// In en, this message translates to:
+  /// **'Not loaded yet'**
+  String get settings_epgStatusNever;
+
+  /// No description provided for @settings_epgStatusOk.
+  ///
+  /// In en, this message translates to:
+  /// **'Loaded'**
+  String get settings_epgStatusOk;
+
+  /// No description provided for @settings_epgStatusNotModified.
+  ///
+  /// In en, this message translates to:
+  /// **'Up to date'**
+  String get settings_epgStatusNotModified;
+
+  /// No description provided for @settings_epgStatusFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Failed'**
+  String get settings_epgStatusFailed;
+
+  /// No description provided for @settings_epgStatusCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancelled'**
+  String get settings_epgStatusCancelled;
+
+  /// Programmes stored for one guide URL.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{No programmes} =1{1 programme} other{{count} programmes}}'**
+  String settings_programmeCount(int count);
+
+  /// When a guide URL was last downloaded in full.
+  ///
+  /// In en, this message translates to:
+  /// **'Imported {date}'**
+  String settings_epgLastImport(DateTime date);
+
+  /// No description provided for @settings_epgOffsetHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Moves this source\'s guide times. Use it when programmes show at the wrong time.'**
+  String get settings_epgOffsetHint;
+
+  /// No description provided for @settings_epgOffsetNone.
+  ///
+  /// In en, this message translates to:
+  /// **'No offset'**
+  String get settings_epgOffsetNone;
+
+  /// No description provided for @settings_epgOffsetEarlier.
+  ///
+  /// In en, this message translates to:
+  /// **'30 minutes earlier'**
+  String get settings_epgOffsetEarlier;
+
+  /// No description provided for @settings_epgOffsetLater.
+  ///
+  /// In en, this message translates to:
+  /// **'30 minutes later'**
+  String get settings_epgOffsetLater;
+
+  /// No description provided for @settings_epgRefreshNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Download the guide again now'**
+  String get settings_epgRefreshNow;
+
+  /// No description provided for @settings_epgRefreshInterval.
+  ///
+  /// In en, this message translates to:
+  /// **'Guide refresh interval'**
+  String get settings_epgRefreshInterval;
+
+  /// How often the guide is refreshed.
+  ///
+  /// In en, this message translates to:
+  /// **'{hours, plural, =1{Every hour} other{Every {hours} hours}}'**
+  String settings_everyHours(int hours);
+
+  /// No description provided for @settings_saveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t save the change.'**
+  String get settings_saveFailed;
+
+  /// No description provided for @help_playerOnlyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The app is a player only'**
+  String get help_playerOnlyTitle;
+
+  /// No description provided for @help_playerOnlyBody.
+  ///
+  /// In en, this message translates to:
+  /// **'IPTV Player contains no channels, playlists or provider links. It plays only the M3U links and Xtream logins you add yourself, from sources you have the right to use.'**
+  String get help_playerOnlyBody;
+
+  /// No description provided for @help_freeSourcesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Free legal sources'**
+  String get help_freeSourcesTitle;
+
+  /// No description provided for @help_freeSourcesBody.
+  ///
+  /// In en, this message translates to:
+  /// **'The iptv-org project lists public links that broadcasters such as Al Arabiya, Al Jazeera, Sky News Arabia, France 24, DW and BBC Arabic publish themselves. Some links stop working or are geo-blocked, and a public link is not always cleared for use in other apps, so prefer channels hosted on the broadcasters\' own sites. The app never adds these lists for you: type a link when you add a source.'**
+  String get help_freeSourcesBody;
+
+  /// No description provided for @help_iptvOrgSaudi.
+  ///
+  /// In en, this message translates to:
+  /// **'Saudi channels'**
+  String get help_iptvOrgSaudi;
+
+  /// No description provided for @help_iptvOrgArabic.
+  ///
+  /// In en, this message translates to:
+  /// **'Arabic-language channels'**
+  String get help_iptvOrgArabic;
+
+  /// No description provided for @help_addAsSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Add as source'**
+  String get help_addAsSource;
+
+  /// No description provided for @help_receiverBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Your own satellite receiver (for example Enigma2 with OpenWebif, Tvheadend or a SAT>IP tuner) can export M3U and XMLTV for the free-to-air channels you already receive. It is the cleanest legal way to get a playlist with a guide.'**
+  String get help_receiverBody;
+
+  /// No description provided for @help_officialAppsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Official apps'**
+  String get help_officialAppsTitle;
+
+  /// No description provided for @help_officialAppsBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Free: Aloula (the Saudi channels), Shahid\'s free tier, Thmanyah and Samsung TV Plus. Paid: Shahid VIP, TOD by beIN, stc tv and OSN+. These services work only in their own apps and don\'t give M3U links or Xtream logins, so they can\'t be added here. No licensed Saudi service sells premium channels as M3U or Xtream.'**
+  String get help_officialAppsBody;
+
+  /// No description provided for @help_warningSignsMore.
+  ///
+  /// In en, this message translates to:
+  /// **'• Free 24-hour trials\n• Payment by transfer to a person, gift cards or crypto\n• Asks you to install apps from outside the store or to use a VPN'**
+  String get help_warningSignsMore;
+
+  /// No description provided for @help_legitServices.
+  ///
+  /// In en, this message translates to:
+  /// **'Legitimate services are known broadcasters or telecom companies, with official store apps, VAT invoices and official payment methods.'**
+  String get help_legitServices;
+
+  /// No description provided for @help_updatesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'How to install updates'**
+  String get help_updatesTitle;
+
+  /// No description provided for @help_updatesBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Download the latest version from the project\'s releases page and install it over the current one; your sources, favorites and watch progress stay. On Android TV or Fire TV, type this link into the Downloader app. On Windows, close the app and extract the new zip into the same folder.'**
+  String get help_updatesBody;
+
+  /// No description provided for @help_downloadLink.
+  ///
+  /// In en, this message translates to:
+  /// **'Download link'**
+  String get help_downloadLink;
 }
 
 class _AppLocalizationsDelegate

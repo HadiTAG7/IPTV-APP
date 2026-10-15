@@ -860,4 +860,183 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get errorExpiredNoDate => 'This subscription has expired.';
+
+  @override
+  String settings_liteAuto(String state) {
+    return 'Auto ($state)';
+  }
+
+  @override
+  String get settings_preferredSubtitleLanguage =>
+      'Preferred subtitle language';
+
+  @override
+  String get settings_defaultAspect => 'Default aspect ratio';
+
+  @override
+  String get settings_langArabic => 'Arabic';
+
+  @override
+  String get settings_langEnglish => 'English';
+
+  @override
+  String get settings_langFrench => 'French';
+
+  @override
+  String get settings_langTurkish => 'Turkish';
+
+  @override
+  String settings_guideFor(String name) {
+    return 'For ⁨$name⁩';
+  }
+
+  @override
+  String get settings_epgNoUrls =>
+      'No guide URLs yet. Sync the source or add one.';
+
+  @override
+  String get settings_addEpgUrl => 'Add guide URL';
+
+  @override
+  String get settings_epgUrlHint => 'http://example.com/guide.xml.gz';
+
+  @override
+  String get settings_epgUrlExists => 'This guide URL is already in the list.';
+
+  @override
+  String get settings_deleteEpgUrl => 'Delete guide URL';
+
+  @override
+  String get settings_deleteEpgUrlBody =>
+      'Its programmes will be removed from this device.';
+
+  @override
+  String get settings_epgOriginXtream => 'From the provider';
+
+  @override
+  String get settings_epgOriginPlaylist => 'From the playlist';
+
+  @override
+  String get settings_epgOriginManual => 'Added by you';
+
+  @override
+  String get settings_epgStatusNever => 'Not loaded yet';
+
+  @override
+  String get settings_epgStatusOk => 'Loaded';
+
+  @override
+  String get settings_epgStatusNotModified => 'Up to date';
+
+  @override
+  String get settings_epgStatusFailed => 'Failed';
+
+  @override
+  String get settings_epgStatusCancelled => 'Cancelled';
+
+  @override
+  String settings_programmeCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count programmes',
+      one: '1 programme',
+      zero: 'No programmes',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String settings_epgLastImport(DateTime date) {
+    final intl.DateFormat dateDateFormat = intl.DateFormat.yMMMd(localeName)
+        .add_Hm();
+    final String dateString = dateDateFormat.format(date);
+
+    return 'Imported $dateString';
+  }
+
+  @override
+  String get settings_epgOffsetHint =>
+      'Moves this source\'s guide times. Use it when programmes show at the wrong time.';
+
+  @override
+  String get settings_epgOffsetNone => 'No offset';
+
+  @override
+  String get settings_epgOffsetEarlier => '30 minutes earlier';
+
+  @override
+  String get settings_epgOffsetLater => '30 minutes later';
+
+  @override
+  String get settings_epgRefreshNow => 'Download the guide again now';
+
+  @override
+  String get settings_epgRefreshInterval => 'Guide refresh interval';
+
+  @override
+  String settings_everyHours(int hours) {
+    String _temp0 = intl.Intl.pluralLogic(
+      hours,
+      locale: localeName,
+      other: 'Every $hours hours',
+      one: 'Every hour',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get settings_saveFailed => 'Couldn\'t save the change.';
+
+  @override
+  String get help_playerOnlyTitle => 'The app is a player only';
+
+  @override
+  String get help_playerOnlyBody =>
+      'IPTV Player contains no channels, playlists or provider links. It plays only the M3U links and Xtream logins you add yourself, from sources you have the right to use.';
+
+  @override
+  String get help_freeSourcesTitle => 'Free legal sources';
+
+  @override
+  String get help_freeSourcesBody =>
+      'The iptv-org project lists public links that broadcasters such as Al Arabiya, Al Jazeera, Sky News Arabia, France 24, DW and BBC Arabic publish themselves. Some links stop working or are geo-blocked, and a public link is not always cleared for use in other apps, so prefer channels hosted on the broadcasters\' own sites. The app never adds these lists for you: type a link when you add a source.';
+
+  @override
+  String get help_iptvOrgSaudi => 'Saudi channels';
+
+  @override
+  String get help_iptvOrgArabic => 'Arabic-language channels';
+
+  @override
+  String get help_addAsSource => 'Add as source';
+
+  @override
+  String get help_receiverBody =>
+      'Your own satellite receiver (for example Enigma2 with OpenWebif, Tvheadend or a SAT>IP tuner) can export M3U and XMLTV for the free-to-air channels you already receive. It is the cleanest legal way to get a playlist with a guide.';
+
+  @override
+  String get help_officialAppsTitle => 'Official apps';
+
+  @override
+  String get help_officialAppsBody =>
+      'Free: Aloula (the Saudi channels), Shahid\'s free tier, Thmanyah and Samsung TV Plus. Paid: Shahid VIP, TOD by beIN, stc tv and OSN+. These services work only in their own apps and don\'t give M3U links or Xtream logins, so they can\'t be added here. No licensed Saudi service sells premium channels as M3U or Xtream.';
+
+  @override
+  String get help_warningSignsMore =>
+      '• Free 24-hour trials\n• Payment by transfer to a person, gift cards or crypto\n• Asks you to install apps from outside the store or to use a VPN';
+
+  @override
+  String get help_legitServices =>
+      'Legitimate services are known broadcasters or telecom companies, with official store apps, VAT invoices and official payment methods.';
+
+  @override
+  String get help_updatesTitle => 'How to install updates';
+
+  @override
+  String get help_updatesBody =>
+      'Download the latest version from the project\'s releases page and install it over the current one; your sources, favorites and watch progress stay. On Android TV or Fire TV, type this link into the Downloader app. On Windows, close the app and extract the new zip into the same folder.';
+
+  @override
+  String get help_downloadLink => 'Download link';
 }
