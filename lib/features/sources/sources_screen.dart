@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../app/form_factor.dart';
 import '../../app/home_shell.dart' show describeSourceError;
 import '../../app/providers.dart';
 import '../../l10n/gen/app_localizations.dart';
@@ -136,15 +135,6 @@ class _SourcesScreenState extends ConsumerState<SourcesScreen> {
     final sources = ref.watch(sourcesProvider);
     final activeId = ref.watch(activeSourceIdProvider);
     final pushed = _pushed;
-    final tv = FormFactorScope.isTv(context);
-    final padding = tv && pushed
-        ? const EdgeInsetsDirectional.fromSTEB(
-            TvLayout.overscanHorizontal,
-            Spacing.md,
-            TvLayout.overscanHorizontal,
-            TvLayout.overscanVertical,
-          )
-        : const EdgeInsetsDirectional.all(Spacing.lg);
 
     final list = sources.value;
     if (list == null) {
@@ -174,7 +164,7 @@ class _SourcesScreenState extends ConsumerState<SourcesScreen> {
     return FocusTraversalGroup(
       policy: RowTraversalPolicy(),
       child: SingleChildScrollView(
-        padding: padding,
+        padding: const EdgeInsetsDirectional.all(Spacing.lg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

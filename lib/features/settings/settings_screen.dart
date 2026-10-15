@@ -445,17 +445,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         children: rows,
       );
     }
-    // Pushed on a TV, the page has no shell margins: keep clear of overscan.
-    final pushedOnTv = !inTab && FormFactorScope.isTv(context);
     return SingleChildScrollView(
-      padding: pushedOnTv
-          ? const EdgeInsets.fromLTRB(
-              TvLayout.overscanHorizontal,
-              Spacing.sm,
-              TvLayout.overscanHorizontal,
-              TvLayout.overscanVertical,
-            )
-          : const EdgeInsets.all(Spacing.sm),
+      padding: const EdgeInsets.all(Spacing.sm),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         spacing: Spacing.xs,

@@ -17,6 +17,7 @@ import '../sources/sync/sync_progress.dart';
 import '../theme/tokens.dart';
 import '../tv/tv_focusable.dart';
 import '../widgets/bidi_text.dart';
+import 'form_factor.dart';
 import 'providers.dart';
 import 'shell_phone.dart';
 import 'shell_tv.dart';
@@ -101,14 +102,27 @@ final homePageBuilderProvider = Provider<Widget Function(HomeTab tab)>(
 
 /// Pushes [tab]'s screen as a page with an app bar (phone "More" items and
 /// any screen opened from another one).
+///
+/// On TV the whole page, app bar included, sits inside the overscan
+/// margins, so the screens add none of their own.
 Future<void> pushHomePage(BuildContext context, WidgetRef ref, HomeTab tab) {
   final page = ref.read(homePageBuilderProvider)(tab);
   return Navigator.of(context).push<void>(
     MaterialPageRoute<void>(
       settings: RouteSettings(name: '/${tab.name}'),
-      builder: (context) => Scaffold(
-        appBar: AppBar(title: Text(tab.label(AppLocalizations.of(context)))),
-        body: SafeArea(top: false, child: page),
+      // The same tree in every form factor, so switching Device mode on the
+      // page keeps its state.
+      builder: (context) => ColoredBox(
+        color: AppColors.background,
+        child: Padding(
+          padding: overscanPadding(FormFactorScope.of(context)),
+          child: Scaffold(
+            appBar: AppBar(
+              title: Text(tab.label(AppLocalizations.of(context))),
+            ),
+            body: SafeArea(top: false, child: page),
+          ),
+        ),
       ),
     ),
   );

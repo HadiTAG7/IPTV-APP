@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../app/form_factor.dart';
 import '../../app/home_shell.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../../theme/tokens.dart';
@@ -17,8 +16,8 @@ import 'providers.dart';
 /// Down. "Add as source" shows only when the app provides a source editor
 /// ([addSourcePrefillProvider]); the app never adds a playlist on its own.
 ///
-/// Renders body content only (pushed pages get their app bar from
-/// `pushHomePage`).
+/// Renders body content only (pushed pages get their app bar and, on TV,
+/// overscan margins from `pushHomePage`).
 class HelpScreen extends ConsumerStatefulWidget {
   const HelpScreen({super.key});
 
@@ -59,7 +58,6 @@ class _HelpScreenState extends ConsumerState<HelpScreen> {
     final l10n = AppLocalizations.of(context);
     final inTab = _inTab;
     final prefill = ref.watch(addSourcePrefillProvider);
-    final pushedOnTv = !inTab && FormFactorScope.isTv(context);
 
     AddSourceCallback? addFor(String url, String name) =>
         prefill == null ? null : () => prefill(context, url: url, name: name);
@@ -133,14 +131,7 @@ class _HelpScreenState extends ConsumerState<HelpScreen> {
       controller: _scroll,
       child: SingleChildScrollView(
         controller: _scroll,
-        padding: pushedOnTv
-            ? const EdgeInsets.fromLTRB(
-                TvLayout.overscanHorizontal,
-                Spacing.lg,
-                TvLayout.overscanHorizontal,
-                TvLayout.overscanVertical,
-              )
-            : const EdgeInsets.all(Spacing.lg),
+        padding: const EdgeInsets.all(Spacing.lg),
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 760),

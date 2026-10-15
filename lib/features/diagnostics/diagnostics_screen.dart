@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
 
 import '../../app/form_factor.dart';
-import '../../app/home_shell.dart';
 import '../../app/providers.dart';
 import '../../core/platform/device_caps.dart';
 import '../../l10n/gen/app_localizations.dart';
@@ -161,16 +160,6 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
     final sources = ref.watch(sourcesProvider).value ?? const [];
     final log = ref.watch(ringLogProvider);
     final formFactor = FormFactorScope.of(context);
-    // A pushed page (not a shell tab) has no overscan margins of its own.
-    final pushed = HomeBackScope.maybeOf(context) == null;
-    final overscan = pushed && formFactor == FormFactor.tv
-        ? const EdgeInsetsDirectional.fromSTEB(
-            TvLayout.overscanHorizontal,
-            0,
-            TvLayout.overscanHorizontal,
-            TvLayout.overscanVertical,
-          )
-        : EdgeInsetsDirectional.zero;
     final lines = log.lines;
     final shown = lines.length > DiagnosticsScreen.logLines
         ? lines.sublist(lines.length - DiagnosticsScreen.logLines)
@@ -180,7 +169,7 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
     return SingleChildScrollView(
       key: const ValueKey('diagnostics'),
       controller: _scroll,
-      padding: overscan.add(const EdgeInsets.all(Spacing.lg)),
+      padding: const EdgeInsets.all(Spacing.lg),
       child: Align(
         alignment: AlignmentDirectional.topStart,
         child: ConstrainedBox(
