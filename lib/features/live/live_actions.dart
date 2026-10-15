@@ -106,6 +106,11 @@ Future<void> setLiveCategoryHidden(
     .read(catalogDaoProvider)
     .setCategoryHidden(sourceId, ContentKind.live, categoryKey, hidden);
 
+/// Shows every hidden live category of the source at once.
+Future<void> showHiddenLiveCategories(WidgetRef ref, int sourceId) => ref
+    .read(catalogDaoProvider)
+    .showHiddenCategories(sourceId, ContentKind.live);
+
 /// The engine a channel would play with now (per-channel choice, then the
 /// source and app settings, then the platform default).
 Future<EngineKind> currentLiveEngine(

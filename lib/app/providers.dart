@@ -133,6 +133,24 @@ final liteModeProvider = Provider<bool>(
       effectiveLite(ref.watch(deviceCapsProvider), ref.watch(settingsProvider)),
 );
 
+/// Decoded-image cache budget (design section 7): 32 MB and 250 images in
+/// Lite mode, 48 MB and 500 otherwise, instead of Flutter's 100 MB and 1000.
+void applyImageCacheBudget(ImageCache cache, {required bool lite}) {
+  cache
+    ..maximumSizeBytes = (lite ? 32 : 48) << 20
+    ..maximumSize = lite ? 250 : 500;
+}
+
+/// Keeps the app's image cache on the budget for the current Lite mode
+/// while listened to (`IptvApp` listens for the app's lifetime).
+final imageCacheBudgetProvider = Provider<void>(
+  (ref) => applyImageCacheBudget(
+    PaintingBinding.instance.imageCache,
+    lite: ref.watch(liteModeProvider),
+  ),
+  name: 'imageCacheBudgetProvider',
+);
+
 /// Options for new player engines, from Settings and Lite mode.
 final engineOptionsProvider = Provider<EngineOptions>(
   (ref) => ref

@@ -73,6 +73,19 @@ abstract final class FocusTokens {
   /// Scroll animation used to centre a newly focused item.
   static const Duration scroll = Duration(milliseconds: 160);
 
+  /// [animation], or none where animations are off (Lite mode, or the
+  /// system's reduce-motion setting).
+  static Duration animationOf(BuildContext context) =>
+      _motion(context, animation);
+
+  /// [scroll], or none where animations are off.
+  static Duration scrollOf(BuildContext context) => _motion(context, scroll);
+
+  static Duration _motion(BuildContext context, Duration duration) =>
+      MediaQuery.maybeDisableAnimationsOf(context) ?? false
+      ? Duration.zero
+      : duration;
+
   static const Color borderColor = AppColors.accent;
 }
 

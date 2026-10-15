@@ -19,7 +19,7 @@ import 'key_repeat.dart';
 /// Focus look: scale 1.0 -> [FocusTokens.scale] plus a
 /// [FocusTokens.borderWidth] accent border, no blur. On keyboard focus the
 /// item is scrolled to [ensureVisibleAlignment] (instantly while a key is
-/// held). Held arrow keys are throttled via [KeyRepeatThrottle.instance].
+/// held). Neither animates where animations are off (Lite mode). Held arrow keys are throttled via [KeyRepeatThrottle.instance].
 class TvFocusable extends StatefulWidget {
   const TvFocusable({
     super.key,
@@ -119,7 +119,7 @@ class _TvFocusableState extends State<TvFocusable> {
       Scrollable.ensureVisible(
         context,
         alignment: alignment,
-        duration: instant ? Duration.zero : FocusTokens.scroll,
+        duration: instant ? Duration.zero : FocusTokens.scrollOf(context),
         curve: Curves.easeOutCubic,
       ),
     );
@@ -198,7 +198,7 @@ class _TvFocusableState extends State<TvFocusable> {
     );
     content = AnimatedScale(
       scale: focused ? widget.focusScale : 1.0,
-      duration: FocusTokens.animation,
+      duration: FocusTokens.animationOf(context),
       curve: Curves.easeOut,
       child: content,
     );

@@ -55,7 +55,10 @@ class _Session {
   StreamRequest request;
   final String? itemKey;
   final int? maxConnections;
-  final EngineKind? channelPref;
+
+  /// The engine this item prefers. A manual switch or the silent-audio
+  /// switch updates it, so [PlaybackController.retry] keeps that choice.
+  EngineKind? channelPref;
 
   /// Engines tried since the last successful start or manual switch.
   Set<EngineKind> tried = {};
@@ -226,7 +229,9 @@ class PlaybackController extends ChangeNotifier {
     if (target == null) return;
     final key = s.itemKey;
     if (key != null) onEnginePreferenceLearned?.call(key, target);
-    s.silentEngines.remove(target);
+    s
+      ..channelPref = target
+      ..silentEngines.remove(target);
     await _switchEngine(s, target);
   }
 
@@ -585,7 +590,9 @@ class PlaybackController extends ChangeNotifier {
     if (target != EngineKind.mpv) return;
     final key = s.itemKey;
     if (key != null) onEnginePreferenceLearned?.call(key, EngineKind.mpv);
-    s.silentEngines.add(EngineKind.exo);
+    s
+      ..channelPref = EngineKind.mpv
+      ..silentEngines.add(EngineKind.exo);
     await _switchEngine(s, EngineKind.mpv);
   }
 

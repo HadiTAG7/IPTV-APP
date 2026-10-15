@@ -453,11 +453,12 @@ class _LicenseTextPaneState extends State<LicenseTextPane> {
       position.maxScrollExtent,
     );
     if (target == position.pixels) return;
-    if (animate) {
+    final duration = FocusTokens.scrollOf(context);
+    if (animate && duration > Duration.zero) {
       unawaited(
         position.animateTo(
           target,
-          duration: FocusTokens.scroll,
+          duration: duration,
           curve: Curves.easeOutCubic,
         ),
       );
@@ -479,7 +480,7 @@ class _LicenseTextPaneState extends State<LicenseTextPane> {
         widget.onFocusChange?.call(f);
       },
       child: AnimatedContainer(
-        duration: FocusTokens.animation,
+        duration: FocusTokens.animationOf(context),
         decoration: BoxDecoration(
           color: AppColors.surface,
           borderRadius: Radii.mdAll,

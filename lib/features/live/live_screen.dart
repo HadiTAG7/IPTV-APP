@@ -402,10 +402,7 @@ class LiveViewState extends ConsumerState<LiveView> {
   Future<void> _categoryMenu(LiveCategoryEntry entry) async {
     final l10n = AppLocalizations.of(context);
     final rows = ref.read(liveCategoriesProvider(_id)).value ?? const [];
-    final hidden = [
-      for (final c in rows)
-        if (c.hidden) c.key,
-    ];
+    final anyHidden = rows.any((c) => c.hidden);
     final choice = await showOptionsSheet<LiveCategoryAction>(
       context,
       title: entry.name,
@@ -416,7 +413,7 @@ class LiveViewState extends ConsumerState<LiveView> {
             icon: Icons.visibility_off_outlined,
             label: l10n.liveHideCategory,
           ),
-        if (hidden.isNotEmpty)
+        if (anyHidden)
           SheetOption(
             value: LiveCategoryAction.showHidden,
             icon: Icons.visibility_outlined,
@@ -433,9 +430,7 @@ class LiveViewState extends ConsumerState<LiveView> {
         _categories.currentState?.focusNeighbourOf(entry.list);
         await setLiveCategoryHidden(ref, _id, entry.list.categoryKey!, true);
       case LiveCategoryAction.showHidden:
-        for (final key in hidden) {
-          await setLiveCategoryHidden(ref, _id, key, false);
-        }
+        await showHiddenLiveCategories(ref, _id);
       case null:
         break;
     }
@@ -449,7 +444,8 @@ class LiveViewState extends ConsumerState<LiveView> {
     final l10n = AppLocalizations.of(context);
     ref.listen(sourceGenerationProvider(_id), (previous, next) {
       if (previous == next) return;
-      _store.clear();
+      // The now/next on screen stays until it is read again.
+      unawaited(_store.reload());
       setState(() => _dataVersion++);
     });
     ref.listen(favoriteKeysProvider((_id, ContentKind.live)), (prev, next) {

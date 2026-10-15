@@ -337,6 +337,34 @@ void main() {
         ),
         {'xuser', 'xpass'},
       );
+      // Token names and an unencoded @ in the password.
+      expect(
+        sourceSecrets(
+          const SourceConfig(
+            kind: SourceKind.m3uUrl,
+            url: 'https://cdn.example.net/list.m3u?access_token=SECRETTOKEN123',
+          ),
+        ),
+        {'SECRETTOKEN123'},
+      );
+      expect(
+        sourceSecrets(
+          const SourceConfig(
+            kind: SourceKind.m3uUrl,
+            url: 'http://h/get.php?u=alice&p=SECRETPW&api_key=K3y9',
+          ),
+        ),
+        {'alice', 'SECRETPW', 'K3y9'},
+      );
+      expect(
+        sourceSecrets(
+          const SourceConfig(
+            kind: SourceKind.m3uUrl,
+            url: 'http://user:p@ss@host.example/list.m3u',
+          ),
+        ),
+        {'user', 'p@ss'},
+      );
       // Short values and plain URLs give nothing.
       expect(
         sourceSecrets(

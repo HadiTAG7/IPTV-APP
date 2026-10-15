@@ -360,7 +360,7 @@ class _OffsetStepperState extends State<OffsetStepper> {
           onKeyEvent: _onKey,
           onFocusChange: (f) => setState(() => _focused = f),
           child: AnimatedContainer(
-            duration: FocusTokens.animation,
+            duration: FocusTokens.animationOf(context),
             padding: const EdgeInsets.all(Spacing.xs),
             decoration: BoxDecoration(
               color: AppColors.surface,

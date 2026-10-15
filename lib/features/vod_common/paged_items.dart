@@ -18,6 +18,10 @@ typedef PageLoader<T> = Future<List<T>> Function(int offset, int limit);
 /// has passed (doubling with each failure in a row, up to
 /// [maxRetryBackoff]), [retry] or [refresh]; [error] stays set until every
 /// failed page has been read.
+///
+/// [refresh] (after a sync) keeps the pages in memory but marks them stale:
+/// each is read again, through the same debounce and [maxConcurrent] limit,
+/// when it is next asked for, so only the pages on screen are re-read.
 class PagedItems<T> extends ChangeNotifier {
   PagedItems({
     required int count,
@@ -47,6 +51,15 @@ class PagedItems<T> extends ChangeNotifier {
   final _pages = <int, List<T>>{};
   final _loading = <int>{};
   final _wanted = <int>{};
+
+  /// Pages read before the last [refresh], shown until read again.
+  final _stale = <int>{};
+
+  /// Bumped by [refresh]; a read started before it leaves its page stale.
+  int _epoch = 0;
+
+  /// Completed when nothing is wanted or being read ([refresh]).
+  final _idle = <Completer<void>>[];
 
   /// Failures in a row per page, until the page is read.
   final _failures = <int, int>{};
@@ -85,16 +98,19 @@ class PagedItems<T> extends ChangeNotifier {
       return null;
     }
     _pages[page] = items;
+    if (_stale.contains(page) && !_blocked.containsKey(page)) _request(page);
     final i = index - page * pageSize;
     return i < items.length ? items[i] : null;
   }
 
-  /// Reads the pages in memory again (after a sync), keeping their items
-  /// until the new ones arrive. Failed pages may be asked for at once.
-  /// [count], when given, is the list's new length: pages past it are
-  /// dropped. Completes when the pages have been read.
-  Future<void> refresh({int? count}) async {
-    if (_disposed) return;
+  /// Reads the list again (after a sync), keeping the items in memory until
+  /// the new ones arrive: listeners are notified, and the pages they ask
+  /// for ([itemAt]) are read again like missing ones. Failed pages may be
+  /// asked for at once. [count], when given, is the list's new length:
+  /// pages past it are dropped. Completes once the pages asked for have
+  /// been read (nothing is wanted or being read).
+  Future<void> refresh({int? count}) {
+    if (_disposed) return Future.value();
     if (count != null && count != _count) {
       _count = count;
       final pages = count == 0 ? 0 : (count - 1) ~/ pageSize + 1;
@@ -106,10 +122,16 @@ class PagedItems<T> extends ChangeNotifier {
     _unblockAll();
     _failures.clear();
     error = null;
-    await Future.wait([
-      for (final page in _pages.keys.toList())
-        if (!_loading.contains(page)) _loadPage(page),
-    ]);
+    _epoch++;
+    _stale
+      ..clear()
+      ..addAll(_pages.keys);
+    final idle = Completer<void>();
+    _idle.add(idle);
+    // Settles [idle] even when nobody asks for a page.
+    _timer ??= Timer(debounce, _flush);
+    notifyListeners();
+    return idle.future;
   }
 
   /// The index of the first item in memory that passes [test], if any.
@@ -168,6 +190,18 @@ class PagedItems<T> extends ChangeNotifier {
     for (final page in pages) {
       unawaited(_loadPage(page));
     }
+    _settle();
+  }
+
+  /// Completes [refresh] futures once nothing is wanted or being read.
+  void _settle() {
+    if (_idle.isEmpty || _loading.isNotEmpty || _wanted.isNotEmpty) return;
+    if (_timer != null) return;
+    final waiting = [..._idle];
+    _idle.clear();
+    for (final c in waiting) {
+      c.complete();
+    }
   }
 
   Future<void> _loadPage(int page) {
@@ -177,13 +211,17 @@ class PagedItems<T> extends ChangeNotifier {
   }
 
   Future<void> _read(int page) async {
+    final epoch = _epoch;
     try {
       final items = await _load(page * pageSize, pageSize);
       if (_disposed) return;
       _pages[page] = items;
+      // A read started before a refresh may hold old rows: stays stale.
+      if (epoch == _epoch) _stale.remove(page);
       _failures.remove(page);
       if (_failures.isEmpty) error = null;
       while (_pages.length > maxPages) {
+        _stale.remove(_pages.keys.first);
         _pages.remove(_pages.keys.first);
       }
     } on Object catch (e) {
@@ -194,6 +232,7 @@ class PagedItems<T> extends ChangeNotifier {
       _loading.remove(page);
     }
     notifyListeners();
+    _settle();
   }
 
   @override
@@ -202,6 +241,11 @@ class PagedItems<T> extends ChangeNotifier {
     _timer?.cancel();
     _timer = null;
     _unblockAll();
+    // Nothing more is read: refresh futures complete.
+    for (final c in _idle) {
+      c.complete();
+    }
+    _idle.clear();
     super.dispose();
   }
 }

@@ -203,6 +203,41 @@ void main() {
       expect(adult.name, 'Adult renamed');
     });
 
+    test('showing hidden categories is one write', () async {
+      await syncCatalog(
+        db,
+        src,
+        categories: [
+          for (final k in ['a', 'b', 'c', 'd']) category(ContentKind.live, k),
+          category(ContentKind.movie, 'films'),
+        ],
+        channels: [channel('x')],
+      );
+      for (final k in ['a', 'b', 'c']) {
+        await catalog.setCategoryHidden(src, ContentKind.live, k, true);
+      }
+      await catalog.setCategoryHidden(src, ContentKind.movie, 'films', true);
+      final emissions = <List<String>>[];
+      final sub = catalog
+          .watchCategories(src, ContentKind.live, includeHidden: true)
+          .listen((rows) => emissions.add([for (final r in rows) r.key]));
+      await pumpEventQueue();
+      expect(emissions, hasLength(1));
+
+      expect(await catalog.showHiddenCategories(src, ContentKind.live), 3);
+      await pumpEventQueue();
+      // One table change, so one re-run of every category stream.
+      expect(emissions, hasLength(2));
+      expect(
+        (await catalog.categories(src, ContentKind.live)).map((c) => c.key),
+        ['a', 'b', 'c', 'd'],
+      );
+      // Other kinds keep theirs.
+      expect(await catalog.categories(src, ContentKind.movie), isEmpty);
+      expect(await catalog.showHiddenCategories(src, ContentKind.live), 0);
+      await sub.cancel();
+    });
+
     test('categories follow provider sort order', () async {
       await syncCatalog(
         db,

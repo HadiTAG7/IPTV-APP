@@ -40,7 +40,8 @@ class EngineOptions {
 
 /// The production factory: ExoPlayer via `video_player`, mpv via media_kit.
 ///
-/// mpv engines need `MediaKit.ensureInitialized()` first (done in bootstrap).
+/// mpv engines need `MediaKit.ensureInitialized()` first (done in bootstrap)
+/// and borrow the app's one libmpv core ([MpvCore.shared]).
 EngineFactory defaultEngineFactory([
   EngineOptions options = const EngineOptions(),
 ]) {

@@ -264,6 +264,9 @@ void main() {
       expect(urlHasCredentials('http://127.0.0.1/live/u/p/1.ts'), isTrue);
       expect(urlHasCredentials('http://127.0.0.1:8080'), isFalse);
       expect(urlHasCredentials('http://example.com/list.m3u?x=1'), isFalse);
+      expect(urlHasCredentials('https://h/list.m3u?access_token=T0k'), isTrue);
+      expect(urlHasCredentials('https://h/epg.xml?api_key=K3y'), isTrue);
+      expect(urlHasCredentials('http://h/get.php?u=alice&p=pw1'), isTrue);
     });
   });
 

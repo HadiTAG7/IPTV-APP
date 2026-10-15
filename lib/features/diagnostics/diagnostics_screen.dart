@@ -757,7 +757,7 @@ class _LogViewState extends State<_LogView> {
             Scrollable.ensureVisible(
               context,
               alignment: 0.5,
-              duration: FocusTokens.scroll,
+              duration: FocusTokens.scrollOf(context),
             ),
           );
         }

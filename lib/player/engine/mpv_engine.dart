@@ -62,44 +62,212 @@ Map<String, String> mpvLanguageProperties(
   List<String>? subtitles,
 ) => {'alang': audio.join(','), 'slang': (subtitles ?? audio).join(',')};
 
-/// libmpv through media_kit. One [Player] is reused for the whole session.
-///
-/// Constructing it needs `MediaKit.ensureInitialized()` and native libraries,
-/// so unit tests use [MpvEngine.withPlayer] with a fake platform player.
-class MpvEngine implements PlayerEngine {
-  MpvEngine({
-    this.lite = false,
-    this.hardwareDecoding = true,
-    this.preferredLanguages = kDefaultPreferredLanguages,
-    this.subtitleLanguages,
-  }) : _player = Player(
-         configuration: PlayerConfiguration(
-           bufferSize: (lite ? 32 : 64) * _mib,
-           logLevel: MPVLogLevel.warn,
-         ),
-       ),
-       _readProperty = null {
-    _video = VideoController(
-      _player,
+/// Creates an mpv [Player]; [lite] picks the smaller demuxer cache.
+typedef MpvPlayerBuilder = Player Function({required bool lite});
+
+/// Creates the video output of a new [Player]; null for none (tests).
+typedef MpvVideoBuilder = VideoController? Function(
+  Player player, {
+  required bool hardwareDecoding,
+});
+
+Player _newPlayer({required bool lite}) => Player(
+  configuration: PlayerConfiguration(
+    bufferSize: (lite ? 32 : 64) * _mib,
+    logLevel: MPVLogLevel.warn,
+  ),
+);
+
+VideoController _newVideo(Player player, {required bool hardwareDecoding}) =>
+    VideoController(
+      player,
       configuration: mpvVideoConfiguration(
         hardwareDecoding: hardwareDecoding,
         android: defaultTargetPlatform == TargetPlatform.android,
       ),
     );
-    _listen();
+
+/// The app's long-lived libmpv core, lent to one [MpvEngine] at a time.
+///
+/// libmpv sends FFmpeg's log lines (HTTP status, TLS details, `tcp:`
+/// errors) only to the core that was alive when FFmpeg logging was set up,
+/// and media_kit destroys a disposed core 5 s after [Player.dispose]. A core
+/// created within those 5 s never gets those lines. So engines borrow this
+/// core and stop it when they are done instead of disposing it; it lives
+/// until the app exits.
+class MpvCore {
+  MpvCore({MpvPlayerBuilder? createPlayer, MpvVideoBuilder? createVideo})
+    : _createPlayer = createPlayer ?? _newPlayer,
+      _createVideo = createVideo ?? _newVideo;
+
+  /// The core every production [MpvEngine] borrows (created on first use).
+  static final shared = MpvCore();
+
+  final MpvPlayerBuilder _createPlayer;
+  final MpvVideoBuilder _createVideo;
+
+  Player? _player;
+  VideoController? _video;
+  bool? _hardwareDecoding;
+  bool _lent = false;
+  Future<void> _idle = Future<void>.value();
+
+  /// Whether an engine holds the core now.
+  bool get isLent => _lent;
+
+  /// Lends the core to a new engine, creating it on first use. While another
+  /// engine still holds it, the new engine gets a player of its own.
+  MpvLease lease({required bool lite, required bool hardwareDecoding}) {
+    if (_lent) {
+      final player = _createPlayer(lite: lite);
+      return MpvLease._(
+        player,
+        _createVideo(player, hardwareDecoding: hardwareDecoding),
+      );
+    }
+    _lent = true;
+    final properties = <String, String>{};
+    var player = _player;
+    if (player == null) {
+      player = _player = _createPlayer(lite: lite);
+      _video = _createVideo(player, hardwareDecoding: hardwareDecoding);
+    } else {
+      // The previous engine's track choices go, as with a new core.
+      properties.addAll({'aid': 'auto', 'sid': 'auto'});
+      if (_hardwareDecoding != hardwareDecoding) {
+        properties['hwdec'] = hardwareDecoding ? 'auto-safe' : 'no';
+      }
+    }
+    _hardwareDecoding = hardwareDecoding;
+    return MpvLease._(
+      player,
+      _video,
+      core: this,
+      ready: _idle,
+      properties: properties,
+    );
   }
 
-  /// Wraps an existing [Player] without a video surface. [readProperty]
-  /// stands in for libmpv property reads.
+  /// Stops [player] and takes it back at once; the next engine waits for
+  /// the stop ([MpvLease.ready]) before it opens anything.
+  Future<void> _release(Player player) {
+    final done = _stop(player);
+    _idle = done;
+    _lent = false;
+    return done;
+  }
+
+  static Future<void> _stop(Player player) async {
+    try {
+      await player.stop();
+    } on Object catch (_) {
+      // Player already torn down.
+    }
+  }
+
+  /// Disposes the idle core (tests; the app keeps it until exit).
+  @visibleForTesting
+  Future<void> dispose() async {
+    final player = _player;
+    if (player == null || _lent) return;
+    _player = null;
+    _video = null;
+    await _idle;
+    await player.dispose();
+  }
+}
+
+/// A [Player] (with its video output) held by one [MpvEngine].
+class MpvLease {
+  MpvLease._(
+    this.player,
+    this.video, {
+    this._core,
+    Future<void>? ready,
+    this.properties = const {},
+  }) : ready = ready ?? Future<void>.value();
+
+  /// A player the engine owns and disposes.
+  MpvLease.owned(Player player) : this._(player, null);
+
+  final Player player;
+  final VideoController? video;
+  final MpvCore? _core;
+
+  /// Completes once the previous holder of the core has stopped it.
+  final Future<void> ready;
+
+  /// mpv properties to set before the first open.
+  final Map<String, String> properties;
+
+  /// Whether [player] is the shared core (stopped, not disposed, on release).
+  bool get shared => _core != null;
+
+  /// Returns the shared core or disposes an owned player. A shared core is
+  /// free again as soon as this is called.
+  Future<void> release() async {
+    final core = _core;
+    if (core != null) return core._release(player);
+    try {
+      await player.dispose();
+    } on Object catch (_) {
+      // Native side already gone.
+    }
+  }
+}
+
+/// libmpv through media_kit. One [Player] is reused for the whole session,
+/// and production engines borrow it from [MpvCore.shared].
+///
+/// Constructing it needs `MediaKit.ensureInitialized()` and native libraries,
+/// so unit tests use [MpvEngine.withPlayer] with a fake platform player.
+class MpvEngine implements PlayerEngine {
+  MpvEngine({
+    bool lite = false,
+    bool hardwareDecoding = true,
+    List<String> preferredLanguages = kDefaultPreferredLanguages,
+    List<String>? subtitleLanguages,
+    MpvCore? core,
+  }) : this._(
+         (core ?? MpvCore.shared).lease(
+           lite: lite,
+           hardwareDecoding: hardwareDecoding,
+         ),
+         lite: lite,
+         hardwareDecoding: hardwareDecoding,
+         preferredLanguages: preferredLanguages,
+         subtitleLanguages: subtitleLanguages,
+       );
+
+  /// Wraps an existing [Player] without a video surface; [dispose] disposes
+  /// it. [readProperty] stands in for libmpv property reads.
   @visibleForTesting
   MpvEngine.withPlayer(
-    this._player, {
-    this.lite = false,
-    this.hardwareDecoding = true,
-    this.preferredLanguages = kDefaultPreferredLanguages,
+    Player player, {
+    bool lite = false,
+    bool hardwareDecoding = true,
+    List<String> preferredLanguages = kDefaultPreferredLanguages,
+    List<String>? subtitleLanguages,
+    MpvPropertyReader? readProperty,
+  }) : this._(
+         MpvLease.owned(player),
+         lite: lite,
+         hardwareDecoding: hardwareDecoding,
+         preferredLanguages: preferredLanguages,
+         subtitleLanguages: subtitleLanguages,
+         readProperty: readProperty,
+       );
+
+  MpvEngine._(
+    this._lease, {
+    required this.lite,
+    required this.hardwareDecoding,
+    required this.preferredLanguages,
     this.subtitleLanguages,
     this._readProperty,
-  }) {
+  }) : _player = _lease.player,
+       _video = _lease.video,
+       _leaseProperties = _lease.properties {
     _listen();
   }
 
@@ -111,9 +279,13 @@ class MpvEngine implements PlayerEngine {
   /// Subtitle language order (`slang`); null uses [preferredLanguages].
   final List<String>? subtitleLanguages;
 
+  final MpvLease _lease;
   final Player _player;
   final MpvPropertyReader? _readProperty;
   VideoController? _video;
+
+  /// Set before the first open of a borrowed core, then cleared.
+  Map<String, String> _leaseProperties;
 
   final _state = ValueNotifier<PlaybackState>(PlaybackState.idle);
   final _events = StreamController<EngineEvent>.broadcast();
@@ -264,6 +436,9 @@ class MpvEngine implements PlayerEngine {
     _lastHttpStatus = null;
     _errorDetail = null;
     _state.value = const PlaybackState(buffering: true);
+    // A borrowed core may still be stopping for its previous engine.
+    await _lease.ready;
+    if (_disposed || !_active) return;
 
     final headers = <String, String>{};
     String? userAgent;
@@ -297,14 +472,19 @@ class MpvEngine implements PlayerEngine {
     final native = _player.platform;
     if (native is! NativePlayer) return;
     final props = {
+      ..._leaseProperties,
       'user-agent': userAgent,
       'network-timeout': '15',
       'stream-lavf-o':
           'reconnect_streamed=1,reconnect_on_network_error=1,'
           'reconnect_delay_max=5',
       'cache-pause-wait': '2',
+      // A borrowed core keeps the cache size of the engine that created it.
+      'demuxer-max-bytes': '$_cacheBytes',
+      'demuxer-max-back-bytes': '$_cacheBytes',
       ...mpvLanguageProperties(preferredLanguages, subtitleLanguages),
     };
+    _leaseProperties = const {};
     for (final MapEntry(:key, :value) in props.entries) {
       try {
         await native.setProperty(key, value);
@@ -313,6 +493,8 @@ class MpvEngine implements PlayerEngine {
       }
     }
   }
+
+  int get _cacheBytes => (lite ? 32 : 64) * _mib;
 
   @override
   Future<void> play() async {
@@ -479,15 +661,13 @@ class MpvEngine implements PlayerEngine {
     if (_disposed) return;
     _active = false;
     _disposed = true;
+    // A shared core is free for the next engine right away.
+    final released = _lease.release();
     for (final sub in _subs) {
       await sub.cancel();
     }
     _subs.clear();
-    try {
-      await _player.dispose();
-    } catch (_) {
-      // Native side already gone.
-    }
+    await released;
     _video = null;
     await _events.close();
     _state.dispose();

@@ -181,6 +181,7 @@ class GuideGridState extends ConsumerState<GuideGrid> {
       widget.sourceId,
       widget.filter,
       favoriteKeys: () => widget.favoriteKeys,
+      window: _visibleRows,
     )..addListener(_onData);
     unawaited(pager.init());
     return pager;
@@ -228,12 +229,9 @@ class GuideGridState extends ConsumerState<GuideGrid> {
   /// once the block ends less than [GuideTimes.prefetch] from them.
   void _maybeLoad() {
     final n = _pager.length ?? 0;
-    if (n == 0 || !_scroll.hasClients) return;
-    final position = _scroll.position;
-    if (!position.hasViewportDimension) return;
-    final first = (position.pixels / GuideGrid.rowExtent).floor();
-    final last =
-        first + (position.viewportDimension / GuideGrid.rowExtent).ceil();
+    final rows = _visibleRows();
+    if (n == 0 || rows == null) return;
+    final (:first, :last) = rows;
     const margin = GuideGrid.rowMargin;
     _pager.ensure(first - margin, last + margin);
     final needed = _pager.keysIn(first - margin ~/ 4, last + margin ~/ 4);
@@ -258,6 +256,18 @@ class GuideGridState extends ConsumerState<GuideGrid> {
       // after a failed load only after the debounce, so a failing query is
       // not retried every frame.
       immediate: _store.version == 0 || (!_viewLoaded && _store.error == null),
+    );
+  }
+
+  /// The rows on screen; null before the first layout.
+  ({int first, int last})? _visibleRows() {
+    if (!_scroll.hasClients) return null;
+    final position = _scroll.position;
+    if (!position.hasViewportDimension) return null;
+    final first = (position.pixels / GuideGrid.rowExtent).floor();
+    return (
+      first: first,
+      last: first + (position.viewportDimension / GuideGrid.rowExtent).ceil(),
     );
   }
 

@@ -191,20 +191,32 @@ SourceAdapter createSourceAdapter(
 
 /// Every credential of [config] (at least 3 characters): the username and
 /// password, and the user info, credential query values (`username`,
-/// `password`, `token`...) and Xtream login of its URL.
+/// `password`, `access_token`, `api_key`, `p`...; see [isCredentialParam])
+/// and Xtream login of its URL.
 Set<String> sourceSecrets(SourceConfig config) {
   final found = <String>{?config.username, ?config.password};
   final link = parseXtreamLink(config.url);
   if (link != null) found.addAll([link.username, link.password]);
-  final uri = config.kind == SourceKind.m3uFile
-      ? null
-      : Uri.tryParse(config.url.trim());
-  if (uri != null) {
-    for (final part in uri.userInfo.split(':')) {
-      found.add(_decode(part));
+  if (config.kind != SourceKind.m3uFile) {
+    final url = config.url.trim();
+    // Parsed by hand: Uri rejects an unencoded `@` in the password.
+    if (urlUserInfo(url) case final info?) {
+      final colon = info.indexOf(':');
+      if (colon < 0) {
+        found.add(_decode(info));
+      } else {
+        found
+          ..add(_decode(info.substring(0, colon)))
+          ..add(_decode(info.substring(colon + 1)));
+      }
     }
-    for (final MapEntry(:key, :value) in _queryPairs(uri.query)) {
-      if (_credentialParams.contains(key.toLowerCase())) found.add(value);
+    final q = url.indexOf('?');
+    if (q >= 0) {
+      final hash = url.indexOf('#', q);
+      final query = url.substring(q + 1, hash < 0 ? url.length : hash);
+      for (final MapEntry(:key, :value) in _queryPairs(query)) {
+        if (isCredentialParam(key)) found.add(value);
+      }
     }
   }
   return {
@@ -212,17 +224,6 @@ Set<String> sourceSecrets(SourceConfig config) {
       if (s.trim().length >= 3) s,
   };
 }
-
-const _credentialParams = {
-  'username',
-  'user',
-  'password',
-  'pass',
-  'pwd',
-  'token',
-  'auth',
-  'key',
-};
 
 /// Query pairs, tolerant to malformed percent-encoding.
 Iterable<MapEntry<String, String>> _queryPairs(String query) sync* {
@@ -241,6 +242,8 @@ String _decode(String s) {
     return Uri.decodeQueryComponent(s);
   } on FormatException {
     return s;
+  } on ArgumentError {
+    return s; // A stray `%` not followed by two hex digits.
   }
 }
 

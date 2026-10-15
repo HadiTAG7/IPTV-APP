@@ -58,19 +58,33 @@ typedef ChannelPageLoader = Future<List<ChannelRow>> Function(
 );
 
 /// A channel list read from the database in pages of [pageSize] rows, with
-/// at most [maxPages] pages in memory (least recently used dropped first),
-/// so even 50k-channel lists stay cheap. Listeners are told when the count
-/// or a page arrives.
+/// at most [maxPages] pages in memory (least recently used dropped first,
+/// never those near the rows on screen), so even 50k-channel lists stay
+/// cheap. Listeners are told when the count or a page arrives.
+///
+/// Like the Live list's pager:
+/// * missing pages are read once requests have been quiet for [loadDelay]
+///   (the first page at once), one query at a time, and only those within
+///   [windowMargin] rows of [window], so dragging the scrollbar over 50k
+///   channels never queries the pages it passed;
+/// * [reload] counts again but keeps showing the old rows until their page
+///   is read again, so the guide never flickers to empty rows.
 class GuideChannelPager extends ChangeNotifier {
   GuideChannelPager({
     required this._count,
     required this._load,
     this.pageSize = 200,
     this.maxPages = 10,
+    this.loadDelay = const Duration(milliseconds: 120),
+    this.windowMargin = 20,
+    this.window,
   });
 
   /// A list held in memory as a whole (favourites).
-  factory GuideChannelPager.fixed(Future<List<ChannelRow>> Function() rows) {
+  factory GuideChannelPager.fixed(
+    Future<List<ChannelRow>> Function() rows, {
+    ({int first, int last})? Function()? window,
+  }) {
     List<ChannelRow> all = const [];
     return GuideChannelPager(
       count: () async => (all = await rows()).length,
@@ -78,32 +92,38 @@ class GuideChannelPager extends ChangeNotifier {
         offset.clamp(0, all.length),
         (offset + limit).clamp(0, all.length),
       ),
+      window: window,
     );
   }
 
   /// The channels the guide shows for [filter]. [favoriteKeys] gives the
   /// favourite order at each (re)load; unavailable favourites are skipped.
+  /// [window] gives the rows on screen.
   factory GuideChannelPager.forFilter(
     AppDatabase db,
     int sourceId,
     GuideFilter filter, {
     List<String> Function()? favoriteKeys,
+    ({int first, int last})? Function()? window,
   }) {
     final catalog = db.catalogDao;
     return switch (filter.kind) {
       GuideFilterKind.favorites => GuideChannelPager.fixed(
         () => catalog.channelsByKeys(sourceId, favoriteKeys?.call() ?? []),
+        window: window,
       ),
       GuideFilterKind.all => GuideChannelPager(
         count: () => catalog.totalCount(sourceId, ContentKind.live),
         load: (offset, limit) =>
             catalog.allChannelsPage(sourceId, offset, limit),
+        window: window,
       ),
       GuideFilterKind.category => GuideChannelPager(
         count: () =>
             catalog.itemCount(sourceId, ContentKind.live, filter.categoryKey!),
         load: (offset, limit) =>
             catalog.channelsPage(sourceId, filter.categoryKey!, offset, limit),
+        window: window,
       ),
     };
   }
@@ -112,14 +132,31 @@ class GuideChannelPager extends ChangeNotifier {
   final ChannelPageLoader _load;
   final int pageSize;
   final int maxPages;
+  final Duration loadDelay;
+
+  /// Rows around [window] whose pages are read.
+  final int windowMargin;
+
+  /// The rows on screen now, `[first, last]`; null when unknown (every
+  /// requested page is read).
+  final ({int first, int last})? Function()? window;
 
   /// Loaded pages, least recently used first.
   final _pages = <int, List<ChannelRow>>{};
-  final _loading = <int>{};
+
+  /// Pages read before the last [reload], shown until read again.
+  final _stale = <int>{};
+  final _wanted = <int>{};
+  Timer? _timer;
+  bool _loading = false;
   int? _length;
   Object? _error;
   int _epoch = 0;
   bool _disposed = false;
+
+  /// Page queries run so far, for tests.
+  @visibleForTesting
+  int loadCount = 0;
 
   /// Number of channels; null until [init] has counted them.
   int? get length => _length;
@@ -127,7 +164,8 @@ class GuideChannelPager extends ChangeNotifier {
   /// The last load failure, if any.
   Object? get error => _error;
 
-  /// Counts the channels and loads the first page.
+  /// Counts the channels and loads the first page (unless rows from before
+  /// a [reload] are shown).
   Future<void> init() async {
     final epoch = _epoch;
     try {
@@ -135,7 +173,10 @@ class GuideChannelPager extends ChangeNotifier {
       if (_disposed || epoch != _epoch) return;
       _length = n;
       _error = null;
-      if (n > 0) await _fetch(0, epoch);
+      final pages = n == 0 ? 0 : (n - 1) ~/ pageSize + 1;
+      _pages.removeWhere((p, _) => p >= pages);
+      _stale.removeWhere((p) => p >= pages);
+      if (n > 0 && _pages.isEmpty) await _read(0, epoch);
     } on Object catch (e) {
       if (_disposed || epoch != _epoch) return;
       _error = e;
@@ -143,38 +184,44 @@ class GuideChannelPager extends ChangeNotifier {
     if (!_disposed && epoch == _epoch) notifyListeners();
   }
 
-  /// Forgets everything and loads again (the catalog changed).
+  /// Counts again after the catalog changed. The rows in memory stay shown
+  /// and are read again when next asked for ([rowAt], [ensure]); answers
+  /// to earlier queries are dropped.
   Future<void> reload() {
     _epoch++;
-    _pages.clear();
-    _loading.clear();
+    _stale.addAll(_pages.keys);
+    _wanted.clear();
+    _timer?.cancel();
+    _timer = null;
+    _loading = false;
     return init();
   }
 
-  /// The channel at [index], or null while its page loads (the load is
-  /// started here).
+  /// The channel at [index], or null while its page loads (the page is
+  /// asked for here).
   ChannelRow? rowAt(int index) {
     final n = _length;
     if (n == null || index < 0 || index >= n) return null;
     final p = index ~/ pageSize;
     final page = _pages.remove(p);
     if (page == null) {
-      unawaited(_fetch(p, _epoch));
+      _want(p);
       return null;
     }
     _pages[p] = page; // most recently used last
+    if (_stale.contains(p)) _want(p);
     final i = index - p * pageSize;
     return i < page.length ? page[i] : null;
   }
 
-  /// Starts loading the pages of rows `[from, to]`.
+  /// Asks for the pages of rows `[from, to]`.
   void ensure(int from, int to) {
     final n = _length;
     if (n == null || n == 0) return;
     final first = from.clamp(0, n - 1) ~/ pageSize;
     final last = to.clamp(0, n - 1) ~/ pageSize;
     for (var p = first; p <= last; p++) {
-      if (!_pages.containsKey(p)) unawaited(_fetch(p, _epoch));
+      if (!_pages.containsKey(p) || _stale.contains(p)) _want(p);
     }
   }
 
@@ -194,28 +241,84 @@ class GuideChannelPager extends ChangeNotifier {
   /// a zap list.
   List<String> loadedKeys() => keysIn(0, (_length ?? 0) - 1);
 
-  Future<void> _fetch(int page, int epoch) async {
-    if (!_loading.add(page)) return;
+  /// Collects [page] and reads the wanted pages after [loadDelay] of quiet.
+  void _want(int page) {
+    if (!_wanted.add(page)) return;
+    _timer?.cancel();
+    _timer = Timer(loadDelay, _pump);
+  }
+
+  /// Pages within [windowMargin] rows of the rows on screen; null when
+  /// [window] is unknown.
+  ({int first, int last})? _nearPages() {
+    final w = window?.call();
+    final n = _length;
+    if (w == null || n == null) return null;
+    return (
+      first: (w.first - windowMargin).clamp(0, n) ~/ pageSize,
+      last: (w.last + windowMargin).clamp(0, n) ~/ pageSize,
+    );
+  }
+
+  Future<void> _pump() async {
+    _timer = null;
+    if (_loading || _disposed) return;
+    final near = _nearPages();
+    final targets = [
+      for (final p in _wanted)
+        if (near == null || (p >= near.first && p <= near.last)) p,
+    ]..sort();
+    _wanted.clear();
+    if (targets.isEmpty) return;
+    _loading = true;
+    final epoch = _epoch;
+    for (final p in targets) {
+      if (_pages.containsKey(p) && !_stale.contains(p)) continue;
+      await _read(p, epoch);
+      if (_disposed || epoch != _epoch) return;
+      notifyListeners();
+    }
+    _loading = false;
+    if (_wanted.isNotEmpty && !_disposed) {
+      _timer?.cancel();
+      _timer = Timer(Duration.zero, _pump);
+    }
+  }
+
+  Future<void> _read(int page, int epoch) async {
     try {
+      loadCount++;
       final rows = await _load(page * pageSize, pageSize);
       if (_disposed || epoch != _epoch) return;
-      _pages[page] = rows;
-      while (_pages.length > maxPages) {
-        _pages.remove(_pages.keys.first);
-      }
+      _pages
+        ..remove(page)
+        ..[page] = rows;
+      _stale.remove(page);
+      _evict();
       _error = null;
     } on Object catch (e) {
       if (_disposed || epoch != _epoch) return;
       _error = e;
-    } finally {
-      if (epoch == _epoch) _loading.remove(page);
     }
-    if (!_disposed) notifyListeners();
+  }
+
+  void _evict() {
+    final near = _nearPages();
+    while (_pages.length > maxPages) {
+      final victim = _pages.keys.firstWhere(
+        (p) => near == null || p < near.first || p > near.last,
+        orElse: () => -1,
+      );
+      if (victim < 0) return;
+      _pages.remove(victim);
+      _stale.remove(victim);
+    }
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _timer?.cancel();
     super.dispose();
   }
 }

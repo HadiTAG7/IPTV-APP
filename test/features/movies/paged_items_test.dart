@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -202,7 +203,7 @@ void main() {
       });
     });
 
-    test('refresh re-reads loaded pages and keeps items meanwhile', () {
+    test('refresh re-reads the pages asked for and keeps items meanwhile', () {
       fakeAsync((async) {
         var version = 0;
         final reads = <int>[];
@@ -222,13 +223,68 @@ void main() {
         async.elapse(const Duration(milliseconds: 200));
         expect(items.itemAt(25), 'v0:25');
         version = 1;
+        var notified = 0;
+        items.addListener(() => notified++);
         unawaited(items.refresh());
+        // Listeners hear of it, and ask for the pages they show.
+        expect(notified, 1);
         // Old items stay until the new pages arrive.
         expect(items.itemAt(3), 'v0:3');
         async.elapse(const Duration(milliseconds: 20));
+        expect(items.itemAt(3), 'v0:3');
+        async.elapse(items.debounce);
         expect(items.itemAt(3), 'v1:3');
+        expect(reads, [0, 20, 0]);
+        // A page not asked for since is read when it is.
+        expect(items.itemAt(25), 'v0:25');
+        async.elapse(const Duration(milliseconds: 200));
         expect(items.itemAt(25), 'v1:25');
         expect(reads, [0, 20, 0, 20]);
+        items.dispose();
+      });
+    });
+
+    test('refresh reads only the pages on screen, debounced and at most '
+        'maxConcurrent at once', () {
+      fakeAsync((async) {
+        var inFlight = 0;
+        var maxInFlight = 0;
+        final reads = <int>[];
+        final items = PagedItems<int>(
+          count: 1000,
+          pageSize: 10,
+          maxPages: 10,
+          load: (offset, limit) async {
+            reads.add(offset);
+            maxInFlight = max(maxInFlight, ++inFlight);
+            await Future<void>.delayed(const Duration(milliseconds: 30));
+            inFlight--;
+            return [for (var i = offset; i < offset + limit; i++) i];
+          },
+        );
+        async.flushMicrotasks();
+        // Ten pages in memory, the screen now shows page 9.
+        for (var page = 1; page < 10; page++) {
+          items.itemAt(page * 10);
+          async.elapse(const Duration(milliseconds: 200));
+        }
+        expect(items.loadedPages, hasLength(10));
+        reads.clear();
+        maxInFlight = 0;
+        // Three commits of one sync.
+        for (var i = 0; i < 3; i++) {
+          var done = false;
+          unawaited(items.refresh().then((_) => done = true));
+          items
+            ..itemAt(90)
+            ..itemAt(95);
+          async.elapse(const Duration(milliseconds: 50));
+          expect(reads, hasLength(i), reason: 'debounced');
+          async.elapse(const Duration(milliseconds: 200));
+          expect(done, isTrue);
+        }
+        expect(reads, [90, 90, 90]);
+        expect(maxInFlight, 1);
         items.dispose();
       });
     });
@@ -259,7 +315,10 @@ void main() {
         expect(items.count, 15);
         expect(items.loadedPages, {0});
         expect(items.itemAt(25), isNull);
+        expect(items.itemAt(7), 7);
         async.flushMicrotasks();
+        expect(done, isFalse);
+        async.elapse(items.debounce);
         expect(done, isFalse);
         async.elapse(const Duration(milliseconds: 10));
         expect(done, isTrue);
@@ -275,6 +334,26 @@ void main() {
         async.elapse(const Duration(milliseconds: 200));
         expect(items.itemAt(35), 35);
         items.dispose();
+      });
+    });
+
+    test('refresh completes when nothing is asked for, and on dispose', () {
+      fakeAsync((async) {
+        final (items, reads) = paged(30, latency: const Duration(seconds: 1));
+        async.elapse(const Duration(seconds: 2));
+        var done = 0;
+        unawaited(items.refresh().then((_) => done++));
+        async.elapse(items.debounce);
+        expect(done, 1);
+        expect(reads, [0]);
+        items.itemAt(1);
+        unawaited(items.refresh().then((_) => done++));
+        items.itemAt(1);
+        async.elapse(items.debounce);
+        expect(done, 1);
+        items.dispose();
+        async.flushMicrotasks();
+        expect(done, 2);
       });
     });
 

@@ -94,6 +94,7 @@ class _GuidePhoneListState extends ConsumerState<GuidePhoneList> {
       widget.sourceId,
       widget.filter,
       favoriteKeys: () => widget.favoriteKeys,
+      window: _visibleRows,
     )..addListener(_onPager);
     unawaited(pager.init());
     return pager;
@@ -110,14 +111,23 @@ class _GuidePhoneListState extends ConsumerState<GuidePhoneList> {
     _debounce = Timer(const Duration(milliseconds: 150), _loadNowNext);
   }
 
-  List<String> _visibleKeys() {
+  /// The rows on screen; null before the first layout.
+  ({int first, int last})? _visibleRows() {
     if (!_scroll.hasClients || !_scroll.position.hasViewportDimension) {
-      return _pager.keysIn(0, 15);
+      return null;
     }
     final p = _scroll.position;
     final first = (p.pixels / GuidePhoneList.rowExtent).floor();
-    final last =
-        first + (p.viewportDimension / GuidePhoneList.rowExtent).ceil();
+    return (
+      first: first,
+      last: first + (p.viewportDimension / GuidePhoneList.rowExtent).ceil(),
+    );
+  }
+
+  List<String> _visibleKeys() {
+    final rows = _visibleRows();
+    if (rows == null) return _pager.keysIn(0, 15);
+    final (:first, :last) = rows;
     _pager.ensure(first - 10, last + 10);
     return _pager.keysIn(first, last);
   }

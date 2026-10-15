@@ -1312,6 +1312,64 @@ void main() {
       });
     });
 
+    test('retry() keeps the engine of a manual switch', () {
+      fakeAsync((async) {
+        final rig = Rig(async)
+          ..playsOn(EngineKind.exo)
+          ..playsOn(EngineKind.mpv);
+        rig.play(liveTs, key: 'ch1');
+        async.elapse(sec);
+        unawaited(rig.controller.switchEngine());
+        async.elapse(sec);
+        expect(rig.controller.engineKind, EngineKind.mpv);
+        expect(rig.learned, [('ch1', EngineKind.mpv)]);
+        // mpv drops and every reconnect fails until the watchdog gives up.
+        rig.engines.onCreate = null;
+        rig.engine.onOpen = (e, _) => e.emitError('Source error');
+        rig.engine.emitError('Source error');
+        async.elapse(const Duration(minutes: 3));
+        expect(rig.controller.phase, PlaybackPhase.failed);
+        rig
+          ..playsOn(EngineKind.exo)
+          ..playsOn(EngineKind.mpv);
+        rig.engine.onOpen = (e, _) => e.emitFirstFrame();
+        unawaited(rig.controller.retry());
+        async.elapse(sec);
+        expect(rig.controller.phase, PlaybackPhase.playing);
+        expect(rig.controller.engineKind, EngineKind.mpv);
+        expect(rig.engines.created.map((e) => e.kind), [
+          EngineKind.exo,
+          EngineKind.mpv,
+        ]);
+        rig.controller.dispose();
+      });
+    });
+
+    test('retry() keeps mpv after the silent-audio switch', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        rig.engines.onCreate = (e) {
+          if (e.kind == EngineKind.exo) e.audio = const [TrackInfo(id: '0')];
+          e.onOpen = (e, _) => e.emitFirstFrame();
+        };
+        rig.play(liveTs, key: 'ac3');
+        async.elapse(const Duration(seconds: 3));
+        expect(rig.controller.engineKind, EngineKind.mpv);
+        expect(rig.learned, [('ac3', EngineKind.mpv)]);
+        rig.engine.onOpen = (e, _) => e.emitError('Source error');
+        rig.engine.emitError('Source error');
+        async.elapse(const Duration(minutes: 3));
+        expect(rig.controller.phase, PlaybackPhase.failed);
+        rig.engine.onOpen = (e, _) => e.emitFirstFrame();
+        unawaited(rig.controller.retry());
+        async.elapse(const Duration(seconds: 5));
+        expect(rig.controller.phase, PlaybackPhase.playing);
+        expect(rig.controller.engineKind, EngineKind.mpv);
+        expect(rig.engines.created, hasLength(2));
+        rig.controller.dispose();
+      });
+    });
+
     test('notifies listeners on phase and engine changes', () {
       fakeAsync((async) {
         final rig = Rig(async)..playsOn(EngineKind.exo);

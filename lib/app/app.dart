@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../epg/epg_providers.dart';
 import '../l10n/gen/app_localizations.dart';
 import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
 import '../tv/dpad_shortcuts.dart';
 import '../tv/focus_watchdog.dart';
 import 'form_factor.dart';
@@ -24,13 +25,16 @@ final navigatorKeyProvider = Provider<GlobalKey<NavigatorState>>(
 /// Keeps the background guide schedule ([epgAutoRefreshProvider]) running
 /// for the app's lifetime: guides are refreshed after every successful
 /// catalog sync (the first import included), on launch when due, and
-/// periodically.
+/// periodically. Keeps the image cache on the Lite-mode budget
+/// ([imageCacheBudgetProvider]).
 class IptvApp extends ConsumerWidget {
   const IptvApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.listen(epgAutoRefreshProvider, (_, _) {});
+    ref
+      ..listen(epgAutoRefreshProvider, (_, _) {})
+      ..listen(imageCacheBudgetProvider, (_, _) {});
     final locale = ref.watch(settingsProvider.select((s) => s.locale));
     final tv = ref.watch(tvModeProvider);
     return MaterialApp(
@@ -62,7 +66,9 @@ Locale resolveAppLocale(List<Locale>? preferred, Iterable<Locale> supported) {
 
 /// Wraps the navigator: resolves the [FormFactor] from the screen
 /// ([FormFactorScope]), lays TV out on the 960 dp canvas ([TvViewport]),
-/// keeps remote focus alive ([FocusWatchdog]) and handles [BackIntent]
+/// turns animations off in Lite mode ([MediaQueryData.disableAnimations];
+/// see [FocusTokens.animationOf]), keeps remote focus alive
+/// ([FocusWatchdog]) and handles [BackIntent]
 /// (Escape, the browser Back key) like the system back button: `maybePop`
 /// on the root navigator, so every route's `PopScope` still decides. Page
 /// Up and Page Down move focus ([PageFocusAction]).
@@ -100,6 +106,7 @@ class _AppFrameState extends ConsumerState<AppFrame> {
 
     Widget body = FocusWatchdog(enabled: tv, child: widget.child);
     if (tv) body = TvViewport(child: body);
+    body = _Motion(off: ref.watch(liteModeProvider), child: body);
     return Actions(
       actions: {
         BackIntent: CallbackAction<BackIntent>(
@@ -108,6 +115,26 @@ class _AppFrameState extends ConsumerState<AppFrame> {
         PageFocusIntent: PageFocusAction(),
       },
       child: FormFactorScope(formFactor: formFactor, child: body),
+    );
+  }
+}
+
+/// Turns animations off below it when [off] (Lite mode), keeping the
+/// system's own reduce-motion setting otherwise.
+class _Motion extends StatelessWidget {
+  const _Motion({required this.off, required this.child});
+
+  final bool off;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    return MediaQuery(
+      data: off && !mq.disableAnimations
+          ? mq.copyWith(disableAnimations: true)
+          : mq,
+      child: child,
     );
   }
 }

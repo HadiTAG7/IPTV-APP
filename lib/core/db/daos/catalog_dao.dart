@@ -595,6 +595,18 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> {
           ))
           .write(CategoriesCompanion(hidden: Value(hidden)));
 
+  /// Shows every hidden category of [kind] in one statement (one change
+  /// notification for the category streams, however many were hidden).
+  /// Returns how many were shown.
+  Future<int> showHiddenCategories(int sourceId, ContentKind kind) =>
+      (update(db.categories)..where(
+            (c) =>
+                c.sourceId.equals(sourceId) &
+                c.kind.equalsValue(kind) &
+                c.hidden.equals(true),
+          ))
+          .write(const CategoriesCompanion(hidden: Value(false)));
+
   /// Items in a category of the committed generation.
   Future<int> itemCount(
     int sourceId,

@@ -1,13 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/features/live/category_chips.dart';
 import 'package:iptv_player/features/live/category_pane.dart';
 import 'package:iptv_player/features/live/live_models.dart';
 import 'package:iptv_player/features/live/live_screen.dart';
+import 'package:iptv_player/features/live/providers.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/sources/models.dart';
 import 'package:iptv_player/widgets/channel_tile.dart';
 
 import 'support/live_test_utils.dart';
+
+/// The phone Live layout's chip row.
+final chipRow = find.descendant(
+  of: find.byType(LiveCategoryChips),
+  matching: find.byType(Scrollable),
+);
 
 void main() {
   for (final rtl in [false, true]) {
@@ -28,11 +36,12 @@ void main() {
       );
       // Phone layout: chips, no category pane.
       expect(find.byType(LiveCategoryPane), findsNothing);
-      final chip = find.byKey(const ValueKey('live-chip-cat:sports'));
-      expect(chip, findsOneWidget);
+      expect(find.byType(LiveCategoryChips), findsOneWidget);
       // Chips run from the start side.
       final favX = tester
-          .getCenter(find.byKey(const ValueKey('live-chip-fav')))
+          .getCenter(
+            find.byKey(const ValueKey('live-chip-fav'), skipOffstage: false),
+          )
           .dx;
       final allX = tester
           .getCenter(find.byKey(const ValueKey('live-chip-all')))
@@ -40,7 +49,10 @@ void main() {
       expect(rtl ? favX > allX : favX < allX, isTrue);
       expect(find.text('Channel 1'), findsOneWidget);
 
-      await tester.ensureVisible(chip);
+      // The row is lazy: chips further along are built as it scrolls.
+      final chip = find.byKey(const ValueKey('live-chip-cat:sports'));
+      await tester.scrollUntilVisible(chip, 200, scrollable: chipRow);
+      await settle(tester);
       await tester.tap(chip);
       await settle(tester);
       final live = tester.state<LiveViewState>(find.byType(LiveView));
@@ -70,8 +82,10 @@ void main() {
       expect(await db.favoritesDao.favoriteKeys(id, ContentKind.live), ['k13']);
 
       // Favourites zap within the favourites.
-      await tester.ensureVisible(find.byKey(const ValueKey('live-chip-fav')));
-      await tester.tap(find.byKey(const ValueKey('live-chip-fav')));
+      final fav = find.byKey(const ValueKey('live-chip-fav'));
+      await tester.scrollUntilVisible(fav, -200, scrollable: chipRow);
+      await settle(tester);
+      await tester.tap(fav);
       await settle(tester);
       expect(find.text('Channel 13'), findsOneWidget);
       await tester.tap(find.text('Channel 13'));
@@ -82,13 +96,59 @@ void main() {
 
       // Long press on a chip hides its category.
       final kids = find.byKey(const ValueKey('live-chip-cat:kids'));
-      await tester.ensureVisible(kids);
+      await tester.scrollUntilVisible(kids, 200, scrollable: chipRow);
       await settle(tester);
       await tester.longPress(kids);
       await settle(tester);
       await tester.tap(find.text(l10n.liveHideCategory));
       await settle(tester);
       expect(find.byKey(const ValueKey('live-chip-cat:kids')), findsNothing);
+      await disposeApp(tester, db);
+    });
+  }
+
+  for (final rtl in [false, true]) {
+    testWidgets('${rtl ? 'ar' : 'en'}: thousands of categories build only the '
+        'chips on screen; a far selected one is revealed', (tester) async {
+      final db = openAppTestDb();
+      final id = await addTestSource(db, lastSyncAt: DateTime.now());
+      await seedCatalog(
+        db,
+        id,
+        categories: [
+          for (var i = 0; i < 2000; i++) liveCategory('c$i', 'Category $i', i),
+        ],
+        channels: [
+          testChannel(1, categories: ['c0']),
+          testChannel(2, categories: ['c1500']),
+        ],
+      );
+      await db.settingsDao.setString(liveLastListKey(id), 'cat:c1500');
+      await pumpLiveApp(
+        tester,
+        db,
+        tv: false,
+        locale: Locale(rtl ? 'ar' : 'en'),
+      );
+      // Built chips, on screen or in the row's cache extent.
+      final chips = find.byWidgetPredicate(
+        (w) =>
+            w.key is ValueKey<String> &&
+            (w.key! as ValueKey<String>).value.startsWith('live-chip-'),
+        skipOffstage: false,
+      );
+      expect(chips.evaluate().length, lessThan(40));
+      final selected = find.byKey(const ValueKey('live-chip-cat:c1500'));
+      expect(selected, findsOneWidget);
+      final rect = tester.getRect(selected);
+      expect(rect.left, greaterThanOrEqualTo(0));
+      expect(rect.right, lessThanOrEqualTo(phoneSize.width));
+      expect(find.text('Channel 2'), findsOneWidget);
+
+      // Rebuilds (a played channel, a favourite) stay as small.
+      await db.recentDao.markRecent(id, 'k2');
+      await settle(tester);
+      expect(chips.evaluate().length, lessThan(40));
       await disposeApp(tester, db);
     });
   }

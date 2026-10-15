@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/player/engine/mpv_engine.dart';
@@ -15,6 +17,9 @@ class FakePlatformPlayer extends PlatformPlayer {
   bool? openedWithPlay;
   Object? openError;
 
+  /// Holds [stop] until completed (then records `stopped`).
+  Completer<void>? stopGate;
+
   @override
   Future<void> open(Playable playable, {bool play = true}) async {
     calls.add('open');
@@ -24,7 +29,13 @@ class FakePlatformPlayer extends PlatformPlayer {
   }
 
   @override
-  Future<void> stop() async => calls.add('stop');
+  Future<void> stop() async {
+    calls.add('stop');
+    final gate = stopGate;
+    if (gate == null) return;
+    await gate.future;
+    calls.add('stopped');
+  }
 
   @override
   Future<void> play() async => calls.add('play');
@@ -464,6 +475,89 @@ void main() {
 
     test('kind is mpv', () {
       expect(Rig().engine.kind, EngineKind.mpv);
+    });
+  });
+
+  group('shared core', () {
+    late List<FakePlatformPlayer> players;
+    late List<bool> lites;
+    late MpvCore core;
+
+    setUp(() {
+      players = [];
+      lites = [];
+      core = MpvCore(
+        createPlayer: ({required lite}) {
+          lites.add(lite);
+          final fake = FakePlatformPlayer();
+          players.add(fake);
+          return Player(platformPlayer: fake);
+        },
+        createVideo: (_, {required hardwareDecoding}) => null,
+      );
+    });
+
+    test('engines borrow one player: stopped, never disposed', () async {
+      final a = MpvEngine(core: core);
+      expect(core.isLent, isTrue);
+      await a.open(live);
+      await a.dispose();
+      expect(core.isLent, isFalse);
+      final b = MpvEngine(core: core, lite: true);
+      await b.open(movie);
+      await b.dispose();
+      expect(players, hasLength(1));
+      expect(lites, [false]);
+      expect(players.single.calls, ['open', 'stop', 'open', 'stop']);
+    });
+
+    test('the next engine opens only after the last one stopped', () async {
+      final a = MpvEngine(core: core);
+      await a.open(live);
+      final fake = players.single..stopGate = Completer<void>();
+      // Not awaited, like PlaybackController.dispose.
+      unawaited(a.dispose());
+      final b = MpvEngine(core: core);
+      final opening = b.open(movie);
+      await settle();
+      expect(fake.calls, ['open', 'stop']);
+      fake.stopGate!.complete();
+      await opening;
+      expect(fake.calls, ['open', 'stop', 'stopped', 'open']);
+      expect(fake.opened!.uri, movie.url);
+      await b.dispose();
+    });
+
+    test('a borrowed core resets tracks and applies hwdec changes', () {
+      final first = core.lease(lite: false, hardwareDecoding: true);
+      expect(first.shared, isTrue);
+      expect(first.properties, isEmpty);
+      unawaited(first.release());
+      final same = core.lease(lite: false, hardwareDecoding: true);
+      expect(same.properties, {'aid': 'auto', 'sid': 'auto'});
+      unawaited(same.release());
+      final software = core.lease(lite: false, hardwareDecoding: false);
+      expect(software.properties, {
+        'aid': 'auto',
+        'sid': 'auto',
+        'hwdec': 'no',
+      });
+      expect(identical(software.player, first.player), isTrue);
+      unawaited(software.release());
+    });
+
+    test('while one engine holds it, another gets its own player', () async {
+      final a = MpvEngine(core: core);
+      final b = MpvEngine(core: core);
+      expect(players, hasLength(2));
+      await b.dispose();
+      expect(players[1].calls, ['dispose']);
+      await a.dispose();
+      expect(players[0].calls, ['stop']);
+      // The core is free again.
+      final c = MpvEngine(core: core);
+      expect(players, hasLength(2));
+      await c.dispose();
     });
   });
 

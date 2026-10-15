@@ -28,6 +28,7 @@ void main() {
         },
         pageSize: 100,
         maxPages: 3,
+        loadDelay: Duration.zero,
       );
       addTearDown(pager.dispose);
       var notified = 0;
@@ -55,7 +56,79 @@ void main() {
       expect(pager.rowAt(1000), isNull);
     });
 
-    test('reload drops pages and late answers', () async {
+    test('a scrollbar drag over 50k channels reads only the pages where '
+        'it stops', () {
+      fakeAsync((async) {
+        final loads = <int>[];
+        var visible = (first: 0, last: 10);
+        final pager = GuideChannelPager(
+          count: () async => 50000,
+          load: (offset, limit) async {
+            loads.add(offset ~/ 200);
+            await Future<void>.delayed(const Duration(milliseconds: 30));
+            return [for (var i = offset; i < offset + limit; i++) _row(i)];
+          },
+          window: () => visible,
+        );
+        unawaited(pager.init());
+        async.elapse(const Duration(milliseconds: 100));
+        expect(loads, [0]);
+        // 60 frames from the top to the bottom, ten rows built per frame.
+        for (var frame = 1; frame <= 60; frame++) {
+          final first = (49990 * frame / 60).floor();
+          visible = (first: first, last: first + 10);
+          for (var i = first; i <= first + 10; i++) {
+            pager.rowAt(i);
+          }
+          pager.ensure(first - 20, first + 30);
+          async.elapse(const Duration(milliseconds: 16));
+        }
+        async.elapse(const Duration(milliseconds: 500));
+        // Only the destination page, not the 60 pages passed on the way.
+        expect(loads, [0, 249]);
+        expect(pager.rowAt(49995)!.key, 'k49995');
+        expect(pager.loadCount, 2);
+        pager.dispose();
+      });
+    });
+
+    test('reload keeps showing the old rows until their page is read', () {
+      fakeAsync((async) {
+        var version = 0;
+        var count = 30;
+        final pager = GuideChannelPager(
+          count: () async => count,
+          load: (offset, limit) async => [
+            for (var i = offset; i < offset + limit && i < count; i++)
+              ChannelRow(key: 'k$i', name: 'v$version:$i'),
+          ],
+          pageSize: 10,
+        );
+        unawaited(pager.init());
+        async.elapse(const Duration(milliseconds: 10));
+        pager.rowAt(25);
+        async.elapse(const Duration(milliseconds: 200));
+        expect(pager.rowAt(5)!.name, 'v0:5');
+        version = 1;
+        count = 22;
+        var notified = 0;
+        pager.addListener(() => notified++);
+        unawaited(pager.reload());
+        async.flushMicrotasks();
+        expect(notified, 1);
+        expect(pager.length, 22);
+        // The old rows stay until the page is read again.
+        expect(pager.rowAt(5)!.name, 'v0:5');
+        expect(pager.rowAt(21)!.name, 'v0:21');
+        async.elapse(const Duration(milliseconds: 200));
+        expect(pager.rowAt(5)!.name, 'v1:5');
+        expect(pager.rowAt(21)!.name, 'v1:21');
+        expect(pager.rowAt(25), isNull);
+        pager.dispose();
+      });
+    });
+
+    test('reload drops late answers', () async {
       var count = 10;
       final pending = <Completer<List<ChannelRow>>>[];
       final pager = GuideChannelPager(
