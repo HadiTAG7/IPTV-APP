@@ -59,7 +59,10 @@ void main() {
     expect(find.text('Test News'), findsOneWidget);
     final route = ModalRoute.of(tester.element(find.byType(PlayerScreen)))!;
     expect(route.settings.name, kPlayerRouteName);
-    expect((route as MaterialPageRoute<void>).fullscreenDialog, isTrue);
+    expect((route as PageRoute<void>).fullscreenDialog, isTrue);
+    // A quick fade both ways, no page zoom.
+    expect(route.transitionDuration, kPlayerFadeIn);
+    expect(route.reverseTransitionDuration, kPlayerFadeOut);
 
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();

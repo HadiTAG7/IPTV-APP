@@ -7,8 +7,16 @@ import 'player_screen.dart';
 /// Route name of the fullscreen player.
 const kPlayerRouteName = '/player';
 
+/// How long the player takes to fade in and out.
+const kPlayerFadeIn = Duration(milliseconds: 180);
+const kPlayerFadeOut = Duration(milliseconds: 120);
+
 /// Opens the fullscreen player for [request]. Completes when the player is
 /// closed.
+///
+/// The player fades in and out quickly: the page zoom of other routes
+/// looked poor over a black video surface while the desktop window enters
+/// or leaves fullscreen at the same time.
 ///
 /// When [context] is inside a home tab, the player's Guide button closes the
 /// player and shows the Guide tab ([PlayerGuideScope]); elsewhere it just
@@ -16,12 +24,18 @@ const kPlayerRouteName = '/player';
 Future<void> openPlayer(BuildContext context, PlayRequest request) {
   final openGuide = guideOpenerFor(context);
   return Navigator.of(context).push<void>(
-    MaterialPageRoute<void>(
+    PageRouteBuilder<void>(
       settings: RouteSettings(name: kPlayerRouteName, arguments: request),
       fullscreenDialog: true,
-      builder: (_) => PlayerGuideScope(
+      transitionDuration: kPlayerFadeIn,
+      reverseTransitionDuration: kPlayerFadeOut,
+      pageBuilder: (_, _, _) => PlayerGuideScope(
         openGuide: openGuide,
         child: PlayerScreen(request: request),
+      ),
+      transitionsBuilder: (_, animation, _, child) => FadeTransition(
+        opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+        child: child,
       ),
     ),
   );

@@ -44,6 +44,7 @@ class FlutterWindow : public Win32Window {
   bool fullscreen_ = false;
   LONG style_before_fullscreen_ = 0;
   LONG ex_style_before_fullscreen_ = 0;
+  RECT rect_before_fullscreen_ = {};
   WINDOWPLACEMENT placement_before_fullscreen_ = {};
 };
 

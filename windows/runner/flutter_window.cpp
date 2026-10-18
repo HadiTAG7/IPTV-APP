@@ -132,16 +132,15 @@ void FlutterWindow::EnterFullscreen() {
     return;
   }
   fullscreen_ = true;
-  // The placement keeps the maximized state and the normal position.
-  placement_before_fullscreen_.length = sizeof(placement_before_fullscreen_);
-  ::GetWindowPlacement(window, &placement_before_fullscreen_);
-  // Windows keeps the taskbar over a maximized window, so a maximized one
-  // is restored first (as Chromium does); the placement maximizes it again.
-  if (::IsZoomed(window)) {
-    ::SendMessage(window, WM_SYSCOMMAND, SC_RESTORE, 0);
-  }
+  // A maximized window stays maximized: restoring it first, and maximizing
+  // it again on exit, makes Windows animate a small window across the
+  // screen. The taskbar is told the window is fullscreen instead, as
+  // Chromium does.
   style_before_fullscreen_ = ::GetWindowLong(window, GWL_STYLE);
   ex_style_before_fullscreen_ = ::GetWindowLong(window, GWL_EXSTYLE);
+  ::GetWindowRect(window, &rect_before_fullscreen_);
+  placement_before_fullscreen_.length = sizeof(placement_before_fullscreen_);
+  ::GetWindowPlacement(window, &placement_before_fullscreen_);
 
   ::SetWindowLong(window, GWL_STYLE,
                   style_before_fullscreen_ & ~(WS_CAPTION | WS_THICKFRAME));
@@ -166,18 +165,20 @@ void FlutterWindow::ExitFullscreen() {
     return;
   }
   fullscreen_ = false;
-  ::SetWindowLong(window, GWL_STYLE, style_before_fullscreen_);
+  ::SetWindowLong(window, GWL_STYLE, style_before_fullscreen_ | WS_VISIBLE);
   ::SetWindowLong(window, GWL_EXSTYLE, ex_style_before_fullscreen_);
-  ::SetWindowPos(window, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
-                     SWP_FRAMECHANGED);
-  // Back to the size, position and maximized state from before. Windows
-  // moves the window onto a monitor if its old place is gone (a monitor
-  // unplugged while fullscreen).
-  WINDOWPLACEMENT placement = placement_before_fullscreen_;
-  if (placement.showCmd != SW_SHOWMAXIMIZED) {
-    placement.showCmd = SW_SHOWNORMAL;
+  const RECT& before = rect_before_fullscreen_;
+  if (::MonitorFromRect(&before, MONITOR_DEFAULTTONULL) != nullptr) {
+    ::SetWindowPos(window, nullptr, before.left, before.top,
+                   before.right - before.left, before.bottom - before.top,
+                   SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+  } else {
+    // Its monitor is gone (unplugged while fullscreen): the saved placement
+    // brings the window back onto one.
+    ::SetWindowPlacement(window, &placement_before_fullscreen_);
+    ::SetWindowPos(window, nullptr, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                       SWP_FRAMECHANGED);
   }
-  ::SetWindowPlacement(window, &placement);
   MarkFullscreenInTaskbar(window, false);
 }
