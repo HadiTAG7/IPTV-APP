@@ -992,6 +992,12 @@ abstract class AppLocalizations {
   /// **'Guide'**
   String get playerGuide;
 
+  /// Player OSD button, options entry and title of the in-player channel panel: browse the channel lists and switch channel without leaving the player.
+  ///
+  /// In en, this message translates to:
+  /// **'Channels'**
+  String get playerChannels;
+
   /// No description provided for @playerLive.
   ///
   /// In en, this message translates to:

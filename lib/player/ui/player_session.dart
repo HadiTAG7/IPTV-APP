@@ -23,7 +23,8 @@ import 'player_format.dart';
 /// engine itself: resolving items through the source adapter, per-item
 /// prefs (aspect, engine), live zapping and its banner data, now/next,
 /// favourites, the VOD resume offer, the next-episode countdown, "try other
-/// format" and the redacted report.
+/// format" and the redacted report. [tuneTo] plays a channel picked in the
+/// channel panel and makes its list the zapping list.
 ///
 /// Drives one [PlaybackController] (owned by the provider, not by this
 /// object). The controller is shared with the next player screen, so once
@@ -44,7 +45,7 @@ class PlayerSession extends ChangeNotifier {
     this.nextEpisodeCountdown = 10,
     this.epgRefresh = const Duration(minutes: 1),
     this.guideSettle = const Duration(milliseconds: 150),
-  }) : _initial = request,
+  }) : _context = request,
        _request = request,
        _log = log ?? RingLog.instance;
 
@@ -72,7 +73,10 @@ class PlayerSession extends ChangeNotifier {
   final Duration guideSettle;
 
   final RingLog _log;
-  final PlayRequest _initial;
+
+  /// Where zapping walks: the category, key list and list of the request
+  /// the player was opened with, or of the one [tuneTo] switched to last.
+  PlayRequest _context;
   PlayRequest _request;
   PlayerSource? _source;
   Object? _error;
@@ -82,6 +86,9 @@ class PlayerSession extends ChangeNotifier {
 
   // Live.
   PagedZapper? _zap;
+
+  /// Bumped for every zap list read; an older read in flight is dropped.
+  int _zapSeq = 0;
   ChannelRow? _channel;
   final _channels = <String, ChannelRow>{};
 
@@ -184,7 +191,7 @@ class PlayerSession extends ChangeNotifier {
       return;
     }
     if (isLive) {
-      unawaited(_loadZapList());
+      unawaited(_loadZapList(key: _request.item.key, num: _channel?.num));
       await _startLive(_request.item);
     } else {
       await _startVod(askResume: true);
@@ -205,17 +212,21 @@ class PlayerSession extends ChangeNotifier {
     await _playLive(row?.toPlayable() ?? ref, row, seq);
   }
 
+  /// The request of the live channel [ref] in the zapping list.
+  PlayRequest _liveRequest(PlayableRef ref, ChannelRow? row) => PlayRequest(
+    sourceId: sourceId,
+    item: ref,
+    categoryKey: _context.categoryKey,
+    zapKeys: _context.zapKeys,
+    list: _context.list,
+    title: row?.name ?? ref.title,
+  );
+
   Future<void> _playLive(PlayableRef ref, ChannelRow? row, int seq) async {
     final source = _source;
     if (source == null || seq != _tuneSeq || isClosed) return;
     _channel = row;
-    _request = PlayRequest(
-      sourceId: sourceId,
-      item: ref,
-      categoryKey: _initial.categoryKey,
-      zapKeys: _initial.zapKeys,
-      title: row?.name ?? ref.title,
-    );
+    _request = _liveRequest(ref, row);
     _playedKey = null;
     _error = null;
     final key = itemKey;
@@ -258,10 +269,16 @@ class PlayerSession extends ChangeNotifier {
     _scheduleEpgRefresh();
   }
 
-  Future<void> _loadZapList() async {
-    final keys = _initial.zapKeys;
-    final category = _initial.categoryKey;
-    final key = _request.item.key;
+  /// Reads the zapping list of [_context] around the channel [key] (number
+  /// [num]); [previous] is the channel a lone 0 returns to.
+  Future<void> _loadZapList({
+    required String key,
+    int? num,
+    ZapEntry? previous,
+  }) async {
+    final seq = ++_zapSeq;
+    final keys = _context.zapKeys;
+    final category = _context.categoryKey;
     PagedZapper? zap;
     try {
       final ZapList list = keys != null
@@ -269,26 +286,92 @@ class PlayerSession extends ChangeNotifier {
           : category != null
           ? CategoryZapList(db, sourceId, category)
           : AllChannelsZapList(db, sourceId);
-      if (isClosed) return;
+      if (isClosed || seq != _zapSeq) return;
       zap = PagedZapper(
         list: list,
         onTune: (e) => unawaited(_tuneKey(e.key)),
         onError: (e) => _log.warn('Player: zap list read failed: $e'),
       );
-      await zap.init((key: key, num: _channel?.num));
+      await zap.init((key: key, num: num), previous: previous);
     } on Object catch (e) {
       _log.warn('Player: zap list unavailable: $e');
       zap?.dispose();
       return;
     }
-    if (isClosed) {
+    if (isClosed || seq != _zapSeq) {
       zap.dispose();
       return;
     }
+    _retireZap();
     _zap = zap;
     zap.preview.addListener(_onPreview);
     unawaited(_prefetchAround(zap.currentIndex));
     _notify();
+  }
+
+  /// Drops the zapper: a pending zap or typed number never tunes, and a
+  /// zap list still being read is dropped too.
+  void _retireZap() {
+    _zapSeq++;
+    final zap = _zap;
+    if (zap == null) return;
+    _zap = null;
+    zap.preview.removeListener(_onPreview);
+    zap.dispose();
+  }
+
+  /// Plays the live channel of [request] (picked in the channel panel) and
+  /// makes [request]'s list the zapping list: Up/Down, numbers and the
+  /// banner then follow its category or key list, as if the player had
+  /// been opened from there. [row] is the channel's catalog row when the
+  /// caller has it (the banner shows the channel at once).
+  ///
+  /// The channel opens like a zapped one (one connection at a time: the
+  /// stream playing stops before the new one opens). A pending zap or typed
+  /// number is dropped, and the channel playing until now is the one a lone
+  /// 0 returns to. Picking the channel already playing only switches the
+  /// zapping list.
+  Future<void> tuneTo(PlayRequest request, {ChannelRow? row}) async {
+    if (isClosed ||
+        !isLive ||
+        !request.isLive ||
+        request.sourceId != sourceId ||
+        _source == null) {
+      return;
+    }
+    final key = request.item.key;
+    final playingKey = _request.item.key;
+    final same =
+        key == playingKey &&
+        _error == null &&
+        controller.phase != PlaybackPhase.failed;
+    final playing = _zap?.current ?? (key: playingKey, num: _channel?.num);
+    final previous = same ? _zap?.previousEntry : playing;
+    _context = request;
+    _retireZap();
+    if (row != null) _remember(row);
+    if (same) {
+      _request = _liveRequest(_request.item, _channel);
+      unawaited(_loadZapList(key: key, num: _channel?.num, previous: previous));
+      _notify();
+      return;
+    }
+    final seq = ++_tuneSeq;
+    unawaited(_loadZapList(key: key, num: row?.num, previous: previous));
+    if (row != null) {
+      // The banner and the OSD show the new channel while it opens.
+      _channel = row;
+      _request = _liveRequest(row.toPlayable(), row);
+      _favorite = false;
+      _notify();
+    }
+    final found =
+        row ??
+        _channels[key] ??
+        await db.catalogDao.channelByKey(sourceId, key);
+    if (seq != _tuneSeq || isClosed) return;
+    if (found != null) _remember(found);
+    await _playLive(found?.toPlayable() ?? request.item, found, seq);
   }
 
   Future<void> _tuneKey(String key) async {
@@ -815,6 +898,7 @@ class PlayerSession extends ChangeNotifier {
     _guideTimer = null;
     _countdownTimer?.cancel();
     _countdownTimer = null;
+    _zapSeq++;
     _zap?.close();
     if (_started) {
       controller.removeListener(_onController);

@@ -562,36 +562,14 @@ class LiveViewState extends ConsumerState<LiveView> {
     if (!_ready || selected == null || rows == null || lists == null) {
       return const LoadingView();
     }
-    final entries = [
-      LiveCategoryEntry(
-        list: const LiveList.favorites(),
-        name: l10n.liveFavorites,
-        count: favorites.length,
-      ),
-      for (final l in lists)
-        LiveCategoryEntry(
-          list: LiveList.channelList(l.id),
-          name: l.name,
-          count: l.count,
-        ),
-      LiveCategoryEntry(
-        list: const LiveList.recent(),
-        name: l10n.liveRecent,
-        count: recent.length,
-      ),
-      LiveCategoryEntry(
-        list: const LiveList.all(),
-        name: l10n.liveAllChannels,
-        count: total,
-      ),
-      for (final c in rows)
-        if (!c.hidden)
-          LiveCategoryEntry(
-            list: LiveList.category(c.key),
-            name: c.name,
-            count: c.itemCount,
-          ),
-    ];
+    final entries = liveCategoryEntries(
+      l10n,
+      categories: rows,
+      lists: lists,
+      favorites: favorites.length,
+      recent: recent.length,
+      total: total,
+    );
     if (!entries.any((e) => e.list == selected)) {
       // The saved or shown category is gone or hidden: show all channels.
       afterNextFrame(() {
@@ -614,18 +592,8 @@ class LiveViewState extends ConsumerState<LiveView> {
       onMenu: _channelMenu,
       onFocusEntry: _onFocusEntry,
       onEmptied: _onListEmptied,
-      emptyMessage: switch (selected.kind) {
-        LiveListKind.favorites => l10n.favoritesEmpty,
-        LiveListKind.channelList => l10n.liveListEmpty,
-        LiveListKind.recent => l10n.liveRecentEmpty,
-        _ => l10n.liveNoChannels,
-      },
-      emptyIcon: switch (selected.kind) {
-        LiveListKind.favorites => Icons.star_outline_rounded,
-        LiveListKind.channelList => Icons.playlist_add_rounded,
-        LiveListKind.recent => Icons.history,
-        _ => Icons.live_tv_outlined,
-      },
+      emptyMessage: ChannelList.emptyMessageFor(l10n, selected),
+      emptyIcon: ChannelList.emptyIconFor(selected),
     );
     return HomeTabBackHandler(
       onBack: _onBack,

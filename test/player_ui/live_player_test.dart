@@ -14,7 +14,7 @@ void main() {
   group('live OSD', () {
     forLocales((locale) {
       testWidgets(
-        'OK shows the OSD; it hides after 5 s (${locale.languageCode})',
+        'Right shows the OSD; it hides after 5 s (${locale.languageCode})',
         (tester) async {
           final rig = PlayerRig()..autoPlay();
           final id = await seedLive(rig);
@@ -27,9 +27,11 @@ void main() {
           expect(focusLabel, 'player');
           expect(find.byKey(const ValueKey('player-osd')), findsNothing);
 
-          await press(tester, LogicalKeyboardKey.select);
+          // OK opens the channel panel; Left/Right show the OSD.
+          await press(tester, LogicalKeyboardKey.arrowRight);
           expect(find.byKey(const ValueKey('player-osd')), findsOneWidget);
           expect(focusLabel, 'player:osd-first');
+          expect(focusedIn(const ValueKey('player-osd-channels')), isTrue);
 
           // Moving between buttons restarts the timer.
           await tester.pump(const Duration(seconds: 3));
@@ -40,7 +42,7 @@ void main() {
                 ? LogicalKeyboardKey.arrowLeft
                 : LogicalKeyboardKey.arrowRight,
           );
-          expect(focusedIn(const ValueKey('player-osd-subtitles')), isTrue);
+          expect(focusedIn(const ValueKey('player-osd-audio')), isTrue);
           await tester.pump(const Duration(seconds: 4));
           expect(find.byKey(const ValueKey('player-osd')), findsOneWidget);
           await tester.pump(const Duration(seconds: 1, milliseconds: 100));
@@ -61,7 +63,7 @@ void main() {
       await seedGuide(rig, id);
       await pumpPlayerApp(tester, rig);
       await openPlayerFor(tester, liveRequest(id));
-      await press(tester, LogicalKeyboardKey.enter);
+      await press(tester, LogicalKeyboardKey.arrowLeft);
 
       final osd = find.byKey(const ValueKey('player-osd'));
       expect(
@@ -82,6 +84,7 @@ void main() {
       );
       expect(find.byKey(const ValueKey('player-clock')), findsOneWidget);
       for (final b in [
+        'channels',
         'audio',
         'subtitles',
         'aspect',
@@ -134,7 +137,7 @@ void main() {
         tester.element(find.byKey(launcherKey)),
       );
       await openPlayerFor(tester, liveRequest(id));
-      await press(tester, LogicalKeyboardKey.enter);
+      await press(tester, LogicalKeyboardKey.arrowRight);
       final osd = find.byKey(const ValueKey('player-osd'));
       expect(
         find.descendant(of: osd, matching: find.textContaining('Evening')),
@@ -240,7 +243,7 @@ void main() {
           final done = await openPlayerFor(tester, liveRequest(id));
           ignore(done.then((_) => closed = true));
 
-          await press(tester, LogicalKeyboardKey.select);
+          await press(tester, LogicalKeyboardKey.arrowRight);
           expect(find.byKey(const ValueKey('player-osd')), findsOneWidget);
 
           await tester.binding.handlePopRoute();
@@ -267,9 +270,11 @@ void main() {
       final id = await seedLive(rig);
       await pumpPlayerApp(tester, rig);
       await openPlayerFor(tester, liveRequest(id));
-      await press(tester, LogicalKeyboardKey.select);
+      await press(tester, LogicalKeyboardKey.arrowRight);
+      expect(find.byKey(const ValueKey('player-osd')), findsOneWidget);
       await press(tester, LogicalKeyboardKey.escape);
       expect(find.byKey(const ValueKey('player-osd')), findsNothing);
+      expect(find.byType(PlayerScreen), findsOneWidget);
       await press(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(find.byType(PlayerScreen), findsNothing);

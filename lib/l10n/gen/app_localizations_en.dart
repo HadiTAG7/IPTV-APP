@@ -544,6 +544,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get playerGuide => 'Guide';
 
   @override
+  String get playerChannels => 'Channels';
+
+  @override
   String get playerLive => 'LIVE';
 
   @override

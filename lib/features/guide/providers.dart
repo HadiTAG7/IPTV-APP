@@ -7,6 +7,7 @@ import '../../core/db/queries/guide_queries.dart';
 import '../../player/ui/play_request.dart';
 import '../../player/ui/player_route.dart';
 import '../../sources/models.dart';
+import '../live/live_models.dart';
 import 'guide_data.dart';
 
 /// Opens the player (tests record the request instead).
@@ -99,4 +100,9 @@ PlayRequest guidePlayRequest({
   zapKeys: filter.kind == GuideFilterKind.favorites
       ? List.unmodifiable(favoriteKeys)
       : null,
+  list: switch (filter.kind) {
+    GuideFilterKind.favorites => const LiveList.favorites(),
+    GuideFilterKind.category => LiveList.category(filter.categoryKey!),
+    GuideFilterKind.all => const LiveList.all(),
+  },
 );

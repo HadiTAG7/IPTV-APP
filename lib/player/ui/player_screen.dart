@@ -14,7 +14,10 @@ import '../../core/time/clock.dart';
 import '../../epg/epg_providers.dart';
 import '../../features/channel_lists/channel_list_dialogs.dart';
 import '../../features/diagnostics/providers.dart';
+import '../../features/live/channel_source.dart';
+import '../../features/live/live_models.dart';
 import '../../l10n/gen/app_localizations.dart';
+import '../../sources/models.dart';
 import '../../theme/tokens.dart';
 import '../../tv/dpad_shortcuts.dart';
 import '../../tv/focus_watchdog.dart';
@@ -23,6 +26,7 @@ import '../../widgets/bidi_text.dart';
 import '../engine/player_engine.dart';
 import '../player_providers.dart';
 import '../session/playback_controller.dart';
+import 'channel_panel.dart';
 import 'paged_zapper.dart';
 import 'play_request.dart';
 import 'player_dialogs.dart';
@@ -34,6 +38,7 @@ import 'seek_accumulator.dart';
 
 /// Actions of the OSD and the Menu-key options list.
 enum PlayerAction {
+  channels,
   audio,
   subtitles,
   aspect,
@@ -50,12 +55,19 @@ enum PlayerAction {
 ///   aspect ratio (saved per channel, default from Settings).
 /// * Live: channel banner, number entry, zapping (Up/Down, CH+/CH-,
 ///   PageUp/PageDown) within the request's list, OSD with now/next, clock
-///   and Audio, Subtitles, Aspect, Favourite, Switch player, Guide, Stats.
+///   and Channels, Audio, Subtitles, Aspect, Favourite, Add to list, Switch
+///   player, Guide, Stats.
+/// * Live channel panel ([ChannelPanel]; OK, the Channels button or
+///   option): the Live screen's lists and channels beside the playing
+///   video. Picking a channel tunes it like a zap and makes its list the
+///   zapping list ([PlayerSession.tuneTo]); Back, a click beside it or 15 s
+///   without input close it.
 /// * VOD: OSD with an LTR seek bar, ±10 s seeking (accelerating while held,
 ///   one seek 600 ms after the last press), FF/RW ±30 s, the resume prompt
 ///   and the next-episode countdown.
 /// * Reconnect banner, failure card (Retry, Try other format, Copy report),
-///   stats overlay. Back only through [PopScope]: it hides the OSD first.
+///   stats overlay. Back only through [PopScope]: it closes the channel
+///   panel and hides the OSD first.
 /// * Phones: tap toggles the OSD, double-tap seeks, landscape is forced
 ///   while the player is open. TVs never touch the orientation.
 /// * Desktop: the window turns truly fullscreen (no title bar, over the
@@ -71,6 +83,10 @@ class PlayerScreen extends ConsumerStatefulWidget {
 
   /// The OSD hides after this long without a key press.
   static const osdTimeout = Duration(seconds: 5);
+
+  /// The channel panel closes after this long without a key press or
+  /// mouse or touch activity.
+  static const panelTimeout = Duration(seconds: 15);
 
   /// How long the channel banner stays after zapping or opening.
   static const bannerTimeout = Duration(seconds: 4);
@@ -114,6 +130,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   bool _bannerVisible = false;
   Timer? _osdTimer;
   Timer? _bannerTimer;
+
+  final _panel = GlobalKey<ChannelPanelState>();
+  bool _panelVisible = false;
+  Timer? _panelTimer;
+
+  /// Bumped when the panel closes or a channel is picked in it: a pick
+  /// still reading its list's zapping keys is dropped.
+  int _panelTuneSeq = 0;
   int _dialogs = 0;
   bool _exiting = false;
 
@@ -178,6 +202,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       onCommit: (target) => unawaited(_controller.seek(target)),
     )..addListener(_rebuild);
     _lifecycle = AppLifecycleListener(onStateChange: _onLifecycle);
+    HardwareKeyboard.instance.addHandler(_onAnyKey);
     _onlineSub = ref.read(playerOnlineProvider)?.listen(_controller.setOnline);
     _fullscreen = ref.read(fullscreenPlaybackProvider.notifier);
     _fullscreenOwner = this;
@@ -220,8 +245,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   @override
   void dispose() {
     _lifecycle.dispose();
+    HardwareKeyboard.instance.removeHandler(_onAnyKey);
     _osdTimer?.cancel();
     _bannerTimer?.cancel();
+    _panelTimer?.cancel();
     unawaited(_onlineSub?.cancel());
     _watchdog?.unregister(_rootNode);
     _zapPreview?.removeListener(_onZapPreview);
@@ -329,6 +356,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// a nudged mouse must not take it.
   void _onMouseMoved() {
     if (_exiting || _cardShown || _hoverMuted) return;
+    if (_panelVisible) {
+      _restartPanelTimer();
+      return;
+    }
     if (_osdVisible) {
       _restartOsdTimer();
     } else {
@@ -409,6 +440,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (failed != _failureShown) {
       _failureShown = failed;
       if (failed) {
+        _closePanel();
         _hideOsd();
         _focusAfterBuild(_retryNode);
       } else {
@@ -481,7 +513,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// Shows the OSD; [moveFocus] false leaves focus on the player (the
   /// mouse showed it).
   void _showOsd({FocusNode? focus, bool moveFocus = true}) {
-    if (_cardShown) return;
+    if (_cardShown || _panelVisible) return;
     final target = focus ?? (_session.isLive ? _osdFirstNode : _seekBarNode);
     setState(() {
       _osdVisible = true;
@@ -532,6 +564,140 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       if (mounted) setState(() => _bannerVisible = false);
     });
     if (!_bannerVisible && mounted) setState(() => _bannerVisible = true);
+  }
+
+  // ---------------------------------------------------------------------
+  // Channel panel.
+
+  /// Shows the channel panel (live only) on the zapping list and the
+  /// channel playing. The OSD and the banner make way; the panel moves
+  /// focus in once its entries are read.
+  void _openPanel() {
+    if (!_session.isLive || _cardShown || _exiting || _panelVisible) return;
+    _session.cancelNumber();
+    _hideOsd();
+    _bannerTimer?.cancel();
+    setState(() {
+      _panelVisible = true;
+      _bannerVisible = false;
+    });
+    _restartPanelTimer();
+  }
+
+  /// Hides the channel panel; focus inside it goes back to the player.
+  void _closePanel() {
+    _panelTimer?.cancel();
+    _panelTimer = null;
+    _panelTuneSeq++;
+    if (!_panelVisible) return;
+    if (_rootNode.hasFocus) _focusRoot();
+    if (mounted) setState(() => _panelVisible = false);
+  }
+
+  void _restartPanelTimer() {
+    if (!_panelVisible || _exiting) return;
+    _panelTimer?.cancel();
+    _panelTimer = Timer(PlayerScreen.panelTimeout, _onPanelTimeout);
+  }
+
+  void _onPanelTimeout() {
+    if (!mounted) return;
+    if (_dialogs > 0) {
+      _restartPanelTimer();
+      return;
+    }
+    _closePanel();
+  }
+
+  /// Every key restarts the panel's timer, also those its rows and columns
+  /// handle themselves (they never reach [_onKey]). Never handles a key.
+  bool _onAnyKey(KeyEvent event) {
+    _restartPanelTimer();
+    return false;
+  }
+
+  /// The list the panel opens on: the one zapping walks, else (search
+  /// results) All channels.
+  LiveList _panelList() {
+    final request = _session.request;
+    final category = request.categoryKey;
+    return request.list ??
+        (category != null && request.zapKeys == null
+            ? LiveList.category(category)
+            : const LiveList.all());
+  }
+
+  /// A channel picked in the panel plays (the same path as a zap: one
+  /// connection at a time) and its list becomes the zapping list.
+  Future<void> _tuneFromPanel(ChannelListSource source, LiveEntry entry) async {
+    final row = entry.row;
+    if (row == null || _exiting || !_panelVisible) return;
+    final seq = ++_panelTuneSeq;
+    final PlayRequest request;
+    try {
+      // The list's own zapping request (keyed lists read their channels).
+      request = await source.requestFor(row);
+    } on Object catch (e) {
+      ref.read(ringLogProvider).warn('Player: panel channel failed: $e');
+      return;
+    }
+    if (!mounted || _exiting || seq != _panelTuneSeq || !_panelVisible) return;
+    _closePanel();
+    _showBanner();
+    unawaited(_session.tuneTo(request, row: row));
+  }
+
+  /// Menu (or a held OK) on a channel of the panel: favourite, Add to list.
+  Future<void> _panelChannelMenu(LiveEntry entry, bool favorite) async {
+    final l10n = AppLocalizations.of(context);
+    final action = await _dialog(
+      () => showPlayerChoiceDialog<PlayerAction>(
+        context,
+        title: entry.row?.name ?? l10n.commonUnavailable,
+        choices: [
+          PlayerChoice(
+            value: PlayerAction.favorite,
+            label: favorite ? l10n.liveRemoveFavorite : l10n.liveAddFavorite,
+            icon: favorite ? Icons.star : Icons.star_border,
+          ),
+          PlayerChoice(
+            value: PlayerAction.addToList,
+            label: l10n.liveAddToList,
+            icon: Icons.playlist_add,
+          ),
+        ],
+      ),
+    );
+    if (action == null || !mounted) return;
+    final s = _session;
+    switch (action) {
+      case PlayerAction.favorite:
+        // The channel playing goes through the session (OSD star).
+        if (entry.key == s.request.item.key) {
+          await _toggleFavorite();
+          return;
+        }
+        try {
+          await ref
+              .read(favoritesDaoProvider)
+              .setFavorite(s.sourceId, ContentKind.live, entry.key, !favorite);
+        } on Object catch (e) {
+          ref.read(ringLogProvider).warn('Player: favourite failed: $e');
+          return;
+        }
+        if (mounted) _showFavoriteSnack(added: !favorite);
+      case PlayerAction.addToList:
+        await _dialog<void>(
+          () => showAddToListDialog(
+            context,
+            ref,
+            sourceId: s.sourceId,
+            channelKey: entry.key,
+          ),
+        );
+      default:
+        break;
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -586,6 +752,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       if (down) _toggleWindowFullscreen();
       return KeyEventResult.handled;
     }
+    if (_panelVisible) return _onPanelKey(event);
     // Escape leaves window fullscreen (and the OSD) before it means Back.
     if (key == LogicalKeyboardKey.escape && _windowFullscreen) {
       if (down) {
@@ -657,7 +824,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       return KeyEventResult.ignored;
     }
     if (selectKeys.contains(key)) {
-      if (down) _showOsd();
+      // Live: OK opens the channel panel; an OSD the mouse showed takes
+      // the keyboard instead.
+      if (down) live && !_osdVisible ? _openPanel() : _showOsd();
       return KeyEventResult.handled;
     }
     if (direction != null) {
@@ -682,6 +851,35 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
     if (!live && key == LogicalKeyboardKey.space) {
       if (down) unawaited(_controller.togglePlayPause());
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// Keys while the channel panel is open. The D-pad and OK move and pick
+  /// in it (the app's shortcuts), Back and Escape close it through
+  /// [PopScope]; zapping, numbers, Info and Menu never reach the channel
+  /// playing behind it. Page Up/Down page its columns.
+  KeyEventResult _onPanelKey(KeyEvent event) {
+    final key = event.logicalKey;
+    final down = event is KeyDownEvent;
+    final primary = FocusManager.instance.primaryFocus;
+    if ((primary == _rootNode || primary is FocusScopeNode) &&
+        (arrowDirection(key) != null || selectKeys.contains(key))) {
+      // Focus has not reached a row yet (the panel is still reading its
+      // lists): the D-pad and OK take it there.
+      if (down) _panel.currentState?.focusIn();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.guide) {
+      if (down) _openGuide();
+      return KeyEventResult.handled;
+    }
+    if (_digitKeys.containsKey(key) ||
+        key == LogicalKeyboardKey.channelUp ||
+        key == LogicalKeyboardKey.channelDown ||
+        key == LogicalKeyboardKey.info ||
+        key == menuKey) {
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -766,6 +964,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       _session.cancelNextEpisode();
       return;
     }
+    if (_panelVisible) {
+      _closePanel();
+      return;
+    }
     if (_osdVisible) {
       _hideOsd();
       return;
@@ -782,10 +984,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// already be using it.
   void _exit() {
     if (_exiting) return;
-    setState(() => _exiting = true);
+    setState(() {
+      _exiting = true;
+      _panelVisible = false;
+    });
     _session.close();
     _osdTimer?.cancel();
     _bannerTimer?.cancel();
+    _panelTimer?.cancel();
     _seek.cancel();
     unawaited(_onlineSub?.cancel());
     _onlineSub = null;
@@ -829,6 +1035,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Future<void> _perform(PlayerAction action) async {
     switch (action) {
+      case PlayerAction.channels:
+        _openPanel();
       case PlayerAction.audio:
         await _pickAudio();
       case PlayerAction.subtitles:
@@ -938,16 +1146,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Future<void> _toggleFavorite() async {
     await _session.toggleFavorite();
-    if (!mounted) return;
+    if (mounted) _showFavoriteSnack(added: _session.favorite);
+  }
+
+  void _showFavoriteSnack({required bool added}) {
     final l10n = AppLocalizations.of(context);
     ScaffoldMessenger.maybeOf(context)
       ?..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
           content: Text(
-            _session.favorite
-                ? l10n.player_favoriteAdded
-                : l10n.player_favoriteRemoved,
+            added ? l10n.player_favoriteAdded : l10n.player_favoriteRemoved,
           ),
           duration: const Duration(seconds: 2),
         ),
@@ -970,6 +1179,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   List<PlayerAction> _actions() => [
+    if (_session.isLive) PlayerAction.channels,
     PlayerAction.audio,
     PlayerAction.subtitles,
     PlayerAction.aspect,
@@ -981,6 +1191,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   ];
 
   String _label(AppLocalizations l10n, PlayerAction a) => switch (a) {
+    PlayerAction.channels => l10n.playerChannels,
     PlayerAction.audio => l10n.playerAudio,
     PlayerAction.subtitles => l10n.playerSubtitles,
     PlayerAction.aspect => l10n.playerAspectRatio,
@@ -993,6 +1204,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   };
 
   IconData _icon(PlayerAction a) => switch (a) {
+    PlayerAction.channels => Icons.list,
     PlayerAction.audio => Icons.audiotrack_outlined,
     PlayerAction.subtitles => Icons.subtitles_outlined,
     PlayerAction.aspect => Icons.aspect_ratio,
@@ -1097,7 +1309,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       );
                     },
                   ),
-                if (_bannerVisible && !_osdVisible && !_cardShown)
+                if (_bannerVisible &&
+                    !_osdVisible &&
+                    !_cardShown &&
+                    !_panelVisible)
                   Align(
                     alignment: AlignmentDirectional.bottomCenter,
                     child: Padding(
@@ -1177,6 +1392,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     ],
                   ),
                 ),
+                if (_panelVisible)
+                  Positioned.fill(
+                    child: ChannelPanel(
+                      key: _panel,
+                      sourceId: s.sourceId,
+                      list: _panelList(),
+                      playingKey: s.request.item.key,
+                      onTune: (source, entry) =>
+                          unawaited(_tuneFromPanel(source, entry)),
+                      onClose: _closePanel,
+                      onChannelMenu: (entry, favorite) =>
+                          unawaited(_panelChannelMenu(entry, favorite)),
+                      onActivity: _restartPanelTimer,
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1191,7 +1421,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (_window == null) return child;
     return MouseRegion(
       key: const ValueKey('player-mouse'),
-      cursor: _osdVisible || _cardShown || _exiting
+      cursor: _osdVisible || _cardShown || _panelVisible || _exiting
           ? MouseCursor.defer
           : SystemMouseCursors.none,
       onHover: (_) => _onMouseMoved(),
@@ -1351,6 +1581,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
       );
     }
+    if (s.isLive) add(PlayerAction.channels);
     add(PlayerAction.audio);
     add(PlayerAction.subtitles);
     add(PlayerAction.aspect);

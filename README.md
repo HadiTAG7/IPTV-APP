@@ -21,6 +21,7 @@ Status: under active development; features land milestone by milestone (see the 
 ## Features
 
 - Live TV with categories, favourites, recents and search (Arabic/Latin-normalised).
+- In-player channel panel (OK while watching): browse every list and switch channel, or list, without leaving the player.
 - EPG from Xtream `xmltv.php`, M3U `url-tvg` or a manual XMLTV URL: now/next and a guide grid.
 - Movies and series with seasons, episodes, resume and next-episode countdown.
 - Several sources (M3U URL, M3U file, Xtream Codes) with switching.

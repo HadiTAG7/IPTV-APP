@@ -325,7 +325,7 @@ void main() {
       final id = await seedLive(rig);
       await pumpPlayerApp(tester, rig);
       await openPlayerFor(tester, liveRequest(id));
-      await press(tester, LogicalKeyboardKey.select);
+      await press(tester, LogicalKeyboardKey.arrowRight);
       expect(find.byKey(_osd), findsOneWidget);
       expect(find.byKey(_back), findsNothing);
       expect(find.byKey(_fullscreenButton), findsNothing);

@@ -80,6 +80,24 @@ class ChannelList extends ConsumerStatefulWidget {
   /// How long "No channel N" stays up.
   static const missDuration = Duration(milliseconds: 1500);
 
+  /// What an empty [list] says: how to fill Favorites, the user's lists
+  /// and Recent, else that there are no channels.
+  static String emptyMessageFor(AppLocalizations l10n, LiveList list) =>
+      switch (list.kind) {
+        LiveListKind.favorites => l10n.favoritesEmpty,
+        LiveListKind.channelList => l10n.liveListEmpty,
+        LiveListKind.recent => l10n.liveRecentEmpty,
+        _ => l10n.liveNoChannels,
+      };
+
+  /// The icon of an empty [list].
+  static IconData emptyIconFor(LiveList list) => switch (list.kind) {
+    LiveListKind.favorites => Icons.star_outline_rounded,
+    LiveListKind.channelList => Icons.playlist_add_rounded,
+    LiveListKind.recent => Icons.history,
+    _ => Icons.live_tv_outlined,
+  };
+
   final int sourceId;
   final LiveList list;
   final NowNextStore store;
