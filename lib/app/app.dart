@@ -10,6 +10,7 @@ import '../tv/focus_watchdog.dart';
 import 'form_factor.dart';
 import 'providers.dart';
 import 'root_gate.dart';
+import 'scroll_behavior.dart';
 
 /// The root navigator (also used by the Escape-means-Back action).
 final navigatorKeyProvider = Provider<GlobalKey<NavigatorState>>(
@@ -47,6 +48,7 @@ class IptvApp extends ConsumerWidget {
       supportedLocales: AppLocalizations.supportedLocales,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       shortcuts: appShortcuts,
+      scrollBehavior: const AppScrollBehavior(),
       builder: (context, child) =>
           AppFrame(child: child ?? const SizedBox.shrink()),
       home: const RootGate(),
