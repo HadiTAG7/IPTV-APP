@@ -12,6 +12,7 @@ import '../../core/net/redact.dart';
 import '../../core/platform/window_fullscreen.dart';
 import '../../core/time/clock.dart';
 import '../../epg/epg_providers.dart';
+import '../../features/channel_lists/channel_list_dialogs.dart';
 import '../../features/diagnostics/providers.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../../theme/tokens.dart';
@@ -37,6 +38,7 @@ enum PlayerAction {
   subtitles,
   aspect,
   favorite,
+  addToList,
   switchPlayer,
   guide,
   stats,
@@ -807,6 +809,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         await _pickAspect();
       case PlayerAction.favorite:
         await _toggleFavorite();
+      case PlayerAction.addToList:
+        await _dialog<void>(
+          () => showAddToListDialog(
+            context,
+            ref,
+            sourceId: _session.sourceId,
+            channelKey: _session.request.item.key,
+          ),
+        );
       case PlayerAction.switchPlayer:
         await _session.switchEngine();
       case PlayerAction.guide:
@@ -935,6 +946,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     PlayerAction.subtitles,
     PlayerAction.aspect,
     if (_session.isLive) PlayerAction.favorite,
+    if (_session.isLive) PlayerAction.addToList,
     PlayerAction.switchPlayer,
     if (_session.isLive) PlayerAction.guide,
     PlayerAction.stats,
@@ -946,6 +958,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     PlayerAction.aspect => l10n.playerAspectRatio,
     PlayerAction.favorite =>
       _session.favorite ? l10n.liveRemoveFavorite : l10n.liveAddFavorite,
+    PlayerAction.addToList => l10n.liveAddToList,
     PlayerAction.switchPlayer => l10n.playerSwitchPlayer,
     PlayerAction.guide => l10n.playerGuide,
     PlayerAction.stats => l10n.playerStats,
@@ -956,6 +969,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     PlayerAction.subtitles => Icons.subtitles_outlined,
     PlayerAction.aspect => Icons.aspect_ratio,
     PlayerAction.favorite => _session.favorite ? Icons.star : Icons.star_border,
+    PlayerAction.addToList => Icons.playlist_add,
     PlayerAction.switchPlayer => Icons.swap_horiz,
     PlayerAction.guide => Icons.view_timeline_outlined,
     PlayerAction.stats => Icons.query_stats,

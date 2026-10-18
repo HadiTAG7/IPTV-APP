@@ -7,8 +7,9 @@ import 'live_models.dart';
 import 'preferred_focus.dart';
 
 /// The phone Live layout's category row: horizontally scrolling chips for
-/// Favorites, Recent, All channels and the source's categories. Tap selects
-/// (OK on a keyboard); a long press opens the category options.
+/// Favorites, the user's own lists, Recent, All channels and the source's
+/// categories. Tap selects (OK on a keyboard); a long press opens the
+/// category options.
 ///
 /// Chips are built lazily: big providers list thousands of categories.
 class LiveCategoryChips extends StatefulWidget {

@@ -1,10 +1,10 @@
-// Drift schema v1. Times are epoch seconds UTC; enums are stored by name.
+// Drift schema v2. Times are epoch seconds UTC; enums are stored by name.
 //
 // Catalog tables (categories, category_items, channels, movies, series,
 // episodes) carry `generation` and `firstGen` for the generation swap done by
-// `CatalogDao`. User data (favorites, watch_progress, channel_prefs,
-// recent_channels, channel_epg_map) is keyed by stable item keys, never by
-// row ids, and is never touched by a sync.
+// `CatalogDao`. User data (favorites, channel lists, watch_progress,
+// channel_prefs, recent_channels, channel_epg_map) is keyed by stable item
+// keys, never by catalog row ids, and is never touched by a sync.
 import 'package:drift/drift.dart';
 
 import '../../player/engine/player_engine.dart';
@@ -343,6 +343,38 @@ class Favorites extends Table {
 
   @override
   Set<Column> get primaryKey => {sourceId, kind, key};
+}
+
+/// The user's own channel lists per source ("Sports", "News"...), shown
+/// after Favorites. Favourites stay in [Favorites]; these are additional.
+@DataClassName('ChannelListRecord')
+@TableIndex(name: 'channel_lists_source', columns: {#sourceId, #position})
+class ChannelLists extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get sourceId =>
+      integer().references(Sources, #id, onDelete: KeyAction.cascade)();
+
+  /// Trimmed, never empty, unique per source (ignoring case).
+  TextColumn get name => text()();
+  IntColumn get position => integer()();
+  IntColumn get createdAt => integer()();
+}
+
+/// Channels of a [ChannelLists] list in list order, keyed by stable channel
+/// keys like [Favorites]: a sync never touches them, and channels that left
+/// the catalog show as unavailable.
+@DataClassName('ChannelListItemRecord')
+class ChannelListItems extends Table {
+  IntColumn get listId =>
+      integer().references(ChannelLists, #id, onDelete: KeyAction.cascade)();
+  TextColumn get key => text()();
+
+  /// Dense, from 0, per list.
+  IntColumn get position => integer()();
+  IntColumn get addedAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {listId, key};
 }
 
 @DataClassName('WatchProgressRecord')

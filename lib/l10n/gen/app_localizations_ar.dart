@@ -949,6 +949,69 @@ class AppLocalizationsAr extends AppLocalizations {
   String get liveRecentEmpty => 'ستظهر هنا القنوات التي تشاهدها.';
 
   @override
+  String get liveAddToList => 'إضافة إلى قائمة…';
+
+  @override
+  String get liveAddToListTitle => 'إضافة إلى قائمة';
+
+  @override
+  String get liveNewList => 'قائمة جديدة…';
+
+  @override
+  String get liveNewListTitle => 'قائمة جديدة';
+
+  @override
+  String get liveListName => 'اسم القائمة';
+
+  @override
+  String get liveListNameHint => 'مثل: الرياضة';
+
+  @override
+  String get liveListCreate => 'إنشاء';
+
+  @override
+  String get liveListNameEmpty => 'أدخل اسماً للقائمة.';
+
+  @override
+  String get liveListNameTaken => 'لديك قائمة بهذا الاسم مسبقاً.';
+
+  @override
+  String liveListAdded(String name) {
+    return 'أُضيفت إلى «⁨$name⁩»';
+  }
+
+  @override
+  String liveListRemoved(String name) {
+    return 'أُزيلت من «⁨$name⁩»';
+  }
+
+  @override
+  String get liveListEmpty =>
+      'هذه القائمة فارغة. اختر «إضافة إلى قائمة…» من خيارات أي قناة.';
+
+  @override
+  String get liveRenameList => 'إعادة تسمية القائمة';
+
+  @override
+  String get liveDeleteList => 'حذف القائمة';
+
+  @override
+  String liveDeleteListConfirm(String name) {
+    return 'هل تريد حذف قائمة «⁨$name⁩»؟ تُحذف القائمة فقط، وتبقى قنواتها في المصدر.';
+  }
+
+  @override
+  String get liveMoveUp => 'نقل للأعلى';
+
+  @override
+  String get liveMoveDown => 'نقل للأسفل';
+
+  @override
+  String liveRemoveFromList(String name) {
+    return 'إزالة من «⁨$name⁩»';
+  }
+
+  @override
   String liveTimeRange(String start, String end) {
     return '⁨$start⁩ – ⁨$end⁩';
   }

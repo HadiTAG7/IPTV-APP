@@ -469,6 +469,8 @@ void main() {
       );
       await enterPage(tester);
       await press(tester, LogicalKeyboardKey.contextMenu);
+      // Favourite, Add to list…, Play with the other player.
+      await press(tester, LogicalKeyboardKey.arrowDown);
       await press(tester, LogicalKeyboardKey.arrowDown);
       expectFocusOn(en.livePlayWithOtherPlayer);
       await press(tester, LogicalKeyboardKey.select);

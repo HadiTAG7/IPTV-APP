@@ -31,6 +31,21 @@ final favoriteKeysProvider = StreamProvider.autoDispose
           ref.watch(favoritesDaoProvider).watchFavorites(arg.$1, arg.$2),
     );
 
+/// The user's channel lists of a source in list order, with their channel
+/// counts; updates on every change.
+final channelListsProvider = StreamProvider.autoDispose
+    .family<List<ChannelListRow>, int>(
+      (ref, sourceId) =>
+          ref.watch(channelListsDaoProvider).watchLists(sourceId),
+    );
+
+/// Channel keys of one channel list in list order; updates on every change.
+final channelListKeysProvider = StreamProvider.autoDispose
+    .family<List<String>, int>(
+      (ref, listId) =>
+          ref.watch(channelListsDaoProvider).watchChannelKeys(listId),
+    );
+
 /// Recently played channel keys, newest first.
 final recentChannelKeysProvider = StreamProvider.autoDispose
     .family<List<String>, int>(

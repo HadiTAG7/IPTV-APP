@@ -14,7 +14,9 @@ import '../../theme/tokens.dart';
 import '../../tv/focus_watchdog.dart';
 import '../../tv/pane_scope.dart';
 import '../../tv/tv_focusable.dart';
+import '../../widgets/bidi_text.dart';
 import '../../widgets/states.dart';
+import '../channel_lists/channel_list_dialogs.dart';
 import '../live/channel_list.dart';
 import '../live/channel_source.dart';
 import '../live/live_actions.dart';
@@ -23,6 +25,7 @@ import '../live/now_next_store.dart';
 import '../live/options_sheet.dart';
 import '../live/preferred_focus.dart';
 import '../live/providers.dart';
+import '../sources/widgets/tv_buttons.dart';
 import 'poster_grid.dart';
 import 'providers.dart';
 import 'vod_navigation.dart';
@@ -33,6 +36,12 @@ enum FavoritesSegment { live, movies, series }
 /// Favourite channels, movies and series of the active source, as three
 /// segments. Live favourites play like channels (zapping within the
 /// favourites); movies and series open through [vodDetailNavigatorProvider].
+///
+/// The user's own channel lists get a tab each after the live favourites;
+/// "New list…" ends the row. A list plays like the favourites (zapping
+/// within the list); its tab's options and the buttons above its channels
+/// rename or delete it, and a channel's options move it up or down or
+/// remove it.
 ///
 /// Renders body content only; the home shells (or `pushHomePage`) provide
 /// the chrome.
@@ -64,15 +73,30 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
   final _tabsPane = GlobalKey<PaneScopeState>();
   final _contentPane = GlobalKey<PaneScopeState>();
   final _grid = GlobalKey<PosterGridState>();
-  final _list = GlobalKey<ChannelListState>(debugLabel: 'favorites-list');
+
+  /// A new key for each channel list shown: a [ChannelList] keeps its list.
+  GlobalKey<ChannelListState> _list = GlobalKey(debugLabel: 'favorites-list');
   final _tabNodes = {
     for (final s in FavoritesSegment.values)
       s: FocusNode(debugLabel: 'favorites-${s.name}'),
   };
-  late final _policy = PreferredFirstTraversalPolicy(_preferred);
+
+  /// Tab nodes of the user's channel lists, by list id.
+  final _listTabNodes = <int, FocusNode>{};
+  final _newListNode = FocusNode(debugLabel: 'favorites-new-list');
+  final _renameNode = FocusNode(debugLabel: 'favorites-list-rename');
+  late final _policy = _FavoritesTraversalPolicy(_preferred, _upFrom);
   late final NowNextStore _store;
   FavoritesSegment _segment = FavoritesSegment.live;
+
+  /// The user's channel list shown instead of the live favourites, if any
+  /// ([_segment] is then [FavoritesSegment.live]).
+  int? _listId;
+
+  /// A list just created, whose tab takes focus once it is built.
+  int? _focusListTab;
   int _liveVersion = 0;
+  int _listVersion = 0;
   FocusWatchdogState? _watchdog;
 
   int get _id => widget.sourceId;
@@ -80,6 +104,10 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
   /// The segment shown, for tests.
   @visibleForTesting
   FavoritesSegment get segment => _segment;
+
+  /// The channel list shown, for tests.
+  @visibleForTesting
+  int? get listId => _listId;
 
   /// Inside a home shell tab (else a pushed page that focuses itself).
   bool get _inShell => HomeBackScope.maybeOf(context) != null;
@@ -118,31 +146,82 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
       _watchdog?.unregister(node);
       node.dispose();
     }
+    for (final node in _listTabNodes.values) {
+      node.dispose();
+    }
+    _newListNode.dispose();
+    _renameNode.dispose();
     _store.dispose();
     super.dispose();
   }
 
   List<FocusNode?> _preferred() => [
     _tabsPane.currentState?.node,
-    _tabNodes[_segment],
+    _currentTabNode,
     _list.currentState?.preferredNode,
     _grid.currentState?.firstNode,
   ];
 
+  /// Up from a list's first channel goes to its first button (Rename);
+  /// plain geometry would pick the button nearest the middle (Delete).
+  FocusNode? _upFrom(FocusNode node) {
+    final list = _list.currentState;
+    if (_listId == null ||
+        list == null ||
+        list.currentIndex != 0 ||
+        node != list.preferredNode ||
+        !isAttached(_renameNode)) {
+      return null;
+    }
+    return _renameNode;
+  }
+
+  FocusNode _listTabNode(int listId) => _listTabNodes.putIfAbsent(
+    listId,
+    () => FocusNode(debugLabel: 'favorites-list-$listId'),
+  );
+
+  /// The tab of what is shown.
+  FocusNode get _currentTabNode {
+    final listId = _listId;
+    return listId == null ? _tabNodes[_segment]! : _listTabNode(listId);
+  }
+
   void _show(FavoritesSegment segment, {bool enter = false}) {
-    if (segment != _segment) setState(() => _segment = segment);
+    if (segment != _segment || _listId != null) {
+      setState(() {
+        if (_listId != null) _list = GlobalKey(debugLabel: 'favorites-list');
+        _segment = segment;
+        _listId = null;
+      });
+    }
+    if (enter) afterNextFrame(_enterContent);
+  }
+
+  /// Shows the user's channel list [listId].
+  void _showList(int listId, {bool enter = false}) {
+    if (listId != _listId) {
+      setState(() {
+        _list = GlobalKey(debugLabel: 'favorites-list');
+        _segment = FavoritesSegment.live;
+        _listId = listId;
+      });
+    }
     if (enter) afterNextFrame(_enterContent);
   }
 
   void _enterContent() {
     if (_segment == FavoritesSegment.live) {
-      _list.currentState?.focusCurrent();
+      // A list without channels still has its Rename and Delete buttons.
+      if (!(_list.currentState?.focusCurrent() ?? false) && _listId != null) {
+        _contentPane.currentState?.requestFocus();
+      }
     } else {
       _contentPane.currentState?.requestFocus();
     }
   }
 
-  void _enterTabs() => _tabNodes[_segment]!.requestFocus();
+  void _enterTabs() => _currentTabNode.requestFocus();
 
   bool _onBack() {
     if (_list.currentState?.clearDigits() ?? false) return true;
@@ -185,6 +264,11 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
           icon: Icons.star_outline_rounded,
           label: l10n.liveRemoveFavorite,
         ),
+        SheetOption(
+          value: LiveChannelAction.addToList,
+          icon: Icons.playlist_add_rounded,
+          label: l10n.liveAddToList,
+        ),
         if (row != null && hasOtherLiveEngine(ref))
           SheetOption(
             value: LiveChannelAction.otherPlayer,
@@ -197,14 +281,228 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
     switch (choice) {
       case LiveChannelAction.favorite:
         await setFavorite(ref, _id, ContentKind.live, entry.key, false);
+      case LiveChannelAction.addToList:
+        await showAddToListDialog(
+          context,
+          ref,
+          sourceId: _id,
+          channelKey: entry.key,
+        );
       case LiveChannelAction.otherPlayer:
-        await ref.read(playGateProvider).run(() async {
-          final request = await source.requestFor(row!);
-          if (!mounted) return;
-          await playWithOtherEngine(context, ref, request);
-        });
-      case null:
+        await _playWithOtherEngine(source, row!);
+      case LiveChannelAction.moveUp ||
+          LiveChannelAction.moveDown ||
+          LiveChannelAction.removeFromList ||
+          null:
         break;
+    }
+  }
+
+  Future<void> _playWithOtherEngine(ChannelListSource source, ChannelRow row) =>
+      ref.read(playGateProvider).run(() async {
+        final request = await source.requestFor(row);
+        if (!mounted) return;
+        await playWithOtherEngine(context, ref, request);
+      });
+
+  // -------------------------------------------------------------------------
+  // The user's channel lists.
+
+  /// The list shown, once the lists have loaded.
+  ChannelListRow? get _shownList {
+    final listId = _listId;
+    if (listId == null) return null;
+    final lists = ref.read(channelListsProvider(_id)).value;
+    return lists?.where((l) => l.id == listId).firstOrNull;
+  }
+
+  /// Options of a channel in the list shown: move up or down, remove, add
+  /// to a list, play with the other player.
+  Future<void> _listChannelMenu(
+    ChannelListSource source,
+    LiveEntry entry,
+  ) async {
+    final list = _shownList;
+    if (list == null) return;
+    final l10n = AppLocalizations.of(context);
+    final dao = ref.read(channelListsDaoProvider);
+    final List<String> keys;
+    try {
+      keys = await dao.channelKeys(list.id);
+    } on Object catch (e, st) {
+      ref.read(ringLogProvider).error('Reading a channel list failed', e, st);
+      return;
+    }
+    if (!mounted) return;
+    final index = keys.indexOf(entry.key);
+    final row = entry.row;
+    final choice = await showOptionsSheet<LiveChannelAction>(
+      context,
+      title: row?.name ?? l10n.commonUnavailable,
+      options: [
+        if (index > 0)
+          SheetOption(
+            value: LiveChannelAction.moveUp,
+            icon: Icons.arrow_upward_rounded,
+            label: l10n.liveMoveUp,
+          ),
+        if (index >= 0 && index < keys.length - 1)
+          SheetOption(
+            value: LiveChannelAction.moveDown,
+            icon: Icons.arrow_downward_rounded,
+            label: l10n.liveMoveDown,
+          ),
+        SheetOption(
+          value: LiveChannelAction.removeFromList,
+          icon: Icons.playlist_remove_rounded,
+          label: l10n.liveRemoveFromList(list.name),
+        ),
+        SheetOption(
+          value: LiveChannelAction.addToList,
+          icon: Icons.playlist_add_rounded,
+          label: l10n.liveAddToList,
+        ),
+        if (row != null && hasOtherLiveEngine(ref))
+          SheetOption(
+            value: LiveChannelAction.otherPlayer,
+            icon: Icons.swap_horiz,
+            label: l10n.livePlayWithOtherPlayer,
+          ),
+      ],
+    );
+    if (!mounted) return;
+    // Focus stays with the channel: the list re-reads and follows its key
+    // after a move, or keeps the row after a removal (onEmptied takes the
+    // last one).
+    try {
+      switch (choice) {
+        case LiveChannelAction.moveUp:
+          await dao.moveChannel(list.id, entry.key, -1);
+        case LiveChannelAction.moveDown:
+          await dao.moveChannel(list.id, entry.key, 1);
+        case LiveChannelAction.removeFromList:
+          await dao.setChannel(list.id, entry.key, false);
+        case LiveChannelAction.addToList:
+          await showAddToListDialog(
+            context,
+            ref,
+            sourceId: _id,
+            channelKey: entry.key,
+          );
+        case LiveChannelAction.otherPlayer:
+          await _playWithOtherEngine(source, row!);
+        case LiveChannelAction.favorite || null:
+          break;
+      }
+    } on Object catch (e, st) {
+      if (mounted) {
+        ref
+            .read(ringLogProvider)
+            .error('Changing a channel list failed', e, st);
+      }
+    }
+  }
+
+  /// "New list…": names and creates a list, then shows it with its tab
+  /// focused.
+  Future<void> _createList() async {
+    final listId = await createChannelList(context, ref, _id);
+    if (listId == null || !mounted) return;
+    _focusListTab = listId;
+    _showList(listId);
+  }
+
+  /// Deletes [list] (the one shown) once confirmed. Focus and the selection
+  /// move to the tab before it (the previous list, or the live favourites)
+  /// first: the dialog would hand focus back to the list's tab or button,
+  /// which go with it.
+  Future<void> _deleteList(ChannelListRow list) async {
+    final dao = ref.read(channelListsDaoProvider);
+    final log = ref.read(ringLogProvider);
+    if (!await confirmDeleteChannelList(context, list) || !mounted) return;
+    if (_listId == list.id) {
+      final lists = ref.read(channelListsProvider(_id)).value ?? const [];
+      final i = lists.indexWhere((l) => l.id == list.id);
+      final before = i > 0 ? lists[i - 1] : null;
+      if (before == null) {
+        _tabNodes[FavoritesSegment.live]!.requestFocus();
+        _show(FavoritesSegment.live);
+      } else {
+        _listTabNode(before.id).requestFocus();
+        _showList(before.id);
+      }
+    }
+    try {
+      await dao.deleteList(list.id);
+    } on Object catch (e, st) {
+      log.error('Deleting a channel list failed', e, st);
+    }
+  }
+
+  /// A list tab's options (Menu or a long press): rename, delete.
+  Future<void> _listMenu(ChannelListRow list) async {
+    final l10n = AppLocalizations.of(context);
+    final choice = await showOptionsSheet<bool>(
+      context,
+      title: list.name,
+      options: [
+        SheetOption(
+          value: false,
+          icon: Icons.edit_outlined,
+          label: l10n.liveRenameList,
+        ),
+        SheetOption(
+          value: true,
+          icon: Icons.delete_outline_rounded,
+          label: l10n.liveDeleteList,
+        ),
+      ],
+    );
+    if (!mounted || choice == null) return;
+    if (choice) {
+      await _deleteList(list);
+    } else {
+      await renameChannelList(context, ref, list);
+    }
+  }
+
+  /// The lists changed. When the one shown left (deleted elsewhere) the
+  /// live favourites show instead; focus on its tab or channels moves to
+  /// their tab first, before those widgets go.
+  void _onListsChanged(List<ChannelListRow>? lists) {
+    final listId = _listId;
+    if (lists == null || listId == null || lists.any((l) => l.id == listId)) {
+      return;
+    }
+    if ((_contentPane.currentState?.hasFocus ?? false) ||
+        (_listTabNodes[listId]?.hasFocus ?? false)) {
+      _tabNodes[FavoritesSegment.live]!.requestFocus();
+    }
+    _show(FavoritesSegment.live);
+  }
+
+  /// Drops the tab nodes of lists that are gone (once their tabs left the
+  /// tree) and focuses a just created list's tab once it is built.
+  void _syncListTabs(List<ChannelListRow> lists) {
+    final ids = {for (final l in lists) l.id};
+    final gone = [
+      for (final MapEntry(:key, :value) in _listTabNodes.entries)
+        if (!ids.contains(key) && !value.hasFocus) key,
+    ];
+    if (gone.isNotEmpty) {
+      final nodes = [for (final id in gone) _listTabNodes.remove(id)!];
+      afterNextFrame(() {
+        for (final node in nodes) {
+          node.dispose();
+        }
+      });
+    }
+    final focus = _focusListTab;
+    if (focus != null && ids.contains(focus)) {
+      _focusListTab = null;
+      afterNextFrame(() {
+        if (mounted && _listId == focus) _listTabNode(focus).requestFocus();
+      });
     }
   }
 
@@ -271,6 +569,28 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
       favoriteKeysProvider((_id, ContentKind.series)),
       (_, next) => _onKeysChanged(FavoritesSegment.series, next.value),
     );
+    ref.listen(
+      channelListsProvider(_id),
+      (_, next) => _onListsChanged(next.value),
+    );
+    final listId = _listId;
+    if (listId != null) {
+      ref.listen(channelListKeysProvider(listId), (prev, next) {
+        final before = prev?.value;
+        final after = next.value;
+        if (before == null || after == null || listEquals(before, after)) {
+          return;
+        }
+        // Its last channel left: focus goes to the list's buttons before
+        // the rows go.
+        if (after.isEmpty && (_contentPane.currentState?.hasFocus ?? false)) {
+          _renameNode.requestFocus();
+        }
+        if (_listId == listId) setState(() => _listVersion++);
+      });
+    }
+    final lists = ref.watch(channelListsProvider(_id)).value;
+    if (lists != null) _syncListTabs(lists);
     final counts = {
       FavoritesSegment.live: ref
           .watch(favoriteKeysProvider((_id, ContentKind.live)))
@@ -293,11 +613,27 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
     final autofocus = !_inShell;
     // Pushed pages have an app bar; in a shell tab the page names itself.
     final title = _inShell && isLargeLayout(context);
-    final (content, empty) = switch (_segment) {
-      FavoritesSegment.live => _buildChannels(l10n),
-      FavoritesSegment.movies => _buildMovies(l10n),
-      FavoritesSegment.series => _buildSeries(l10n),
-    };
+    final (content, empty) = listId != null
+        ? _buildList(l10n, lists?.where((l) => l.id == listId).firstOrNull)
+        : switch (_segment) {
+            FavoritesSegment.live => _buildChannels(l10n),
+            FavoritesSegment.movies => _buildMovies(l10n),
+            FavoritesSegment.series => _buildSeries(l10n),
+          };
+    final contentKey = listId != null ? 'list-$listId' : _segment.name;
+    Widget segmentTab(FavoritesSegment s) => Padding(
+      padding: const EdgeInsetsDirectional.only(end: Spacing.sm),
+      child: _SegmentTab(
+        key: ValueKey('favorites-tab-${s.name}'),
+        focusNode: _tabNodes[s]!,
+        label: labels[s]!,
+        count: counts[s],
+        selected: listId == null && s == _segment,
+        autofocus: autofocus && listId == null && s == _segment,
+        onFocus: () => _show(s),
+        onSelect: () => _show(s, enter: true),
+      ),
+    );
     return HomeTabBackHandler(
       onBack: _onBack,
       child: FocusTraversalGroup(
@@ -309,7 +645,9 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
               key: _tabsPane,
               debugLabel: 'favorites-tabs',
               onExitDown: _enterContent,
-              child: Padding(
+              // Scrolls sideways once the user's lists fill the row.
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.all(Spacing.sm),
                 child: Row(
                   children: [
@@ -324,21 +662,34 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
                           style: Theme.of(context).textTheme.headlineSmall,
                         ),
                       ),
-                    for (final s in FavoritesSegment.values)
+                    segmentTab(FavoritesSegment.live),
+                    for (final list in lists ?? const <ChannelListRow>[])
                       Padding(
                         padding: const EdgeInsetsDirectional.only(
                           end: Spacing.sm,
                         ),
                         child: _SegmentTab(
-                          key: ValueKey('favorites-tab-${s.name}'),
-                          focusNode: _tabNodes[s]!,
-                          label: labels[s]!,
-                          count: counts[s],
-                          selected: s == _segment,
-                          autofocus: autofocus && s == _segment,
-                          onFocus: () => _show(s),
-                          onSelect: () => _show(s, enter: true),
+                          key: ValueKey('favorites-tab-list-${list.id}'),
+                          focusNode: _listTabNode(list.id),
+                          label: list.name,
+                          count: list.count,
+                          selected: list.id == listId,
+                          icon: Icons.playlist_play_rounded,
+                          onFocus: () => _showList(list.id),
+                          onSelect: () => _showList(list.id, enter: true),
+                          onMenu: () => unawaited(_listMenu(list)),
                         ),
+                      ),
+                    segmentTab(FavoritesSegment.movies),
+                    segmentTab(FavoritesSegment.series),
+                    if (lists != null)
+                      _SegmentTab(
+                        key: const ValueKey('favorites-tab-new-list'),
+                        focusNode: _newListNode,
+                        label: l10n.liveNewList,
+                        selected: false,
+                        icon: Icons.add_rounded,
+                        onSelect: () => unawaited(_createList()),
                       ),
                   ],
                 ),
@@ -351,7 +702,7 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
               // enter the page; without it the page re-enters on the tabs.
               child: empty
                   ? KeyedSubtree(
-                      key: ValueKey('favorites-${_segment.name}-empty'),
+                      key: ValueKey('favorites-$contentKey-empty'),
                       child: content,
                     )
                   : PaneScope(
@@ -359,7 +710,7 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
                       debugLabel: 'favorites-content',
                       onExitUp: _enterTabs,
                       child: KeyedSubtree(
-                        key: ValueKey('favorites-${_segment.name}'),
+                        key: ValueKey('favorites-$contentKey'),
                         child: content,
                       ),
                     ),
@@ -404,6 +755,82 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
       emptyIcon: Icons.star_outline_rounded,
     );
     return (list, false);
+  }
+
+  /// One of the user's channel lists: Rename and Delete, then its channels
+  /// (or how to add some). Never empty: the buttons can take focus.
+  (Widget, bool) _buildList(AppLocalizations l10n, ChannelListRow? list) {
+    if (list == null) return (const LoadingView(), false);
+    final keys = ref.watch(channelListKeysProvider(list.id)).value;
+    final Widget body;
+    if (keys != null && keys.isEmpty) {
+      body = EmptyView(
+        message: l10n.liveListEmpty,
+        icon: Icons.playlist_add_rounded,
+      );
+    } else {
+      final favorites =
+          ref.watch(favoriteKeysProvider((_id, ContentKind.live))).value ??
+          const <String>{};
+      final recent = ref.watch(recentChannelKeysProvider(_id)).value;
+      body = ChannelList(
+        key: _list,
+        sourceId: _id,
+        list: LiveList.channelList(list.id),
+        store: _store,
+        itemExtent: isLargeLayout(context)
+            ? TvLayout.channelExtent
+            : TvLayout.channelExtentPhone,
+        favorites: favorites,
+        playingKey: recent?.firstOrNull,
+        dataVersion: _listVersion,
+        onPlay: _playChannel,
+        onMenu: _listChannelMenu,
+        onEmptied: (hadFocus, _) {
+          if (hadFocus || (_contentPane.currentState?.hasFocus ?? false)) {
+            _renameNode.requestFocus();
+          }
+        },
+        emptyMessage: l10n.liveListEmpty,
+        emptyIcon: Icons.playlist_add_rounded,
+      );
+    }
+    final column = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(
+            Spacing.md,
+            Spacing.xxs,
+            Spacing.md,
+            Spacing.sm,
+          ),
+          child: Row(
+            children: [
+              TvButton(
+                key: const ValueKey('favorites-list-rename'),
+                focusNode: _renameNode,
+                icon: Icons.edit_outlined,
+                label: l10n.liveRenameList,
+                height: 40,
+                onSelect: () =>
+                    unawaited(renameChannelList(context, ref, list)),
+              ),
+              const SizedBox(width: Spacing.sm),
+              TvButton(
+                key: const ValueKey('favorites-list-delete'),
+                icon: Icons.delete_outline_rounded,
+                label: l10n.liveDeleteList,
+                height: 40,
+                onSelect: () => unawaited(_deleteList(list)),
+              ),
+            ],
+          ),
+        ),
+        Expanded(child: body),
+      ],
+    );
+    return (column, false);
   }
 
   (Widget, bool) _buildMovies(AppLocalizations l10n) {
@@ -488,6 +915,26 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
   }
 }
 
+/// [PreferredFirstTraversalPolicy] where [upFrom] can name the node Up
+/// moves to instead of the geometric choice.
+class _FavoritesTraversalPolicy extends PreferredFirstTraversalPolicy {
+  _FavoritesTraversalPolicy(super.preferred, this.upFrom);
+
+  final FocusNode? Function(FocusNode currentNode) upFrom;
+
+  @override
+  bool inDirection(FocusNode currentNode, TraversalDirection direction) {
+    final target = direction == TraversalDirection.up
+        ? upFrom(currentNode)
+        : null;
+    if (target != null) {
+      target.requestFocus();
+      return true;
+    }
+    return super.inDirection(currentNode, direction);
+  }
+}
+
 /// Watch progress to draw on a poster: unfinished titles only.
 double? _fraction(ProgressRow? p) =>
     p == null || p.finished || p.fraction <= 0 ? null : p.fraction;
@@ -498,8 +945,10 @@ class _SegmentTab extends StatelessWidget {
     required this.focusNode,
     required this.label,
     required this.selected,
-    required this.onFocus,
     required this.onSelect,
+    this.onFocus,
+    this.onMenu,
+    this.icon,
     this.count,
     this.autofocus = false,
   });
@@ -507,10 +956,14 @@ class _SegmentTab extends StatelessWidget {
   final FocusNode focusNode;
   final String label;
   final int? count;
+  final IconData? icon;
   final bool selected;
   final bool autofocus;
-  final VoidCallback onFocus;
+
+  /// Called when the tab gets focus (it shows its content at once).
+  final VoidCallback? onFocus;
   final VoidCallback onSelect;
+  final VoidCallback? onMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -524,9 +977,10 @@ class _SegmentTab extends StatelessWidget {
       borderRadius: BorderRadius.circular(Radii.pill),
       semanticLabel: label,
       onFocusChange: (focused) {
-        if (focused) onFocus();
+        if (focused) onFocus?.call();
       },
       onSelect: onSelect,
+      onMenu: onMenu,
       child: Container(
         height: 40,
         padding: const EdgeInsets.symmetric(horizontal: Spacing.lg),
@@ -538,7 +992,18 @@ class _SegmentTab extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(label, style: style?.copyWith(color: fg)),
+            if (icon case final icon?) ...[
+              Icon(icon, size: 18, color: fg),
+              const SizedBox(width: Spacing.xs),
+            ],
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 220),
+              child: BidiText(
+                label,
+                maxLines: 1,
+                style: style?.copyWith(color: fg),
+              ),
+            ),
             if (count != null) ...[
               const SizedBox(width: Spacing.sm),
               Text(

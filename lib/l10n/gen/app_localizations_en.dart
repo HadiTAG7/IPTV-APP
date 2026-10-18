@@ -927,6 +927,69 @@ class AppLocalizationsEn extends AppLocalizations {
   String get liveRecentEmpty => 'Channels you watch will appear here.';
 
   @override
+  String get liveAddToList => 'Add to list…';
+
+  @override
+  String get liveAddToListTitle => 'Add to list';
+
+  @override
+  String get liveNewList => 'New list…';
+
+  @override
+  String get liveNewListTitle => 'New list';
+
+  @override
+  String get liveListName => 'List name';
+
+  @override
+  String get liveListNameHint => 'e.g. Sports';
+
+  @override
+  String get liveListCreate => 'Create';
+
+  @override
+  String get liveListNameEmpty => 'Enter a name for the list.';
+
+  @override
+  String get liveListNameTaken => 'You already have a list with this name.';
+
+  @override
+  String liveListAdded(String name) {
+    return 'Added to “⁨$name⁩”';
+  }
+
+  @override
+  String liveListRemoved(String name) {
+    return 'Removed from “⁨$name⁩”';
+  }
+
+  @override
+  String get liveListEmpty =>
+      'This list is empty. Choose “Add to list…” in a channel\'s options.';
+
+  @override
+  String get liveRenameList => 'Rename list';
+
+  @override
+  String get liveDeleteList => 'Delete list';
+
+  @override
+  String liveDeleteListConfirm(String name) {
+    return 'Delete the list “⁨$name⁩”? Only the list is deleted; its channels stay in the source.';
+  }
+
+  @override
+  String get liveMoveUp => 'Move up';
+
+  @override
+  String get liveMoveDown => 'Move down';
+
+  @override
+  String liveRemoveFromList(String name) {
+    return 'Remove from “⁨$name⁩”';
+  }
+
+  @override
   String liveTimeRange(String start, String end) {
     return '⁨$start⁩ – ⁨$end⁩';
   }

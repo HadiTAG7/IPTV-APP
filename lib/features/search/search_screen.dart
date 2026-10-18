@@ -19,6 +19,7 @@ import '../../widgets/channel_tile.dart';
 import '../../widgets/poster_card.dart';
 import '../../widgets/section_header.dart';
 import '../../widgets/states.dart';
+import '../channel_lists/channel_list_dialogs.dart';
 import '../favorites/vod_navigation.dart';
 import '../live/live_actions.dart';
 import '../live/now_next_store.dart';
@@ -241,6 +242,11 @@ class SearchViewState extends ConsumerState<SearchView> {
           icon: isFavorite ? Icons.star_rounded : Icons.star_outline_rounded,
           label: isFavorite ? l10n.liveRemoveFavorite : l10n.liveAddFavorite,
         ),
+        SheetOption(
+          value: LiveChannelAction.addToList,
+          icon: Icons.playlist_add_rounded,
+          label: l10n.liveAddToList,
+        ),
         if (hasOtherLiveEngine(ref))
           SheetOption(
             value: LiveChannelAction.otherPlayer,
@@ -253,6 +259,13 @@ class SearchViewState extends ConsumerState<SearchView> {
     switch (choice) {
       case LiveChannelAction.favorite:
         await setFavorite(ref, _id, ContentKind.live, channel.key, !isFavorite);
+      case LiveChannelAction.addToList:
+        await showAddToListDialog(
+          context,
+          ref,
+          sourceId: _id,
+          channelKey: channel.key,
+        );
       case LiveChannelAction.otherPlayer:
         final request = PlayRequest(
           sourceId: _id,
@@ -262,7 +275,10 @@ class SearchViewState extends ConsumerState<SearchView> {
         await ref
             .read(playGateProvider)
             .run(() => playWithOtherEngine(context, ref, request));
-      case null:
+      case LiveChannelAction.moveUp ||
+          LiveChannelAction.moveDown ||
+          LiveChannelAction.removeFromList ||
+          null:
         break;
     }
   }
