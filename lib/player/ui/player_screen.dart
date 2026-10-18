@@ -106,6 +106,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   final _nextNode = FocusNode(debugLabel: 'player:next-episode');
 
   bool _osdVisible = false;
+
+  /// The OSD shows without having taken focus (the mouse showed it): keys
+  /// act as if it were hidden while focus stays on the player.
+  bool _osdByMouse = false;
   bool _statsVisible = false;
   bool _bannerVisible = false;
   Timer? _osdTimer;
@@ -218,7 +222,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _lifecycle.dispose();
     _osdTimer?.cancel();
     _bannerTimer?.cancel();
-    _hoverMuteTimer?.cancel();
     unawaited(_onlineSub?.cancel());
     _watchdog?.unregister(_rootNode);
     _zapPreview?.removeListener(_onZapPreview);
@@ -242,6 +245,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _releaseOrientation();
     _releaseFullscreen(later: true);
     _setWindowFullscreen(false);
+    _hoverMuteTimer?.cancel();
     _controllerSub.close();
     super.dispose();
   }
@@ -483,6 +487,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       _osdVisible = true;
       _bannerVisible = false;
     });
+    _osdByMouse = !moveFocus;
     _restartOsdTimer();
     if (moveFocus) _focusAfterBuild(target);
   }
@@ -490,12 +495,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   void _hideOsd() {
     _osdTimer?.cancel();
     _osdTimer = null;
+    _osdByMouse = false;
     if (!_osdVisible) return;
     if (_rootNode.hasFocus) _focusRoot();
     if (mounted) setState(() => _osdVisible = false);
   }
 
-  void _toggleOsd() => _osdVisible ? _hideOsd() : _showOsd();
+  /// A tap or click on the picture. A desktop click leaves the keyboard on
+  /// the player, as moving the mouse does.
+  void _toggleOsd() =>
+      _osdVisible ? _hideOsd() : _showOsd(moveFocus: _window == null);
 
   void _restartOsdTimer() {
     if (!_osdVisible) return;
@@ -620,8 +629,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
     final direction = arrowDirection(key);
     // An OSD the mouse showed leaves focus on the player: keys act as if
-    // it were hidden (arrows zap, OK focuses it).
-    if (_osdVisible && !_rootNode.hasPrimaryFocus) {
+    // it were hidden (arrows zap, OK focuses it). One opened by a key has
+    // its focus on the way.
+    if (_osdVisible && !(_osdByMouse && _rootNode.hasPrimaryFocus)) {
       if (!live && _seekBarNode.hasPrimaryFocus) {
         if (direction == TraversalDirection.left ||
             direction == TraversalDirection.right) {

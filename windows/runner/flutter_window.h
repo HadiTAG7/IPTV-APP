@@ -42,10 +42,9 @@ class FlutterWindow : public Win32Window {
 
   // The window as it was before fullscreen, restored by ExitFullscreen.
   bool fullscreen_ = false;
-  bool maximized_before_fullscreen_ = false;
   LONG style_before_fullscreen_ = 0;
   LONG ex_style_before_fullscreen_ = 0;
-  RECT rect_before_fullscreen_ = {};
+  WINDOWPLACEMENT placement_before_fullscreen_ = {};
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

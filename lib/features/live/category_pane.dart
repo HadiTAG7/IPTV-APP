@@ -71,7 +71,7 @@ class LiveCategoryPaneState extends State<LiveCategoryPane> {
     if (index < 0) return;
     final node = _nodes[list.id];
     if (isAttached(node)) {
-      node!.requestFocus();
+      _focusEntry(node!);
       return;
     }
     final c = _scroll;
@@ -84,9 +84,23 @@ class LiveCategoryPaneState extends State<LiveCategoryPane> {
       );
     }
     afterNextFrame(() {
-      if (mounted) _nodeFor(list).requestFocus();
+      if (mounted) _focusEntry(_nodeFor(list));
     });
   }
+
+  /// Focuses an entry moved to on purpose (not by an arrow). The scope's
+  /// arrow history goes first, or the next arrow opposite to the last one
+  /// would pop back to an old entry (or stay put).
+  void _focusEntry(FocusNode node) {
+    final scope = node.nearestScope;
+    if (scope != null) {
+      FocusTraversalGroup.maybeOfNode(node)?.invalidateScopeData(scope);
+    }
+    node.requestFocus();
+  }
+
+  /// Whether [list]'s entry has focus.
+  bool hasFocusOn(LiveList list) => _nodes[list.id]?.hasFocus ?? false;
 
   /// Moves focus off [list] to its neighbour (before hiding it).
   void focusNeighbourOf(LiveList list) {

@@ -203,6 +203,23 @@ class LiveViewState extends ConsumerState<LiveView> {
 
   void _enterCategories() => _catsPane.currentState?.requestFocus();
 
+  /// Before [list]'s category entry goes (hidden or deleted from its menu).
+  /// When the entry was [focused] (the menu came from the remote), focus
+  /// moves to its neighbour and the list shown gives way to All channels;
+  /// a pending switch to it is dropped. A menu opened by a mouse or touch
+  /// long press on another entry leaves focus and the list shown alone:
+  /// when [list] is the one shown, [_onSelectedGone] takes over once it has
+  /// gone, and focus in the channels follows into All.
+  void _beforeEntryGoes(LiveList list, {required bool focused}) {
+    if (_pending == list) {
+      _selectTimer?.cancel();
+      _pending = null;
+    }
+    if (!focused) return;
+    if (_selected == list) _select(const LiveList.all());
+    _categories.currentState?.focusNeighbourOf(list);
+  }
+
   /// Info -> channels, or the categories when the list has no rows (it
   /// emptied while the info pane had focus).
   void _leaveInfo() {
@@ -422,6 +439,10 @@ class LiveViewState extends ConsumerState<LiveView> {
 
   Future<void> _categoryMenu(LiveCategoryEntry entry) async {
     final l10n = AppLocalizations.of(context);
+    // Read before the sheet takes focus: a remote's Menu key opens it on
+    // the focused entry, a long press on any entry.
+    final entryFocused =
+        _categories.currentState?.hasFocusOn(entry.list) ?? false;
     final rows = ref.read(liveCategoriesProvider(_id)).value ?? const [];
     final anyHidden = rows.any((c) => c.hidden);
     final listId = entry.list.listId;
@@ -463,10 +484,7 @@ class LiveViewState extends ConsumerState<LiveView> {
     if (!mounted) return;
     switch (choice) {
       case LiveCategoryAction.hide:
-        if (_selected == entry.list || _pending == entry.list) {
-          _select(const LiveList.all());
-        }
-        _categories.currentState?.focusNeighbourOf(entry.list);
+        _beforeEntryGoes(entry.list, focused: entryFocused);
         await setLiveCategoryHidden(ref, _id, entry.list.categoryKey!, true);
       case LiveCategoryAction.showHidden:
         await showHiddenLiveCategories(ref, _id);
@@ -478,11 +496,7 @@ class LiveViewState extends ConsumerState<LiveView> {
         if (!await confirmDeleteChannelList(context, userList!) || !mounted) {
           return;
         }
-        // As for hiding: the selection and focus leave the entry first.
-        if (_selected == entry.list || _pending == entry.list) {
-          _select(const LiveList.all());
-        }
-        _categories.currentState?.focusNeighbourOf(entry.list);
+        _beforeEntryGoes(entry.list, focused: entryFocused);
         try {
           await dao.deleteList(userList.id);
         } on Object catch (e, st) {
