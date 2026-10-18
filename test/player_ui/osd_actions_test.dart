@@ -8,18 +8,19 @@ import 'package:iptv_player/sources/models.dart';
 
 import 'support/player_harness.dart';
 
-/// Opens the OSD and moves to the button [name] with the remote.
+/// Opens the live OSD (Left/Right; OK opens the channel panel) and moves
+/// to the button [name] with the remote.
 Future<void> focusOsdButton(
   WidgetTester tester,
   String name, {
   Locale locale = en,
 }) async {
-  if (find.byKey(const ValueKey('player-osd')).evaluate().isEmpty) {
-    await press(tester, LogicalKeyboardKey.select);
-  }
   final next = locale == ar
       ? LogicalKeyboardKey.arrowLeft
       : LogicalKeyboardKey.arrowRight;
+  if (find.byKey(const ValueKey('player-osd')).evaluate().isEmpty) {
+    await press(tester, next);
+  }
   for (var i = 0; i < 10; i++) {
     if (focusedIn(ValueKey('player-osd-$name'))) return;
     await press(tester, next);
@@ -240,9 +241,9 @@ void main() {
       await press(tester, LogicalKeyboardKey.contextMenu);
       expect(find.text('Options'), findsOneWidget);
       expect(focusedIn(const ValueKey('player-choice-0')), isTrue);
-      // Audio, Subtitles, Aspect, Favourite, Add to list, Switch player,
-      // Guide, Stats.
-      for (var i = 0; i < 7; i++) {
+      // Channels, Audio, Subtitles, Aspect, Favourite, Add to list, Switch
+      // player, Guide, Stats.
+      for (var i = 0; i < 8; i++) {
         await press(tester, LogicalKeyboardKey.arrowDown);
       }
       await press(tester, LogicalKeyboardKey.select);

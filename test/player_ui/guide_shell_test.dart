@@ -102,12 +102,12 @@ void main() {
       await settle(tester);
       expect(find.byType(PlayerScreen), findsOneWidget);
 
-      await press(tester, LogicalKeyboardKey.select);
-      expect(find.byKey(const ValueKey('player-osd-guide')), findsOneWidget);
       final next = locale == ar
           ? LogicalKeyboardKey.arrowLeft
           : LogicalKeyboardKey.arrowRight;
-      for (var i = 0; i < 8; i++) {
+      await press(tester, next);
+      expect(find.byKey(const ValueKey('player-osd-guide')), findsOneWidget);
+      for (var i = 0; i < 9; i++) {
         if (focusedIn(const ValueKey('player-osd-guide'))) break;
         await press(tester, next);
       }

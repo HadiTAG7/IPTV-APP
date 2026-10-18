@@ -225,6 +225,9 @@ class PagedZapper {
   ZapEntry? get current => _tuned;
   int get currentIndex => _tunedIndex;
 
+  /// The channel a lone `0` returns to.
+  ZapEntry? get previousEntry => _previous?.$1;
+
   /// Entry at [index] when its page is in memory.
   ZapEntry? entryAt(int index) {
     if (index < 0 || index >= _total) return null;
@@ -237,13 +240,20 @@ class PagedZapper {
   }
 
   /// Reads the list size and the page of [current] (the channel playing).
-  Future<void> init(ZapEntry current) async {
+  /// [previous] is the channel a lone `0` returns to (the one watched
+  /// before, when this zapper replaces another).
+  Future<void> init(ZapEntry current, {ZapEntry? previous}) async {
     final count = await list.count();
     if (_closed) return;
     _total = count.total;
     _hasNumbers = count.numbered > 0;
     final index = _total == 0 ? null : await list.indexOf(current.key);
     if (_closed) return;
+    if (previous != null && previous.key != current.key) {
+      final p = _total == 0 ? null : await list.indexOf(previous.key);
+      if (_closed) return;
+      _previous = (previous, p ?? -1);
+    }
     final i = index ?? -1;
     // A channel outside the list starts zapping at its first entry.
     final anchor = i >= 0 ? i : 0;

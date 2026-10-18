@@ -272,6 +272,10 @@
   "playerExitFullscreen": "Exit full screen",
   "playerFavorite": "Favorite",
   "playerGuide": "Guide",
+  "playerChannels": "Channels",
+  "@playerChannels": {
+    "description": "Player OSD button, options entry and title of the in-player channel panel: browse the channel lists and switch channel without leaving the player."
+  },
   "playerLive": "LIVE",
   "playerBuffering": "Buffering…",
   "playerReconnecting": "Reconnecting… ({n}/{max})",

@@ -2,11 +2,55 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../core/db/app_db.dart';
+import '../../l10n/gen/app_localizations.dart';
 import '../../theme/tokens.dart';
 import '../../tv/tv_focusable.dart';
 import '../../widgets/bidi_text.dart';
 import 'live_models.dart';
 import 'preferred_focus.dart';
+
+/// The entries of the category pane (also the player's channel panel):
+/// Favorites, the user's own [lists] in list order, Recent and All
+/// channels, then the provider's [categories] that are not hidden. The
+/// counts are the channels in each.
+List<LiveCategoryEntry> liveCategoryEntries(
+  AppLocalizations l10n, {
+  required List<CategoryRow> categories,
+  required List<ChannelListRow> lists,
+  required int favorites,
+  required int recent,
+  required int total,
+}) => [
+  LiveCategoryEntry(
+    list: const LiveList.favorites(),
+    name: l10n.liveFavorites,
+    count: favorites,
+  ),
+  for (final l in lists)
+    LiveCategoryEntry(
+      list: LiveList.channelList(l.id),
+      name: l.name,
+      count: l.count,
+    ),
+  LiveCategoryEntry(
+    list: const LiveList.recent(),
+    name: l10n.liveRecent,
+    count: recent,
+  ),
+  LiveCategoryEntry(
+    list: const LiveList.all(),
+    name: l10n.liveAllChannels,
+    count: total,
+  ),
+  for (final c in categories)
+    if (!c.hidden)
+      LiveCategoryEntry(
+        list: LiveList.category(c.key),
+        name: c.name,
+        count: c.itemCount,
+      ),
+];
 
 /// The category column of the large Live layout: Favorites, the user's own
 /// lists, Recent and All channels, then the source's categories with their

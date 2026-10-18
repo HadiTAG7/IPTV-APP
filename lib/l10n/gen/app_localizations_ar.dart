@@ -563,6 +563,9 @@ class AppLocalizationsAr extends AppLocalizations {
   String get playerGuide => 'الدليل';
 
   @override
+  String get playerChannels => 'القنوات';
+
+  @override
   String get playerLive => 'مباشر';
 
   @override

@@ -94,6 +94,7 @@ class CategoryChannelsSource extends ChannelListSource {
     sourceId: sourceId,
     item: channel.toPlayable(),
     categoryKey: categoryKey,
+    list: list,
   );
 }
 
@@ -123,7 +124,7 @@ class AllChannelsSource extends ChannelListSource {
 
   @override
   Future<PlayRequest> requestFor(ChannelRow channel) async =>
-      PlayRequest(sourceId: sourceId, item: channel.toPlayable());
+      PlayRequest(sourceId: sourceId, item: channel.toPlayable(), list: list);
 }
 
 /// Favourite channels in favourite order. Channels gone from the catalog
@@ -165,6 +166,7 @@ class FavoriteChannelsSource extends ChannelListSource {
       sourceId: sourceId,
       item: channel.toPlayable(),
       zapKeys: [for (final c in available) c.key],
+      list: list,
     );
   }
 }
@@ -213,6 +215,7 @@ class ListChannelsSource extends ChannelListSource {
       sourceId: sourceId,
       item: channel.toPlayable(),
       zapKeys: [for (final c in available) c.key],
+      list: list,
     );
   }
 }
@@ -251,6 +254,7 @@ class RecentChannelsSource extends ChannelListSource {
     sourceId: sourceId,
     item: channel.toPlayable(),
     zapKeys: [for (final r in _rows) r.key],
+    list: list,
   );
 }
 

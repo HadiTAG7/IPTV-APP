@@ -149,6 +149,7 @@
   "playerExitFullscreen": "خروج من الشاشة الكاملة",
   "playerFavorite": "المفضلة",
   "playerGuide": "الدليل",
+  "playerChannels": "القنوات",
   "playerLive": "مباشر",
   "playerBuffering": "جارٍ التخزين المؤقت…",
   "playerReconnecting": "جارٍ إعادة الاتصال… ({n}/{max})",

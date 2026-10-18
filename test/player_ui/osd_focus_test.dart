@@ -47,7 +47,9 @@ void main() {
     await disposeRig(tester, rig);
   });
 
-  testWidgets('a key right after OK opens the OSD never zaps', (tester) async {
+  testWidgets('a key right after Right opens the OSD never zaps', (
+    tester,
+  ) async {
     final rig = PlayerRig()..autoPlay();
     final id = await seedLive(rig);
     await pumpPlayerApp(tester, rig);
@@ -55,12 +57,34 @@ void main() {
     await tester.pump(const Duration(seconds: 6));
     await settle(tester);
     // No frame between the two keys: focus has not reached the OSD yet.
-    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump(const Duration(seconds: 1));
     await settle(tester);
     expect(rig.openedUrls, [_url('ch1')]);
     expect(find.byKey(_osd), findsOneWidget);
+    await disposeRig(tester, rig);
+  });
+
+  testWidgets('a key right after OK opens the channel panel never zaps', (
+    tester,
+  ) async {
+    final rig = PlayerRig()..autoPlay();
+    final id = await seedLive(rig);
+    await pumpPlayerApp(tester, rig);
+    await openPlayerFor(tester, liveRequest(id));
+    await tester.pump(const Duration(seconds: 6));
+    await settle(tester);
+    // No frame between the keys: the panel is not even built yet.
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.channelUp);
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit3);
+    await tester.pump(const Duration(seconds: 2));
+    await settle(tester);
+    expect(rig.openedUrls, [_url('ch1')]);
+    expect(find.byKey(const ValueKey('channel-panel')), findsOneWidget);
+    expect(find.byKey(const ValueKey('player-number-badge')), findsNothing);
     await disposeRig(tester, rig);
   });
 
