@@ -241,11 +241,26 @@ void main() {
 
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       addTearDown(mouse.removePointer);
+      // Windows reports a mouse move when fullscreen resizes the window
+      // under a still cursor: it is ignored.
       await mouse.addPointer(location: const Offset(600, 300));
+      await mouse.moveTo(const Offset(610, 300));
+      await settle(tester);
+      expect(find.byKey(_osd), findsNothing);
+      await tester.pump(const Duration(seconds: 1));
+
       await mouse.moveTo(const Offset(640, 360));
       await settle(tester);
       expect(find.byKey(_osd), findsOneWidget);
       expect(_cursor(tester), MouseCursor.defer);
+      // The keyboard stays with the player: Up still zaps.
+      await press(tester, LogicalKeyboardKey.arrowUp);
+      await tester.pump(const Duration(seconds: 1));
+      await settle(tester);
+      expect(rig.openedUrls.last, 'http://127.0.0.1:9/live/ch2.ts');
+      await mouse.moveTo(const Offset(630, 360));
+      await settle(tester);
+      expect(find.byKey(_osd), findsOneWidget);
 
       // Moving keeps it up; resting hides it (and the cursor).
       await tester.pump(const Duration(seconds: 4));

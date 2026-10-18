@@ -1529,7 +1529,7 @@ abstract class AppLocalizations {
   /// No description provided for @favoritesEmpty.
   ///
   /// In en, this message translates to:
-  /// **'No favorites yet. Press Menu on a channel to add it.'**
+  /// **'No favorites yet. Choose “Add to favorites” in a channel\'s options.'**
   String get favoritesEmpty;
 
   /// {query} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.

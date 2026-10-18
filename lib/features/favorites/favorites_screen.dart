@@ -424,6 +424,7 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
       final lists = ref.read(channelListsProvider(_id)).value ?? const [];
       final i = lists.indexWhere((l) => l.id == list.id);
       final before = i > 0 ? lists[i - 1] : null;
+      _forgetTabArrows();
       if (before == null) {
         _tabNodes[FavoritesSegment.live]!.requestFocus();
         _show(FavoritesSegment.live);
@@ -476,6 +477,7 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
     }
     if ((_contentPane.currentState?.hasFocus ?? false) ||
         (_listTabNodes[listId]?.hasFocus ?? false)) {
+      _forgetTabArrows();
       _tabNodes[FavoritesSegment.live]!.requestFocus();
     }
     _show(FavoritesSegment.live);
@@ -501,9 +503,19 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
     if (focus != null && ids.contains(focus)) {
       _focusListTab = null;
       afterNextFrame(() {
-        if (mounted && _listId == focus) _listTabNode(focus).requestFocus();
+        if (!mounted || _listId != focus) return;
+        _forgetTabArrows();
+        _listTabNode(focus).requestFocus();
       });
     }
+  }
+
+  /// Forgets the tab row's arrow history before focus moves along it on
+  /// purpose (a list created or deleted): otherwise the next arrow opposite
+  /// to the last one pops back to an old tab instead of the neighbour.
+  void _forgetTabArrows() {
+    final tabs = _tabsPane.currentState?.node;
+    if (tabs != null) _policy.invalidateScopeData(tabs);
   }
 
   // -------------------------------------------------------------------------
@@ -805,7 +817,11 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
             Spacing.md,
             Spacing.sm,
           ),
-          child: Row(
+          // Wraps: long labels with a large system font do not fit side
+          // by side on narrow phones.
+          child: Wrap(
+            spacing: Spacing.sm,
+            runSpacing: Spacing.sm,
             children: [
               TvButton(
                 key: const ValueKey('favorites-list-rename'),
@@ -816,7 +832,6 @@ class FavoritesViewState extends ConsumerState<FavoritesView> {
                 onSelect: () =>
                     unawaited(renameChannelList(context, ref, list)),
               ),
-              const SizedBox(width: Spacing.sm),
               TvButton(
                 key: const ValueKey('favorites-list-delete'),
                 icon: Icons.delete_outline_rounded,

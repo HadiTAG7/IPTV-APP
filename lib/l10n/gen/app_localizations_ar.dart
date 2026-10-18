@@ -873,7 +873,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get favoritesEmpty =>
-      'لا توجد مفضلة بعد. اضغط زر القائمة على أي قناة لإضافتها.';
+      'لا توجد مفضلة بعد. اختر «إضافة إلى المفضلة» من خيارات أي قناة.';
 
   @override
   String searchNoResults(String query) {

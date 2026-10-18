@@ -446,7 +446,7 @@
   "lanReceived": "Received",
   "lanCodeExpired": "The code has expired. Start again.",
   "lanNoNetwork": "No local network found.",
-  "favoritesEmpty": "No favorites yet. Press Menu on a channel to add it.",
+  "favoritesEmpty": "No favorites yet. Choose “Add to favorites” in a channel's options.",
   "searchNoResults": "No results for “⁨{query}⁩”",
   "@searchNoResults": {
     "description": "{query} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",

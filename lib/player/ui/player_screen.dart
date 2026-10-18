@@ -144,6 +144,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// rule as the orientation.
   static Object? _windowOwner;
 
+  /// Mouse moves are ignored for a moment after the window changed size:
+  /// Windows reports one when the window moves under a still cursor.
+  bool _hoverMuted = false;
+  Timer? _hoverMuteTimer;
+
   bool get _failed =>
       _controller.phase == PlaybackPhase.failed || _session.error != null;
 
@@ -213,6 +218,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _lifecycle.dispose();
     _osdTimer?.cancel();
     _bannerTimer?.cancel();
+    _hoverMuteTimer?.cancel();
     unawaited(_onlineSub?.cancel());
     _watchdog?.unregister(_rootNode);
     _zapPreview?.removeListener(_onZapPreview);
@@ -289,6 +295,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final window = _window;
     if (window == null || on == _windowFullscreen) return;
     _windowFullscreen = on;
+    _hoverMuted = true;
+    _hoverMuteTimer?.cancel();
+    _hoverMuteTimer = Timer(
+      const Duration(milliseconds: 600),
+      () => _hoverMuted = false,
+    );
     if (on) {
       _windowOwner = this;
       unawaited(window.enter());
@@ -308,14 +320,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _rebuild();
   }
 
-  /// Desktop: moving the mouse shows the OSD like a click and keeps it up
-  /// while the mouse moves.
+  /// Desktop: moving the mouse shows the OSD and keeps it up while the
+  /// mouse moves. The keyboard stays with the player (arrows still zap):
+  /// a nudged mouse must not take it.
   void _onMouseMoved() {
-    if (_exiting || _cardShown) return;
+    if (_exiting || _cardShown || _hoverMuted) return;
     if (_osdVisible) {
       _restartOsdTimer();
     } else {
-      _showOsd();
+      _showOsd(moveFocus: false);
     }
   }
 
@@ -461,7 +474,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   bool get _cardShown =>
       _failed || _session.resumeOffer != null || _session.countdown != null;
 
-  void _showOsd({FocusNode? focus}) {
+  /// Shows the OSD; [moveFocus] false leaves focus on the player (the
+  /// mouse showed it).
+  void _showOsd({FocusNode? focus, bool moveFocus = true}) {
     if (_cardShown) return;
     final target = focus ?? (_session.isLive ? _osdFirstNode : _seekBarNode);
     setState(() {
@@ -469,7 +484,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       _bannerVisible = false;
     });
     _restartOsdTimer();
-    _focusAfterBuild(target);
+    if (moveFocus) _focusAfterBuild(target);
   }
 
   void _hideOsd() {
@@ -562,10 +577,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       if (down) _toggleWindowFullscreen();
       return KeyEventResult.handled;
     }
-    // Escape leaves window fullscreen before it means Back.
+    // Escape leaves window fullscreen (and the OSD) before it means Back.
     if (key == LogicalKeyboardKey.escape && _windowFullscreen) {
       if (down) {
         _setWindowFullscreen(false);
+        _hideOsd();
         _rebuild();
       }
       return KeyEventResult.handled;
@@ -603,7 +619,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       return KeyEventResult.handled;
     }
     final direction = arrowDirection(key);
-    if (_osdVisible) {
+    // An OSD the mouse showed leaves focus on the player: keys act as if
+    // it were hidden (arrows zap, OK focuses it).
+    if (_osdVisible && !_rootNode.hasPrimaryFocus) {
       if (!live && _seekBarNode.hasPrimaryFocus) {
         if (direction == TraversalDirection.left ||
             direction == TraversalDirection.right) {
@@ -1009,6 +1027,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final resume = s.resumeOffer;
     final countdown = s.countdown;
     final next = s.nextEpisode;
+    final topBar = formFactor != FormFactor.tv || _window != null;
+    // The OSD's top bar (Back, fullscreen) stays clickable: the stats and
+    // the number badge in its corners move below it while it shows.
+    final belowTopBar = EdgeInsetsDirectional.only(
+      top: _osdVisible && !_cardShown && topBar
+          ? OsdIconButton.size + Spacing.lg + Spacing.sm
+          : 0,
+    );
 
     return PopScope(
       canPop: false,
@@ -1070,11 +1096,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     ),
                   ),
                 if (_osdVisible && !_cardShown)
-                  _osd(
-                    l10n,
-                    overscan,
-                    topBar: formFactor != FormFactor.tv || _window != null,
-                  ),
+                  _osd(l10n, overscan, topBar: topBar),
                 SafeArea(
                   minimum: overscan + const EdgeInsets.all(Spacing.lg),
                   child: Stack(
@@ -1088,15 +1110,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       if (_statsVisible)
                         Align(
                           alignment: AlignmentDirectional.topStart,
-                          child: PlayerStatsOverlay(
-                            controller: _controller,
-                            redactValue: _redact,
+                          child: Padding(
+                            padding: belowTopBar,
+                            child: PlayerStatsOverlay(
+                              controller: _controller,
+                              redactValue: _redact,
+                            ),
                           ),
                         ),
                       if (s.isLive)
                         Align(
                           alignment: AlignmentDirectional.topEnd,
-                          child: _numberBadge(),
+                          child: Padding(
+                            padding: belowTopBar,
+                            child: _numberBadge(),
+                          ),
                         ),
                       if (countdown != null && next != null && !failed)
                         Align(
@@ -1317,6 +1345,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     add(PlayerAction.subtitles);
     add(PlayerAction.aspect);
     if (s.isLive) add(PlayerAction.favorite, active: s.favorite);
+    if (s.isLive) add(PlayerAction.addToList);
     add(PlayerAction.switchPlayer);
     if (s.isLive) add(PlayerAction.guide);
     add(PlayerAction.stats, active: _statsVisible);

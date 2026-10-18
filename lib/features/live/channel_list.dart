@@ -341,7 +341,7 @@ class ChannelListState extends ConsumerState<ChannelList> {
     _current = i;
     final node = _nodes[i];
     if (isAttached(node) && _onScreen(i)) {
-      node!.requestFocus();
+      _focusRow(node!);
       return;
     }
     final c = _scroll;
@@ -352,8 +352,20 @@ class ChannelListState extends ConsumerState<ChannelList> {
       c.jumpTo(target);
     }
     afterNextFrame(() {
-      if (mounted && _current == i) _nodeFor(i).requestFocus();
+      if (mounted && _current == i) _focusRow(_nodeFor(i));
     });
+  }
+
+  /// Focuses a row moved to on purpose (not by an arrow). The scope's arrow
+  /// history goes first: otherwise the next arrow opposite to the last one
+  /// pops back to the row that arrow came from, skipping rows or doing
+  /// nothing (rows move under the focus after Move up/down or a removal).
+  void _focusRow(FocusNode node) {
+    final scope = node.nearestScope;
+    if (scope != null) {
+      FocusTraversalGroup.maybeOfNode(node)?.invalidateScopeData(scope);
+    }
+    node.requestFocus();
   }
 
   /// Focuses the remembered row (the last focused, else the one the list

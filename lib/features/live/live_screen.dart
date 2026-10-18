@@ -424,6 +424,12 @@ class LiveViewState extends ConsumerState<LiveView> {
     final l10n = AppLocalizations.of(context);
     final rows = ref.read(liveCategoriesProvider(_id)).value ?? const [];
     final anyHidden = rows.any((c) => c.hidden);
+    final listId = entry.list.listId;
+    final userList = listId == null
+        ? null
+        : (ref.read(channelListsProvider(_id)).value ?? const [])
+              .where((l) => l.id == listId)
+              .firstOrNull;
     final choice = await showOptionsSheet<LiveCategoryAction>(
       context,
       title: entry.name,
@@ -434,6 +440,18 @@ class LiveViewState extends ConsumerState<LiveView> {
             icon: Icons.visibility_off_outlined,
             label: l10n.liveHideCategory,
           ),
+        if (userList != null) ...[
+          SheetOption(
+            value: LiveCategoryAction.renameList,
+            icon: Icons.edit_outlined,
+            label: l10n.liveRenameList,
+          ),
+          SheetOption(
+            value: LiveCategoryAction.deleteList,
+            icon: Icons.delete_outline_rounded,
+            label: l10n.liveDeleteList,
+          ),
+        ],
         if (anyHidden)
           SheetOption(
             value: LiveCategoryAction.showHidden,
@@ -452,6 +470,24 @@ class LiveViewState extends ConsumerState<LiveView> {
         await setLiveCategoryHidden(ref, _id, entry.list.categoryKey!, true);
       case LiveCategoryAction.showHidden:
         await showHiddenLiveCategories(ref, _id);
+      case LiveCategoryAction.renameList:
+        await renameChannelList(context, ref, userList!);
+      case LiveCategoryAction.deleteList:
+        final dao = ref.read(channelListsDaoProvider);
+        final log = ref.read(ringLogProvider);
+        if (!await confirmDeleteChannelList(context, userList!) || !mounted) {
+          return;
+        }
+        // As for hiding: the selection and focus leave the entry first.
+        if (_selected == entry.list || _pending == entry.list) {
+          _select(const LiveList.all());
+        }
+        _categories.currentState?.focusNeighbourOf(entry.list);
+        try {
+          await dao.deleteList(userList.id);
+        } on Object catch (e, st) {
+          log.error('Deleting a channel list failed', e, st);
+        }
       case null:
         break;
     }

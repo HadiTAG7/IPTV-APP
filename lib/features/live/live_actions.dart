@@ -24,8 +24,9 @@ enum LiveChannelAction {
   otherPlayer,
 }
 
-/// Choices of a category's options sheet.
-enum LiveCategoryAction { hide, showHidden }
+/// Choices of a category's options sheet; the user's own lists can be
+/// renamed and deleted here too.
+enum LiveCategoryAction { hide, showHidden, renameList, deleteList }
 
 /// Records that a live channel was played: it moves to the top of the
 /// Recent list (and becomes the channel the Live list opens on).

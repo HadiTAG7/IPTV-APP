@@ -101,6 +101,9 @@ class OsdIconButton extends StatelessWidget {
     this.onFocus,
   });
 
+  /// Width and height of the button.
+  static const double size = 48;
+
   final IconData icon;
   final String label;
   final VoidCallback onSelect;
@@ -120,8 +123,8 @@ class OsdIconButton extends StatelessWidget {
       child: Tooltip(
         message: label,
         child: Container(
-          width: 48,
-          height: 48,
+          width: size,
+          height: size,
           decoration: const BoxDecoration(
             color: AppColors.surfaceHigh,
             shape: BoxShape.circle,

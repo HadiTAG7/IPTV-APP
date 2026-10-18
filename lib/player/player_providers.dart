@@ -143,9 +143,10 @@ final playerWakelockProvider = Provider<ValueChanged<bool>>((ref) {
 final playerWindowProvider = Provider<WindowFullscreen?>((ref) {
   if (kIsWeb) return null;
   return switch (ref.watch(targetPlatformProvider)) {
-    TargetPlatform.windows ||
-    TargetPlatform.linux ||
-    TargetPlatform.macOS => const WindowFullscreen(),
+    TargetPlatform.windows => WindowFullscreen.windows(
+      onError: ref.watch(ringLogProvider).warn,
+    ),
+    TargetPlatform.linux || TargetPlatform.macOS => const WindowFullscreen(),
     _ => null,
   };
 }, name: 'playerWindowProvider');

@@ -852,7 +852,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get favoritesEmpty =>
-      'No favorites yet. Press Menu on a channel to add it.';
+      'No favorites yet. Choose “Add to favorites” in a channel\'s options.';
 
   @override
   String searchNoResults(String query) {
