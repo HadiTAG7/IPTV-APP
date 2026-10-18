@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/app/home_shell.dart';
+import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/features/favorites/vod_navigation.dart';
 import 'package:iptv_player/features/search/search_screen.dart';
@@ -209,6 +210,35 @@ void main() {
     expectFocusOn(en.vodAddFavorite);
     await press(tester, LogicalKeyboardKey.select);
     expect(await db.favoritesDao.favoriteKeys(id, ContentKind.series), ['s1']);
+    await disposeApp(tester, db);
+  });
+
+  testWidgets('TV: Menu on a channel result adds it to a list', (tester) async {
+    final db = openAppTestDb();
+    final id = await seedSearchCatalog(db);
+    final listId = await db.channelListsDao.createList(id, 'Evening');
+    final en = lookupAppLocalizations(const Locale('en'));
+    await pumpLiveApp(
+      tester,
+      db,
+      overrides: [
+        targetPlatformProvider.overrideWithValue(TargetPlatform.linux),
+      ],
+    );
+    await openTab(tester, HomeTab.search);
+    await typeText(tester, find.byType(TextField), 'News');
+    await wait(tester, SearchView.debounce);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expectFocusOn('News One');
+    await press(tester, LogicalKeyboardKey.contextMenu);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expectFocusOn(en.liveAddToList);
+    await press(tester, LogicalKeyboardKey.select);
+    expectFocusOn('Evening');
+    await press(tester, LogicalKeyboardKey.select);
+    expect(find.text(en.liveListAdded('Evening')), findsOneWidget);
+    expect(await db.channelListsDao.channelKeys(listId), ['k1']);
+    expectFocusOn('News One');
     await disposeApp(tester, db);
   });
 

@@ -42,6 +42,9 @@ final catalogDaoProvider = Provider<CatalogDao>(
 final favoritesDaoProvider = Provider<FavoritesDao>(
   (ref) => ref.watch(databaseProvider).favoritesDao,
 );
+final channelListsDaoProvider = Provider<ChannelListsDao>(
+  (ref) => ref.watch(databaseProvider).channelListsDao,
+);
 final progressDaoProvider = Provider<ProgressDao>(
   (ref) => ref.watch(databaseProvider).progressDao,
 );

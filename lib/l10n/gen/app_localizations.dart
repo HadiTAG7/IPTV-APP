@@ -1652,6 +1652,114 @@ abstract class AppLocalizations {
   /// **'Channels you watch will appear here.'**
   String get liveRecentEmpty;
 
+  /// Channel action: opens the dialog that adds the channel to one of the user's own channel lists (or removes it).
+  ///
+  /// In en, this message translates to:
+  /// **'Add to list…'**
+  String get liveAddToList;
+
+  /// Title of the dialog listing the user's channel lists; a check mark shows the lists holding the channel.
+  ///
+  /// In en, this message translates to:
+  /// **'Add to list'**
+  String get liveAddToListTitle;
+
+  /// Asks for a name and creates a channel list.
+  ///
+  /// In en, this message translates to:
+  /// **'New list…'**
+  String get liveNewList;
+
+  /// Title of the dialog that names a new channel list.
+  ///
+  /// In en, this message translates to:
+  /// **'New list'**
+  String get liveNewListTitle;
+
+  /// No description provided for @liveListName.
+  ///
+  /// In en, this message translates to:
+  /// **'List name'**
+  String get liveListName;
+
+  /// No description provided for @liveListNameHint.
+  ///
+  /// In en, this message translates to:
+  /// **'e.g. Sports'**
+  String get liveListNameHint;
+
+  /// Button that creates the new channel list.
+  ///
+  /// In en, this message translates to:
+  /// **'Create'**
+  String get liveListCreate;
+
+  /// No description provided for @liveListNameEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a name for the list.'**
+  String get liveListNameEmpty;
+
+  /// No description provided for @liveListNameTaken.
+  ///
+  /// In en, this message translates to:
+  /// **'You already have a list with this name.'**
+  String get liveListNameTaken;
+
+  /// Snack bar after adding a channel to the list {name}. {name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.
+  ///
+  /// In en, this message translates to:
+  /// **'Added to “⁨{name}⁩”'**
+  String liveListAdded(String name);
+
+  /// Snack bar after removing a channel from the list {name}. {name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed from “⁨{name}⁩”'**
+  String liveListRemoved(String name);
+
+  /// Shown for a channel list without channels.
+  ///
+  /// In en, this message translates to:
+  /// **'This list is empty. Choose “Add to list…” in a channel\'s options.'**
+  String get liveListEmpty;
+
+  /// No description provided for @liveRenameList.
+  ///
+  /// In en, this message translates to:
+  /// **'Rename list'**
+  String get liveRenameList;
+
+  /// No description provided for @liveDeleteList.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete list'**
+  String get liveDeleteList;
+
+  /// {name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete the list “⁨{name}⁩”? Only the list is deleted; its channels stay in the source.'**
+  String liveDeleteListConfirm(String name);
+
+  /// Moves a channel one place up in its list.
+  ///
+  /// In en, this message translates to:
+  /// **'Move up'**
+  String get liveMoveUp;
+
+  /// Moves a channel one place down in its list.
+  ///
+  /// In en, this message translates to:
+  /// **'Move down'**
+  String get liveMoveDown;
+
+  /// Removes a channel from the list {name}. {name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove from “⁨{name}⁩”'**
+  String liveRemoveFromList(String name);
+
   /// Start and end time of a programme. Each time is wrapped in U+2068/U+2069 (first-strong isolate).
   ///
   /// In en, this message translates to:

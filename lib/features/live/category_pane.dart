@@ -8,8 +8,9 @@ import '../../widgets/bidi_text.dart';
 import 'live_models.dart';
 import 'preferred_focus.dart';
 
-/// The category column of the large Live layout: Favorites, Recent and All
-/// channels, then the source's categories with their channel counts.
+/// The category column of the large Live layout: Favorites, the user's own
+/// lists, Recent and All channels, then the source's categories with their
+/// channel counts.
 ///
 /// Focusing an entry reports it ([onFocusList], the screen switches lists
 /// after a short pause); OK reports [onSelectList] (switch now and move to
@@ -174,6 +175,7 @@ class LiveCategoryPaneState extends State<LiveCategoryPane> {
 
 IconData _iconFor(LiveList list) => switch (list.kind) {
   LiveListKind.favorites => Icons.star_rounded,
+  LiveListKind.channelList => Icons.playlist_play_rounded,
   LiveListKind.recent => Icons.history,
   LiveListKind.all => Icons.view_list_rounded,
   LiveListKind.category => Icons.folder_outlined,

@@ -57,11 +57,21 @@ void main() {
         const LiveList.recent(),
         const LiveList.all(),
         const LiveList.category('cat:with:colons'),
+        const LiveList.channelList(7),
       ]) {
         expect(LiveList.fromId(list.id), list);
       }
+      expect(const LiveList.channelList(7).id, 'list:7');
+      expect(const LiveList.channelList(7).isChannelList, isTrue);
+      expect(const LiveList.channelList(7).isCategory, isFalse);
+      expect(
+        const LiveList.channelList(7),
+        isNot(const LiveList.channelList(8)),
+      );
       expect(LiveList.fromId(null), isNull);
       expect(LiveList.fromId('cat:'), isNull);
+      expect(LiveList.fromId('list:'), isNull);
+      expect(LiveList.fromId('list:x'), isNull);
       expect(LiveList.fromId('nope'), isNull);
     });
   });
@@ -134,6 +144,31 @@ void main() {
       expect(await fav.indexOfKey('k1'), 2);
       final req = await fav.requestFor(entries.first.row!);
       expect(req.zapKeys, ['k3', 'k1']);
+    });
+
+    test('a channel list pages in list order and zaps through the channels '
+        'that still exist', () async {
+      final dao = db.channelListsDao;
+      final listId = await dao.createList(
+        id,
+        'Sports',
+        channels: ['k5', 'gone', 'k3', 'k1'],
+      );
+      final source = channelSourceFor(db, id, LiveList.channelList(listId));
+      expect(source, isA<ListChannelsSource>());
+      expect(source.list, LiveList.channelList(listId));
+      expect(await source.count(), 4);
+      final entries = await source.page(0, 10);
+      expect([for (final e in entries) e.key], ['k5', 'gone', 'k3', 'k1']);
+      expect([for (final e in entries) e.available], [true, false, true, true]);
+      expect((await source.page(2, 1)).single.row?.name, 'قناة');
+      expect(await source.indexOfKey('k3'), 2);
+      expect(await source.indexOfKey('k9'), isNull);
+      expect(await source.indexOfNumber(1), 3);
+      final req = await source.requestFor(entries[2].row!);
+      expect(req.item.key, 'k3');
+      expect(req.categoryKey, isNull);
+      expect(req.zapKeys, ['k5', 'k3', 'k1']);
     });
   });
 

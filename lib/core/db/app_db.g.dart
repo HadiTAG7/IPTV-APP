@@ -7363,6 +7363,573 @@ class FavoritesCompanion extends UpdateCompanion<FavoriteRecord> {
   }
 }
 
+class $ChannelListsTable extends ChannelLists
+    with TableInfo<$ChannelListsTable, ChannelListRecord> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ChannelListsTable(this.attachedDatabase, [this._alias]);
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  @override
+  late final GeneratedColumn<int> sourceId = GeneratedColumn<int>(
+    'source_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES sources (id) ON DELETE CASCADE',
+    ),
+  );
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  late final GeneratedColumn<int> position = GeneratedColumn<int>(
+    'position',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    sourceId,
+    name,
+    position,
+    createdAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'channel_lists';
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  ChannelListRecord map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ChannelListRecord(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      sourceId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}source_id'],
+      )!,
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      )!,
+      position: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}position'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  $ChannelListsTable createAlias(String alias) {
+    return $ChannelListsTable(attachedDatabase, alias);
+  }
+}
+
+class ChannelListRecord extends DataClass
+    implements Insertable<ChannelListRecord> {
+  final int id;
+  final int sourceId;
+
+  /// Trimmed, never empty, unique per source (ignoring case).
+  final String name;
+  final int position;
+  final int createdAt;
+  const ChannelListRecord({
+    required this.id,
+    required this.sourceId,
+    required this.name,
+    required this.position,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['source_id'] = Variable<int>(sourceId);
+    map['name'] = Variable<String>(name);
+    map['position'] = Variable<int>(position);
+    map['created_at'] = Variable<int>(createdAt);
+    return map;
+  }
+
+  ChannelListsCompanion toCompanion(bool nullToAbsent) {
+    return ChannelListsCompanion(
+      id: Value(id),
+      sourceId: Value(sourceId),
+      name: Value(name),
+      position: Value(position),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory ChannelListRecord.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ChannelListRecord(
+      id: serializer.fromJson<int>(json['id']),
+      sourceId: serializer.fromJson<int>(json['sourceId']),
+      name: serializer.fromJson<String>(json['name']),
+      position: serializer.fromJson<int>(json['position']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'sourceId': serializer.toJson<int>(sourceId),
+      'name': serializer.toJson<String>(name),
+      'position': serializer.toJson<int>(position),
+      'createdAt': serializer.toJson<int>(createdAt),
+    };
+  }
+
+  ChannelListRecord copyWith({
+    int? id,
+    int? sourceId,
+    String? name,
+    int? position,
+    int? createdAt,
+  }) => ChannelListRecord(
+    id: id ?? this.id,
+    sourceId: sourceId ?? this.sourceId,
+    name: name ?? this.name,
+    position: position ?? this.position,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  ChannelListRecord copyWithCompanion(ChannelListsCompanion data) {
+    return ChannelListRecord(
+      id: data.id.present ? data.id.value : this.id,
+      sourceId: data.sourceId.present ? data.sourceId.value : this.sourceId,
+      name: data.name.present ? data.name.value : this.name,
+      position: data.position.present ? data.position.value : this.position,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ChannelListRecord(')
+          ..write('id: $id, ')
+          ..write('sourceId: $sourceId, ')
+          ..write('name: $name, ')
+          ..write('position: $position, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, sourceId, name, position, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ChannelListRecord &&
+          other.id == this.id &&
+          other.sourceId == this.sourceId &&
+          other.name == this.name &&
+          other.position == this.position &&
+          other.createdAt == this.createdAt);
+}
+
+class ChannelListsCompanion extends UpdateCompanion<ChannelListRecord> {
+  final Value<int> id;
+  final Value<int> sourceId;
+  final Value<String> name;
+  final Value<int> position;
+  final Value<int> createdAt;
+  const ChannelListsCompanion({
+    this.id = const Value.absent(),
+    this.sourceId = const Value.absent(),
+    this.name = const Value.absent(),
+    this.position = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  });
+  ChannelListsCompanion.insert({
+    this.id = const Value.absent(),
+    required int sourceId,
+    required String name,
+    required int position,
+    required int createdAt,
+  }) : sourceId = Value(sourceId),
+       name = Value(name),
+       position = Value(position),
+       createdAt = Value(createdAt);
+  static Insertable<ChannelListRecord> custom({
+    Expression<int>? id,
+    Expression<int>? sourceId,
+    Expression<String>? name,
+    Expression<int>? position,
+    Expression<int>? createdAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (sourceId != null) 'source_id': sourceId,
+      if (name != null) 'name': name,
+      if (position != null) 'position': position,
+      if (createdAt != null) 'created_at': createdAt,
+    });
+  }
+
+  ChannelListsCompanion copyWith({
+    Value<int>? id,
+    Value<int>? sourceId,
+    Value<String>? name,
+    Value<int>? position,
+    Value<int>? createdAt,
+  }) {
+    return ChannelListsCompanion(
+      id: id ?? this.id,
+      sourceId: sourceId ?? this.sourceId,
+      name: name ?? this.name,
+      position: position ?? this.position,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (sourceId.present) {
+      map['source_id'] = Variable<int>(sourceId.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (position.present) {
+      map['position'] = Variable<int>(position.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ChannelListsCompanion(')
+          ..write('id: $id, ')
+          ..write('sourceId: $sourceId, ')
+          ..write('name: $name, ')
+          ..write('position: $position, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $ChannelListItemsTable extends ChannelListItems
+    with TableInfo<$ChannelListItemsTable, ChannelListItemRecord> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ChannelListItemsTable(this.attachedDatabase, [this._alias]);
+  @override
+  late final GeneratedColumn<int> listId = GeneratedColumn<int>(
+    'list_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES channel_lists (id) ON DELETE CASCADE',
+    ),
+  );
+  @override
+  late final GeneratedColumn<String> key = GeneratedColumn<String>(
+    'key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  late final GeneratedColumn<int> position = GeneratedColumn<int>(
+    'position',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  late final GeneratedColumn<int> addedAt = GeneratedColumn<int>(
+    'added_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [listId, key, position, addedAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'channel_list_items';
+  @override
+  Set<GeneratedColumn> get $primaryKey => {listId, key};
+  @override
+  ChannelListItemRecord map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ChannelListItemRecord(
+      listId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}list_id'],
+      )!,
+      key: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}key'],
+      )!,
+      position: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}position'],
+      )!,
+      addedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}added_at'],
+      )!,
+    );
+  }
+
+  @override
+  $ChannelListItemsTable createAlias(String alias) {
+    return $ChannelListItemsTable(attachedDatabase, alias);
+  }
+}
+
+class ChannelListItemRecord extends DataClass
+    implements Insertable<ChannelListItemRecord> {
+  final int listId;
+  final String key;
+
+  /// Dense, from 0, per list.
+  final int position;
+  final int addedAt;
+  const ChannelListItemRecord({
+    required this.listId,
+    required this.key,
+    required this.position,
+    required this.addedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['list_id'] = Variable<int>(listId);
+    map['key'] = Variable<String>(key);
+    map['position'] = Variable<int>(position);
+    map['added_at'] = Variable<int>(addedAt);
+    return map;
+  }
+
+  ChannelListItemsCompanion toCompanion(bool nullToAbsent) {
+    return ChannelListItemsCompanion(
+      listId: Value(listId),
+      key: Value(key),
+      position: Value(position),
+      addedAt: Value(addedAt),
+    );
+  }
+
+  factory ChannelListItemRecord.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ChannelListItemRecord(
+      listId: serializer.fromJson<int>(json['listId']),
+      key: serializer.fromJson<String>(json['key']),
+      position: serializer.fromJson<int>(json['position']),
+      addedAt: serializer.fromJson<int>(json['addedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'listId': serializer.toJson<int>(listId),
+      'key': serializer.toJson<String>(key),
+      'position': serializer.toJson<int>(position),
+      'addedAt': serializer.toJson<int>(addedAt),
+    };
+  }
+
+  ChannelListItemRecord copyWith({
+    int? listId,
+    String? key,
+    int? position,
+    int? addedAt,
+  }) => ChannelListItemRecord(
+    listId: listId ?? this.listId,
+    key: key ?? this.key,
+    position: position ?? this.position,
+    addedAt: addedAt ?? this.addedAt,
+  );
+  ChannelListItemRecord copyWithCompanion(ChannelListItemsCompanion data) {
+    return ChannelListItemRecord(
+      listId: data.listId.present ? data.listId.value : this.listId,
+      key: data.key.present ? data.key.value : this.key,
+      position: data.position.present ? data.position.value : this.position,
+      addedAt: data.addedAt.present ? data.addedAt.value : this.addedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ChannelListItemRecord(')
+          ..write('listId: $listId, ')
+          ..write('key: $key, ')
+          ..write('position: $position, ')
+          ..write('addedAt: $addedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(listId, key, position, addedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ChannelListItemRecord &&
+          other.listId == this.listId &&
+          other.key == this.key &&
+          other.position == this.position &&
+          other.addedAt == this.addedAt);
+}
+
+class ChannelListItemsCompanion extends UpdateCompanion<ChannelListItemRecord> {
+  final Value<int> listId;
+  final Value<String> key;
+  final Value<int> position;
+  final Value<int> addedAt;
+  final Value<int> rowid;
+  const ChannelListItemsCompanion({
+    this.listId = const Value.absent(),
+    this.key = const Value.absent(),
+    this.position = const Value.absent(),
+    this.addedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ChannelListItemsCompanion.insert({
+    required int listId,
+    required String key,
+    required int position,
+    required int addedAt,
+    this.rowid = const Value.absent(),
+  }) : listId = Value(listId),
+       key = Value(key),
+       position = Value(position),
+       addedAt = Value(addedAt);
+  static Insertable<ChannelListItemRecord> custom({
+    Expression<int>? listId,
+    Expression<String>? key,
+    Expression<int>? position,
+    Expression<int>? addedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (listId != null) 'list_id': listId,
+      if (key != null) 'key': key,
+      if (position != null) 'position': position,
+      if (addedAt != null) 'added_at': addedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ChannelListItemsCompanion copyWith({
+    Value<int>? listId,
+    Value<String>? key,
+    Value<int>? position,
+    Value<int>? addedAt,
+    Value<int>? rowid,
+  }) {
+    return ChannelListItemsCompanion(
+      listId: listId ?? this.listId,
+      key: key ?? this.key,
+      position: position ?? this.position,
+      addedAt: addedAt ?? this.addedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (listId.present) {
+      map['list_id'] = Variable<int>(listId.value);
+    }
+    if (key.present) {
+      map['key'] = Variable<String>(key.value);
+    }
+    if (position.present) {
+      map['position'] = Variable<int>(position.value);
+    }
+    if (addedAt.present) {
+      map['added_at'] = Variable<int>(addedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ChannelListItemsCompanion(')
+          ..write('listId: $listId, ')
+          ..write('key: $key, ')
+          ..write('position: $position, ')
+          ..write('addedAt: $addedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $WatchProgressTable extends WatchProgress
     with TableInfo<$WatchProgressTable, WatchProgressRecord> {
   @override
@@ -8227,6 +8794,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $ChannelEpgMapTable channelEpgMap = $ChannelEpgMapTable(this);
   late final $ChannelPrefsTable channelPrefs = $ChannelPrefsTable(this);
   late final $FavoritesTable favorites = $FavoritesTable(this);
+  late final $ChannelListsTable channelLists = $ChannelListsTable(this);
+  late final $ChannelListItemsTable channelListItems = $ChannelListItemsTable(
+    this,
+  );
   late final $WatchProgressTable watchProgress = $WatchProgressTable(this);
   late final $RecentChannelsTable recentChannels = $RecentChannelsTable(this);
   late final $SettingsTable settings = $SettingsTable(this);
@@ -8262,6 +8833,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     'channel_epg_map_guide',
     'CREATE INDEX channel_epg_map_guide ON channel_epg_map (epg_source_id, xmltv_id)',
   );
+  late final Index channelListsSource = Index(
+    'channel_lists_source',
+    'CREATE INDEX channel_lists_source ON channel_lists (source_id, position)',
+  );
   late final Index watchProgressUpdated = Index(
     'watch_progress_updated',
     'CREATE INDEX watch_progress_updated ON watch_progress (source_id, updated_at)',
@@ -8290,6 +8865,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     channelEpgMap,
     channelPrefs,
     favorites,
+    channelLists,
+    channelListItems,
     watchProgress,
     recentChannels,
     settings,
@@ -8301,6 +8878,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     episodesSeries,
     epgSourcesUrl,
     channelEpgMapGuide,
+    channelListsSource,
     watchProgressUpdated,
     recentChannelsTime,
   ];
@@ -8410,6 +8988,20 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('favorites', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'sources',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('channel_lists', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'channel_lists',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('channel_list_items', kind: UpdateKind.delete)],
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(

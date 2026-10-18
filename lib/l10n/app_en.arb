@@ -478,6 +478,80 @@
   "liveShowHiddenCategories": "Show hidden categories",
   "liveMoreOptions": "More options",
   "liveRecentEmpty": "Channels you watch will appear here.",
+  "liveAddToList": "Add to list…",
+  "@liveAddToList": {
+    "description": "Channel action: opens the dialog that adds the channel to one of the user's own channel lists (or removes it)."
+  },
+  "liveAddToListTitle": "Add to list",
+  "@liveAddToListTitle": {
+    "description": "Title of the dialog listing the user's channel lists; a check mark shows the lists holding the channel."
+  },
+  "liveNewList": "New list…",
+  "@liveNewList": {
+    "description": "Asks for a name and creates a channel list."
+  },
+  "liveNewListTitle": "New list",
+  "@liveNewListTitle": {
+    "description": "Title of the dialog that names a new channel list."
+  },
+  "liveListName": "List name",
+  "liveListNameHint": "e.g. Sports",
+  "liveListCreate": "Create",
+  "@liveListCreate": {
+    "description": "Button that creates the new channel list."
+  },
+  "liveListNameEmpty": "Enter a name for the list.",
+  "liveListNameTaken": "You already have a list with this name.",
+  "liveListAdded": "Added to “⁨{name}⁩”",
+  "@liveListAdded": {
+    "description": "Snack bar after adding a channel to the list {name}. {name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "liveListRemoved": "Removed from “⁨{name}⁩”",
+  "@liveListRemoved": {
+    "description": "Snack bar after removing a channel from the list {name}. {name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "liveListEmpty": "This list is empty. Choose “Add to list…” in a channel's options.",
+  "@liveListEmpty": {
+    "description": "Shown for a channel list without channels."
+  },
+  "liveRenameList": "Rename list",
+  "liveDeleteList": "Delete list",
+  "liveDeleteListConfirm": "Delete the list “⁨{name}⁩”? Only the list is deleted; its channels stay in the source.",
+  "@liveDeleteListConfirm": {
+    "description": "{name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "liveMoveUp": "Move up",
+  "@liveMoveUp": {
+    "description": "Moves a channel one place up in its list."
+  },
+  "liveMoveDown": "Move down",
+  "@liveMoveDown": {
+    "description": "Moves a channel one place down in its list."
+  },
+  "liveRemoveFromList": "Remove from “⁨{name}⁩”",
+  "@liveRemoveFromList": {
+    "description": "Removes a channel from the list {name}. {name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "liveTimeRange": "⁨{start}⁩ – ⁨{end}⁩",
   "@liveTimeRange": {
     "description": "Start and end time of a programme. Each time is wrapped in U+2068/U+2069 (first-strong isolate).",

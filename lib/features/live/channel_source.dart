@@ -52,6 +52,7 @@ ChannelListSource channelSourceFor(
   ),
   LiveListKind.all => AllChannelsSource(db, sourceId),
   LiveListKind.favorites => FavoriteChannelsSource(db, sourceId),
+  LiveListKind.channelList => ListChannelsSource(db, sourceId, list.listId!),
   LiveListKind.recent => RecentChannelsSource(db, sourceId),
 };
 
@@ -149,6 +150,54 @@ class FavoriteChannelsSource extends ChannelListSource {
       limit: limit,
     ))
       LiveEntry(f.key, f.item),
+  ];
+
+  @override
+  Future<int?> indexOfKey(String key) async {
+    final i = _keys.indexOf(key);
+    return i < 0 ? null : i;
+  }
+
+  @override
+  Future<PlayRequest> requestFor(ChannelRow channel) async {
+    final available = await db.catalogDao.channelsByKeys(sourceId, _keys);
+    return PlayRequest(
+      sourceId: sourceId,
+      item: channel.toPlayable(),
+      zapKeys: [for (final c in available) c.key],
+    );
+  }
+}
+
+/// One of the user's channel lists, in list order. Channels gone from the
+/// catalog stay listed as unavailable. Zapping walks the available channels
+/// of the list.
+class ListChannelsSource extends ChannelListSource {
+  ListChannelsSource(super.db, super.sourceId, this.listId);
+
+  final int listId;
+  List<String> _keys = const [];
+
+  /// The list's channel keys as of the last [count].
+  List<String> get keys => _keys;
+
+  @override
+  LiveList get list => LiveList.channelList(listId);
+
+  @override
+  Future<int> count() async {
+    _keys = await db.channelListsDao.channelKeys(listId);
+    return _keys.length;
+  }
+
+  @override
+  Future<List<LiveEntry>> page(int offset, int limit) async => [
+    for (final item in await db.channelListsDao.channelsPage(
+      listId,
+      offset: offset,
+      limit: limit,
+    ))
+      LiveEntry(item.key, item.item),
   ];
 
   @override

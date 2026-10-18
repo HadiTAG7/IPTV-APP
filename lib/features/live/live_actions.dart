@@ -13,8 +13,16 @@ import '../../player/ui/play_request.dart';
 import '../../player/ui/player_route.dart';
 import '../../sources/models.dart';
 
-/// Choices of a channel's options sheet.
-enum LiveChannelAction { favorite, otherPlayer }
+/// Choices of a channel's options sheet. The list moves and removal are
+/// offered in the Favorites screen's own lists.
+enum LiveChannelAction {
+  favorite,
+  addToList,
+  moveUp,
+  moveDown,
+  removeFromList,
+  otherPlayer,
+}
 
 /// Choices of a category's options sheet.
 enum LiveCategoryAction { hide, showHidden }

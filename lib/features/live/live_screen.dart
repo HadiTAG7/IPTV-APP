@@ -6,12 +6,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/home_shell.dart';
 import '../../app/providers.dart';
+import '../../core/db/app_db.dart';
 import '../../epg/epg_providers.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../../sources/models.dart';
 import '../../theme/tokens.dart';
 import '../../tv/pane_scope.dart';
 import '../../widgets/states.dart';
+import '../channel_lists/channel_list_dialogs.dart';
 import 'category_chips.dart';
 import 'category_pane.dart';
 import 'channel_list.dart';
@@ -25,6 +27,10 @@ import 'preferred_focus.dart';
 import 'providers.dart';
 
 /// Live channels of the active source.
+///
+/// The category list starts with Favorites and the user's own channel lists
+/// (in list order, each zapping within itself), then Recent, All channels
+/// and the provider's categories.
 ///
 /// * Large layout (TV, desktop, wide landscape): three panes, categories
 ///   (about 25 %), channels (45 %) and info (30 %), each a [PaneScope]; the
@@ -242,8 +248,8 @@ class LiveViewState extends ConsumerState<LiveView> {
   /// The list has no rows any more (favourites removed, a sync emptied or
   /// removed its category). Focus in the channel or info pane must not be
   /// stranded there: a provider category falls back to All channels on the
-  /// same channel; Favorites and Recent stay (they say how to fill them)
-  /// and focus goes to their entry.
+  /// same channel; Favorites, the user's lists and Recent stay (they say how
+  /// to fill them) and focus goes to their entry.
   void _onListEmptied(bool hadFocus, String? lastKey) {
     if (!mounted) return;
     final large = isLargeLayout(context);
@@ -376,6 +382,11 @@ class LiveViewState extends ConsumerState<LiveView> {
           icon: isFavorite ? Icons.star_rounded : Icons.star_outline_rounded,
           label: isFavorite ? l10n.liveRemoveFavorite : l10n.liveAddFavorite,
         ),
+        SheetOption(
+          value: LiveChannelAction.addToList,
+          icon: Icons.playlist_add_rounded,
+          label: l10n.liveAddToList,
+        ),
         if (row != null && hasOtherLiveEngine(ref))
           SheetOption(
             value: LiveChannelAction.otherPlayer,
@@ -388,13 +399,23 @@ class LiveViewState extends ConsumerState<LiveView> {
     switch (choice) {
       case LiveChannelAction.favorite:
         await setFavorite(ref, _id, ContentKind.live, entry.key, !isFavorite);
+      case LiveChannelAction.addToList:
+        await showAddToListDialog(
+          context,
+          ref,
+          sourceId: _id,
+          channelKey: entry.key,
+        );
       case LiveChannelAction.otherPlayer:
         await ref.read(playGateProvider).run(() async {
           final request = await source.requestFor(row!);
           if (!mounted) return;
           await _withPlayer(() => playWithOtherEngine(context, ref, request));
         });
-      case null:
+      case LiveChannelAction.moveUp ||
+          LiveChannelAction.moveDown ||
+          LiveChannelAction.removeFromList ||
+          null:
         break;
     }
   }
@@ -456,7 +477,20 @@ class LiveViewState extends ConsumerState<LiveView> {
         setState(() => _dataVersion++);
       }
     });
+    final listId = _selected?.listId;
+    if (listId != null) {
+      // The list shown changed (here, in Favorites or in the player).
+      ref.listen(channelListKeysProvider(listId), (prev, next) {
+        final before = prev?.value;
+        final after = next.value;
+        if (before == null || after == null || listEquals(before, after)) {
+          return;
+        }
+        if (_selected?.listId == listId) setState(() => _dataVersion++);
+      });
+    }
     final categories = ref.watch(liveCategoriesProvider(_id));
+    final listRows = ref.watch(channelListsProvider(_id));
     final favorites =
         ref.watch(favoriteKeysProvider((_id, ContentKind.live))).value ??
         const <String>{};
@@ -471,7 +505,11 @@ class LiveViewState extends ConsumerState<LiveView> {
       );
     }
     final rows = categories.value;
-    if (!_ready || selected == null || rows == null) {
+    // Wait for the user's lists too: without them a saved list would look
+    // gone. They are only extra entries, so a failed read shows none.
+    final lists =
+        listRows.value ?? (listRows.hasError ? const <ChannelListRow>[] : null);
+    if (!_ready || selected == null || rows == null || lists == null) {
       return const LoadingView();
     }
     final entries = [
@@ -480,6 +518,12 @@ class LiveViewState extends ConsumerState<LiveView> {
         name: l10n.liveFavorites,
         count: favorites.length,
       ),
+      for (final l in lists)
+        LiveCategoryEntry(
+          list: LiveList.channelList(l.id),
+          name: l.name,
+          count: l.count,
+        ),
       LiveCategoryEntry(
         list: const LiveList.recent(),
         name: l10n.liveRecent,
@@ -522,11 +566,13 @@ class LiveViewState extends ConsumerState<LiveView> {
       onEmptied: _onListEmptied,
       emptyMessage: switch (selected.kind) {
         LiveListKind.favorites => l10n.favoritesEmpty,
+        LiveListKind.channelList => l10n.liveListEmpty,
         LiveListKind.recent => l10n.liveRecentEmpty,
         _ => l10n.liveNoChannels,
       },
       emptyIcon: switch (selected.kind) {
         LiveListKind.favorites => Icons.star_outline_rounded,
+        LiveListKind.channelList => Icons.playlist_add_rounded,
         LiveListKind.recent => Icons.history,
         _ => Icons.live_tv_outlined,
       },

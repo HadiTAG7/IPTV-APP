@@ -6,7 +6,9 @@ import 'package:path_provider/path_provider.dart';
 import '../../player/engine/player_engine.dart';
 import '../../sources/models.dart';
 import '../time/clock.dart';
+import 'app_db.steps.dart';
 import 'daos/catalog_dao.dart';
+import 'daos/channel_lists_dao.dart';
 import 'daos/detail_cache_dao.dart';
 import 'daos/epg_dao.dart';
 import 'daos/favorites_dao.dart';
@@ -18,6 +20,7 @@ import 'daos/sources_dao.dart';
 import 'tables.dart';
 
 export 'daos/catalog_dao.dart';
+export 'daos/channel_lists_dao.dart';
 export 'daos/detail_cache_dao.dart';
 export 'daos/epg_dao.dart';
 export 'daos/favorites_dao.dart';
@@ -31,11 +34,13 @@ export 'tables.dart' show EpgMatchKind;
 
 part 'app_db.g.dart';
 
-/// The app database (schema v1).
+/// The app database (schema v2).
 ///
 /// Schema changes: bump [schemaVersion], run
 /// `dart run drift_dev make-migrations`, write the step in [migration] and
 /// commit the new `drift_schemas/` snapshot plus the generated tests.
+///
+/// * v2: the user's own channel lists ([ChannelLists], [ChannelListItems]).
 @DriftDatabase(
   tables: [
     Sources,
@@ -53,6 +58,8 @@ part 'app_db.g.dart';
     ChannelEpgMap,
     ChannelPrefs,
     Favorites,
+    ChannelLists,
+    ChannelListItems,
     WatchProgress,
     RecentChannels,
     Settings,
@@ -79,6 +86,7 @@ class AppDatabase extends _$AppDatabase {
   late final sourcesDao = SourcesDao(this);
   late final catalogDao = CatalogDao(this);
   late final favoritesDao = FavoritesDao(this);
+  late final channelListsDao = ChannelListsDao(this);
   late final progressDao = ProgressDao(this);
   late final recentDao = RecentDao(this);
   late final settingsDao = SettingsDao(this);
@@ -87,11 +95,18 @@ class AppDatabase extends _$AppDatabase {
   late final epgDao = EpgDao(this);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) => m.createAll(),
+    onUpgrade: stepByStep(
+      from1To2: (m, schema) async {
+        await m.createTable(schema.channelLists);
+        await m.createTable(schema.channelListItems);
+        await m.createIndex(schema.channelListsSource);
+      },
+    ),
     beforeOpen: (details) async {
       if (!kIsWeb) {
         try {
