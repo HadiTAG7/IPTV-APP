@@ -532,6 +532,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get playerStats => 'Stats';
 
   @override
+  String get playerFullscreen => 'Full screen';
+
+  @override
+  String get playerExitFullscreen => 'Exit full screen';
+
+  @override
   String get playerFavorite => 'Favorite';
 
   @override

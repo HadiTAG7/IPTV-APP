@@ -968,6 +968,18 @@ abstract class AppLocalizations {
   /// **'Stats'**
   String get playerStats;
 
+  /// No description provided for @playerFullscreen.
+  ///
+  /// In en, this message translates to:
+  /// **'Full screen'**
+  String get playerFullscreen;
+
+  /// No description provided for @playerExitFullscreen.
+  ///
+  /// In en, this message translates to:
+  /// **'Exit full screen'**
+  String get playerExitFullscreen;
+
   /// No description provided for @playerFavorite.
   ///
   /// In en, this message translates to:

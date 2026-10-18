@@ -551,6 +551,12 @@ class AppLocalizationsAr extends AppLocalizations {
   String get playerStats => 'الإحصائيات';
 
   @override
+  String get playerFullscreen => 'شاشة كاملة';
+
+  @override
+  String get playerExitFullscreen => 'خروج من الشاشة الكاملة';
+
+  @override
   String get playerFavorite => 'المفضلة';
 
   @override

@@ -233,4 +233,18 @@ void main() {
       expect(parseShortEpg({'epg_listings': null}), isEmpty);
     });
   });
+
+  test('short EPG text loses literal line-break escapes', () {
+    final list = parseShortEpg({
+      'epg_listings': [
+        {
+          'title': 'News',
+          'description': r'Headlines.\r\nWeather.',
+          'start_timestamp': '1767000000',
+          'stop_timestamp': '1767003600',
+        },
+      ],
+    });
+    expect(list.single.desc, 'Headlines.\nWeather.');
+  });
 }

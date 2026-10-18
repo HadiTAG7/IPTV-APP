@@ -15,6 +15,7 @@ import '../app/providers.dart';
 import '../core/db/app_db.dart';
 import '../core/net/redact.dart';
 import '../core/platform/device_caps.dart';
+import '../core/platform/window_fullscreen.dart';
 import '../sources/models.dart';
 import '../sources/source_adapter.dart';
 import '../sources/source_repository.dart';
@@ -136,6 +137,37 @@ final playerWakelockProvider = Provider<ValueChanged<bool>>((ref) {
     );
   };
 }, name: 'playerWakelockProvider');
+
+/// The desktop window the player makes truly fullscreen; null on Android
+/// (and the web), where the player hides the system bars instead.
+final playerWindowProvider = Provider<WindowFullscreen?>((ref) {
+  if (kIsWeb) return null;
+  return switch (ref.watch(targetPlatformProvider)) {
+    TargetPlatform.windows ||
+    TargetPlatform.linux ||
+    TargetPlatform.macOS => const WindowFullscreen(),
+    _ => null,
+  };
+}, name: 'playerWindowProvider');
+
+/// Whether the desktop player opens fullscreen: yes until the user turns
+/// fullscreen off with the player's fullscreen button, F, F11 or a double
+/// click; then the last such choice, for the rest of the run. Escape
+/// leaving fullscreen is not a choice (it is usually on the way out).
+final playerOpensFullscreenProvider =
+    NotifierProvider<PlayerOpensFullscreen, bool>(
+      PlayerOpensFullscreen.new,
+      name: 'playerOpensFullscreenProvider',
+    );
+
+class PlayerOpensFullscreen extends Notifier<bool> {
+  @override
+  bool build() => true;
+
+  void set(bool fullscreen) {
+    if (ref.mounted) state = fullscreen;
+  }
+}
 
 /// Network availability for the player (true = online). While offline the
 /// reconnect watchdog waits instead of burning attempts. Bootstrap provides

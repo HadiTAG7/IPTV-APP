@@ -15,6 +15,7 @@ import 'package:iptv_player/app/providers.dart';
 import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/log/ring_log.dart';
 import 'package:iptv_player/core/platform/device_caps.dart';
+import 'package:iptv_player/core/platform/window_fullscreen.dart';
 import 'package:iptv_player/core/time/clock.dart';
 import 'package:iptv_player/epg/epg_models.dart';
 import 'package:iptv_player/features/diagnostics/providers.dart';
@@ -92,6 +93,14 @@ class PlayerRig {
 
   /// Text put on the clipboard.
   String? clipboard;
+
+  /// Desktop window calls (`enter`, `exit`), in order.
+  final window = <String>[];
+
+  late final windowFullscreen = WindowFullscreen(
+    enter: () async => window.add('enter'),
+    exit: () async => window.add('exit'),
+  );
 
   /// Every engine shows a first frame when opened (playing at once).
   void autoPlay({Duration? duration}) {
@@ -299,7 +308,15 @@ Future<void> pumpPlayerApp(
   TargetPlatform platform = TargetPlatform.android,
   List<Override> overrides = const [],
 }) async {
-  final size = tv ? const Size(960, 540) : const Size(390, 800);
+  final desktop =
+      platform == TargetPlatform.windows ||
+      platform == TargetPlatform.linux ||
+      platform == TargetPlatform.macOS;
+  final size = tv
+      ? const Size(960, 540)
+      : desktop
+      ? const Size(1280, 720)
+      : const Size(390, 800);
   tester.view.physicalSize = size * 2;
   tester.view.devicePixelRatio = 2;
   addTearDown(tester.view.reset);
@@ -327,11 +344,20 @@ Future<void> pumpPlayerApp(
       retry: (_, _) => null,
       overrides: [
         databaseProvider.overrideWithValue(rig.db),
-        deviceCapsProvider.overrideWithValue(tv ? tvCaps : phoneCaps),
+        deviceCapsProvider.overrideWithValue(
+          tv
+              ? tvCaps
+              : desktop
+              ? DeviceCaps.desktop(platform: platform)
+              : phoneCaps,
+        ),
         initialSettingsProvider.overrideWithValue(settings),
         ringLogProvider.overrideWithValue(rig.log),
         clockProvider.overrideWithValue(rig.clock),
         targetPlatformProvider.overrideWithValue(platform),
+        playerWindowProvider.overrideWithValue(
+          desktop ? rig.windowFullscreen : null,
+        ),
         engineFactoryBuilderProvider.overrideWithValue((_) => rig.engines.call),
         playerWakelockProvider.overrideWithValue(rig.wakelock.add),
         onChannelPlayedProvider.overrideWithValue(

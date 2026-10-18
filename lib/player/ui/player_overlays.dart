@@ -90,6 +90,49 @@ class OsdButton extends StatelessWidget {
   }
 }
 
+/// A round icon button of the OSD's top bar (Back, fullscreen) for mouse
+/// and touch; keyboards reach it too.
+class OsdIconButton extends StatelessWidget {
+  const OsdIconButton({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onSelect,
+    this.onFocus,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onSelect;
+
+  /// Called when the button gains focus (keeps the OSD from hiding).
+  final VoidCallback? onFocus;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      semanticLabel: label,
+      onSelect: onSelect,
+      borderRadius: const BorderRadius.all(Radius.circular(Radii.pill)),
+      onFocusChange: (focused) {
+        if (focused) onFocus?.call();
+      },
+      child: Tooltip(
+        message: label,
+        child: Container(
+          width: 48,
+          height: 48,
+          decoration: const BoxDecoration(
+            color: AppColors.surfaceHigh,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, size: 26, color: AppColors.textPrimary),
+        ),
+      ),
+    );
+  }
+}
+
 /// A focusable text button for player cards (failure, resume, next
 /// episode).
 class PlayerCardButton extends StatelessWidget {

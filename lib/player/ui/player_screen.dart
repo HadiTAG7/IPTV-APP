@@ -9,6 +9,7 @@ import '../../app/form_factor.dart';
 import '../../app/providers.dart';
 import '../../core/db/queries/player_ui_queries.dart';
 import '../../core/net/redact.dart';
+import '../../core/platform/window_fullscreen.dart';
 import '../../core/time/clock.dart';
 import '../../epg/epg_providers.dart';
 import '../../features/diagnostics/providers.dart';
@@ -55,6 +56,12 @@ enum PlayerAction {
 ///   stats overlay. Back only through [PopScope]: it hides the OSD first.
 /// * Phones: tap toggles the OSD, double-tap seeks, landscape is forced
 ///   while the player is open. TVs never touch the orientation.
+/// * Desktop: the window turns truly fullscreen (no title bar, over the
+///   taskbar) while the player is open, unless the user last chose a
+///   window; the fullscreen button, F, F11 and double clicks toggle it and
+///   Escape leaves it. Moving the mouse shows the OSD; the cursor hides
+///   with it.
+/// * Phones and desktop: the OSD's top bar has a Back button.
 class PlayerScreen extends ConsumerStatefulWidget {
   const PlayerScreen({super.key, required this.request});
 
@@ -127,6 +134,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   static Object? _fullscreenOwner;
   late final FullscreenPlayback _fullscreen;
 
+  /// The desktop window ([playerWindowProvider]); null on Android.
+  WindowFullscreen? _window;
+  bool _windowFullscreen = false;
+
+  /// The player holding the window fullscreen, with the same hand-over
+  /// rule as the orientation.
+  static Object? _windowOwner;
+
   bool get _failed =>
       _controller.phase == PlaybackPhase.failed || _session.error != null;
 
@@ -159,6 +174,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     scheduleMicrotask(() {
       if (identical(_fullscreenOwner, this)) _fullscreen.set(true);
     });
+    _window = ref.read(playerWindowProvider);
+    if (ref.read(playerOpensFullscreenProvider)) _setWindowFullscreen(true);
     // New guide data: the banner and OSD read now/next again.
     ref.listenManual<GuideRefreshStatus>(
       guideRefreshProvider(widget.request.sourceId),
@@ -216,6 +233,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
     _releaseOrientation();
     _releaseFullscreen(later: true);
+    _setWindowFullscreen(false);
     _controllerSub.close();
     super.dispose();
   }
@@ -260,6 +278,43 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _orientationOwner = null;
     unawaited(SystemChrome.setPreferredOrientations(const []));
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+  }
+
+  /// Makes the desktop window fullscreen ([on]) or gives it back. Only the
+  /// player holding it gives it back, so a closing player never undoes the
+  /// fullscreen of one opened during its exit transition.
+  void _setWindowFullscreen(bool on) {
+    final window = _window;
+    if (window == null || on == _windowFullscreen) return;
+    _windowFullscreen = on;
+    if (on) {
+      _windowOwner = this;
+      unawaited(window.enter());
+    } else if (identical(_windowOwner, this)) {
+      _windowOwner = null;
+      unawaited(window.exit());
+    }
+  }
+
+  /// The fullscreen button, F, F11 and double clicks. The choice also
+  /// decides how the next player opens.
+  void _toggleWindowFullscreen() {
+    if (_window == null || _exiting) return;
+    _setWindowFullscreen(!_windowFullscreen);
+    ref.read(playerOpensFullscreenProvider.notifier).set(_windowFullscreen);
+    _restartOsdTimer();
+    _rebuild();
+  }
+
+  /// Desktop: moving the mouse shows the OSD like a click and keeps it up
+  /// while the mouse moves.
+  void _onMouseMoved() {
+    if (_exiting || _cardShown) return;
+    if (_osdVisible) {
+      _restartOsdTimer();
+    } else {
+      _showOsd();
+    }
   }
 
   void _onLifecycle(AppLifecycleState state) {
@@ -500,6 +555,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final s = _session;
     final live = s.isLive;
 
+    if (_window != null &&
+        (key == LogicalKeyboardKey.f11 || key == LogicalKeyboardKey.keyF)) {
+      if (down) _toggleWindowFullscreen();
+      return KeyEventResult.handled;
+    }
+    // Escape leaves window fullscreen before it means Back.
+    if (key == LogicalKeyboardKey.escape && _windowFullscreen) {
+      if (down) {
+        _setWindowFullscreen(false);
+        _rebuild();
+      }
+      return KeyEventResult.handled;
+    }
+
     final digit = _digitKeys[key];
     if (digit != null && live) {
       if (down && !_cardShown) s.digit(digit);
@@ -692,6 +761,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _onlineSub = null;
     _releaseOrientation();
     _releaseFullscreen();
+    _setWindowFullscreen(false);
     unawaited(_controller.stop());
     Navigator.of(context).pop();
   }
@@ -934,7 +1004,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       child: Scaffold(
         backgroundColor: Colors.black,
         // Escape (desktop Back) goes through the PopScope too: the app maps
-        // it to BackIntent, which AppFrame turns into maybePop.
+        // it to BackIntent, which AppFrame turns into maybePop. In window
+        // fullscreen [_onKey] takes it first.
         body: Focus(
           focusNode: _rootNode,
           autofocus: true,
@@ -942,116 +1013,137 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           // (from a card or the OSD); it is only focused on purpose.
           skipTraversal: true,
           onKeyEvent: _onKey,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              KeyedSubtree(
-                key: const ValueKey('player-video'),
-                // A closing player stops showing the shared engine's
-                // surface (the next player may already show it).
-                child: _exiting
-                    ? const ColoredBox(
-                        color: Colors.black,
-                        child: SizedBox.expand(),
-                      )
-                    : _controller.buildView(aspect: s.aspect),
-              ),
-              Positioned.fill(child: _gestures()),
-              if (!failed && resume == null)
-                ValueListenableBuilder<PlaybackState>(
-                  valueListenable: _controller.state,
-                  builder: (context, st, _) {
-                    final phase = _controller.phase;
-                    final buffering =
-                        phase == PlaybackPhase.opening ||
-                        (st.buffering && phase == PlaybackPhase.playing);
-                    if (!buffering) return const SizedBox.shrink();
-                    return const Center(
-                      key: ValueKey('player-buffering'),
-                      child: SizedBox.square(
-                        dimension: 44,
-                        child: CircularProgressIndicator(strokeWidth: 3),
-                      ),
-                    );
-                  },
+          child: _mouse(
+            Stack(
+              fit: StackFit.expand,
+              children: [
+                KeyedSubtree(
+                  key: const ValueKey('player-video'),
+                  // A closing player stops showing the shared engine's
+                  // surface (the next player may already show it).
+                  child: _exiting
+                      ? const ColoredBox(
+                          color: Colors.black,
+                          child: SizedBox.expand(),
+                        )
+                      : _controller.buildView(aspect: s.aspect),
                 ),
-              if (_bannerVisible && !_osdVisible && !_cardShown)
-                Align(
-                  alignment: AlignmentDirectional.bottomCenter,
-                  child: Padding(
-                    padding: overscan + const EdgeInsets.all(Spacing.lg),
-                    child: _banner(),
+                Positioned.fill(child: _gestures()),
+                if (!failed && resume == null)
+                  ValueListenableBuilder<PlaybackState>(
+                    valueListenable: _controller.state,
+                    builder: (context, st, _) {
+                      final phase = _controller.phase;
+                      final buffering =
+                          phase == PlaybackPhase.opening ||
+                          (st.buffering && phase == PlaybackPhase.playing);
+                      if (!buffering) return const SizedBox.shrink();
+                      return const Center(
+                        key: ValueKey('player-buffering'),
+                        child: SizedBox.square(
+                          dimension: 44,
+                          child: CircularProgressIndicator(strokeWidth: 3),
+                        ),
+                      );
+                    },
+                  ),
+                if (_bannerVisible && !_osdVisible && !_cardShown)
+                  Align(
+                    alignment: AlignmentDirectional.bottomCenter,
+                    child: Padding(
+                      padding: overscan + const EdgeInsets.all(Spacing.lg),
+                      child: _banner(),
+                    ),
+                  ),
+                if (_osdVisible && !_cardShown)
+                  _osd(
+                    l10n,
+                    overscan,
+                    topBar: formFactor != FormFactor.tv || _window != null,
+                  ),
+                SafeArea(
+                  minimum: overscan + const EdgeInsets.all(Spacing.lg),
+                  child: Stack(
+                    children: [
+                      Align(
+                        alignment: Alignment.topCenter,
+                        child: PlayerReconnectBanner(
+                          status: _controller.reconnectStatus,
+                        ),
+                      ),
+                      if (_statsVisible)
+                        Align(
+                          alignment: AlignmentDirectional.topStart,
+                          child: PlayerStatsOverlay(
+                            controller: _controller,
+                            redactValue: _redact,
+                          ),
+                        ),
+                      if (s.isLive)
+                        Align(
+                          alignment: AlignmentDirectional.topEnd,
+                          child: _numberBadge(),
+                        ),
+                      if (countdown != null && next != null && !failed)
+                        Align(
+                          alignment: AlignmentDirectional.bottomEnd,
+                          child: PlayerNextEpisodeCard(
+                            seconds: countdown,
+                            episode: next,
+                            playNode: _nextNode,
+                            onPlay: () => unawaited(s.playNextEpisode()),
+                            onCancel: s.cancelNextEpisode,
+                          ),
+                        ),
+                      if (resume != null && !failed)
+                        Center(
+                          child: PlayerResumePrompt(
+                            title: s.title,
+                            position: resume.position,
+                            resumeNode: _resumeNode,
+                            onResume: () =>
+                                unawaited(s.chooseResume(resume: true)),
+                            onStartOver: () =>
+                                unawaited(s.chooseResume(resume: false)),
+                          ),
+                        ),
+                      if (failed)
+                        Center(
+                          child: PlayerFailureCard(
+                            message: l10n.playerPlaybackFailed,
+                            details: s.error != null
+                                ? l10n.player_itemUnavailable
+                                : _redact(_controller.errorMessage ?? ''),
+                            retryNode: _retryNode,
+                            onRetry: () => unawaited(s.retry()),
+                            onTryOtherFormat: s.canTryOtherFormat
+                                ? () => unawaited(s.tryOtherFormat())
+                                : null,
+                            onCopyReport: () => unawaited(_copyReport()),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-              if (_osdVisible && !_cardShown) _osd(l10n, overscan),
-              SafeArea(
-                minimum: overscan + const EdgeInsets.all(Spacing.lg),
-                child: Stack(
-                  children: [
-                    Align(
-                      alignment: Alignment.topCenter,
-                      child: PlayerReconnectBanner(
-                        status: _controller.reconnectStatus,
-                      ),
-                    ),
-                    if (_statsVisible)
-                      Align(
-                        alignment: AlignmentDirectional.topStart,
-                        child: PlayerStatsOverlay(
-                          controller: _controller,
-                          redactValue: _redact,
-                        ),
-                      ),
-                    if (s.isLive)
-                      Align(
-                        alignment: AlignmentDirectional.topEnd,
-                        child: _numberBadge(),
-                      ),
-                    if (countdown != null && next != null && !failed)
-                      Align(
-                        alignment: AlignmentDirectional.bottomEnd,
-                        child: PlayerNextEpisodeCard(
-                          seconds: countdown,
-                          episode: next,
-                          playNode: _nextNode,
-                          onPlay: () => unawaited(s.playNextEpisode()),
-                          onCancel: s.cancelNextEpisode,
-                        ),
-                      ),
-                    if (resume != null && !failed)
-                      Center(
-                        child: PlayerResumePrompt(
-                          title: s.title,
-                          position: resume.position,
-                          resumeNode: _resumeNode,
-                          onResume: () =>
-                              unawaited(s.chooseResume(resume: true)),
-                          onStartOver: () =>
-                              unawaited(s.chooseResume(resume: false)),
-                        ),
-                      ),
-                    if (failed)
-                      Center(
-                        child: PlayerFailureCard(
-                          message: l10n.playerPlaybackFailed,
-                          details: s.error != null
-                              ? l10n.player_itemUnavailable
-                              : _redact(_controller.errorMessage ?? ''),
-                          retryNode: _retryNode,
-                          onRetry: () => unawaited(s.retry()),
-                          onTryOtherFormat: s.canTryOtherFormat
-                              ? () => unawaited(s.tryOtherFormat())
-                              : null,
-                          onCopyReport: () => unawaited(_copyReport()),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
+    );
+  }
+
+  /// Desktop: the mouse shows the OSD; the cursor hides while the OSD and
+  /// cards are away.
+  Widget _mouse(Widget child) {
+    if (_window == null) return child;
+    return MouseRegion(
+      key: const ValueKey('player-mouse'),
+      cursor: _osdVisible || _cardShown || _exiting
+          ? MouseCursor.defer
+          : SystemMouseCursors.none,
+      onHover: (_) => _onMouseMoved(),
+      child: child,
     );
   }
 
@@ -1061,7 +1153,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       hideUrlPaths(_session.source?.redactText(value) ?? redact(value));
 
   Widget _gestures() {
-    final vod = !_session.isLive;
+    // Desktop double clicks toggle fullscreen instead of seeking.
+    final desktop = _window != null;
+    final vod = !_session.isLive && !desktop;
     return LayoutBuilder(
       builder: (context, c) => GestureDetector(
         key: const ValueKey('player-gestures'),
@@ -1074,7 +1168,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   ? null
                   : d.localPosition.dx / c.maxWidth
             : null,
-        onDoubleTap: vod ? _onDoubleTap : null,
+        onDoubleTap: desktop
+            ? _toggleWindowFullscreen
+            : vod
+            ? _onDoubleTap
+            : null,
       ),
     );
   }
@@ -1155,7 +1253,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  Widget _osd(AppLocalizations l10n, EdgeInsets overscan) {
+  /// The OSD; [topBar] adds Back (and on desktop the fullscreen button) for
+  /// mouse and touch.
+  Widget _osd(
+    AppLocalizations l10n,
+    EdgeInsets overscan, {
+    required bool topBar,
+  }) {
     final s = _session;
     final buttons = <Widget>[];
     var first = true;
@@ -1209,7 +1313,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       key: const ValueKey('player-osd'),
       child: Column(
         children: [
-          if (!s.isLive)
+          if (!s.isLive || topBar)
             Container(
               width: double.infinity,
               decoration: const BoxDecoration(
@@ -1220,17 +1324,55 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 ),
               ),
               padding: overscan + const EdgeInsets.all(Spacing.lg),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  BidiText(s.title ?? '', style: theme.textTheme.titleLarge),
-                  if (episode != null)
-                    Text(
-                      l10n.player_episodeLabel(episode.season, episode.number),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: AppColors.textSecondary,
-                      ),
+                  if (topBar) ...[
+                    OsdIconButton(
+                      key: const ValueKey('player-osd-back'),
+                      icon: Icons.arrow_back,
+                      label: l10n.commonBack,
+                      onFocus: _restartOsdTimer,
+                      onSelect: _exit,
                     ),
+                    const SizedBox(width: Spacing.md),
+                  ],
+                  Expanded(
+                    child: s.isLive
+                        ? const SizedBox.shrink()
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              BidiText(
+                                s.title ?? '',
+                                style: theme.textTheme.titleLarge,
+                              ),
+                              if (episode != null)
+                                Text(
+                                  l10n.player_episodeLabel(
+                                    episode.season,
+                                    episode.number,
+                                  ),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                            ],
+                          ),
+                  ),
+                  if (_window != null) ...[
+                    const SizedBox(width: Spacing.md),
+                    OsdIconButton(
+                      key: const ValueKey('player-osd-fullscreen'),
+                      icon: _windowFullscreen
+                          ? Icons.fullscreen_exit
+                          : Icons.fullscreen,
+                      label: _windowFullscreen
+                          ? l10n.playerExitFullscreen
+                          : l10n.playerFullscreen,
+                      onFocus: _restartOsdTimer,
+                      onSelect: _toggleWindowFullscreen,
+                    ),
+                  ],
                 ],
               ),
             ),

@@ -68,7 +68,7 @@ List<EpgProgramme> parseShortEpg(Object? json, {String? channelId}) {
   String? text(Object? v) {
     final s = asStr(v);
     if (s == null) return null;
-    final out = (encoded ? (_tryDecode(s) ?? s) : s).trim();
+    final out = unescapeGuideText(encoded ? (_tryDecode(s) ?? s) : s).trim();
     return out.isEmpty ? null : out;
   }
 

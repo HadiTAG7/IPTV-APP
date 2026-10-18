@@ -93,6 +93,15 @@ void main() {
       return map.map((k, v) => MapEntry(k, (v.now?.title, v.next?.title)));
     }
 
+    test('stored text with literal line-break escapes reads clean', () async {
+      await epg.insertProgrammes(guide, [
+        prog('x.a', at(15), at(16), r'Match\r\nLive', desc: r'One.\r\nTwo.'),
+      ]);
+      final next = (await epg.nowNext(src, ['a'], at(14, 30)))['a']?.next;
+      expect(next?.title, 'Match\nLive');
+      expect(next?.desc, 'One.\nTwo.');
+    });
+
     test('now/next at a boundary', () async {
       expect(await titles(at(11)), {
         'a': ('Noon', 'Afternoon'),

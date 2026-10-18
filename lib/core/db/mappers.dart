@@ -563,9 +563,10 @@ extension ProgrammeRecordView on ProgrammeRecord {
     channelId: xmltvId,
     start: fromEpochSec(startUtc),
     stop: fromEpochSec(stopUtc),
-    title: title,
-    subTitle: subTitle,
-    desc: desc,
+    // Stored guides may hold literal `\r\n` escapes.
+    title: unescapeGuideText(title),
+    subTitle: subTitle == null ? null : unescapeGuideText(subTitle!),
+    desc: desc == null ? null : unescapeGuideText(desc!),
     category: category,
     icon: icon,
   );

@@ -145,6 +145,8 @@
   "aspect4x3": "4:3",
   "playerSwitchPlayer": "تبديل المشغّل",
   "playerStats": "الإحصائيات",
+  "playerFullscreen": "شاشة كاملة",
+  "playerExitFullscreen": "خروج من الشاشة الكاملة",
   "playerFavorite": "المفضلة",
   "playerGuide": "الدليل",
   "playerLive": "مباشر",
