@@ -346,6 +346,10 @@ class ChannelListState extends ConsumerState<ChannelList> {
     return w != null && index >= w.first && index <= w.last;
   }
 
+  /// Drops a focus move waiting for the rows to load ([focusCurrent] before
+  /// they had): the user has moved elsewhere meanwhile.
+  void cancelPendingFocus() => _focusWhenReady = false;
+
   /// Focuses row [index] (clamped), scrolling it into view first.
   void focusIndex(int index) {
     final pager = _pager;

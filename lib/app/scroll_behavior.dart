@@ -41,8 +41,9 @@ class AppScrollBehavior extends MaterialScrollBehavior {
 }
 
 /// Mouse scrolling for one horizontal scrollable: the vertical wheel moves
-/// it (while it can still move that way; then the page scrolls), and an
-/// arrow at each end with more to see pages it by most of its width.
+/// it while it can still move that way (unless a vertical page around it
+/// can scroll: the page goes first), and an arrow at each end with more to
+/// see pages it by most of its width.
 class MouseRowScroll extends StatefulWidget {
   const MouseRowScroll({
     super.key,
@@ -104,6 +105,15 @@ class _MouseRowScrollState extends State<MouseRowScroll> {
     final end = delta.dy > 0 ? p.maxScrollExtent : p.minScrollExtent;
     if ((delta.dy > 0 && p.pixels >= end) ||
         (delta.dy < 0 && p.pixels <= end)) {
+      return;
+    }
+    // A row inside a vertical page (poster rows) leaves the wheel to the
+    // page while it can still scroll; its arrows still move the row.
+    final page = Scrollable.maybeOf(context, axis: Axis.vertical)?.position;
+    if (page != null &&
+        page.hasContentDimensions &&
+        page.hasPixels &&
+        (delta.dy > 0 ? page.extentAfter > 0 : page.extentBefore > 0)) {
       return;
     }
     GestureBinding.instance.pointerSignalResolver.register(event, (event) {
@@ -186,32 +196,50 @@ class _RowArrow extends StatelessWidget {
       left: onLeft ? 0 : null,
       right: onLeft ? null : 0,
       child: ExcludeFocus(
-        child: Container(
+        child: SizedBox(
           width: 56,
-          decoration: BoxDecoration(gradient: fade),
-          alignment: onLeft ? Alignment.centerLeft : Alignment.centerRight,
-          padding: const EdgeInsets.symmetric(horizontal: Spacing.xs),
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: onPressed,
-              child: Container(
-                width: 32,
-                height: 32,
-                decoration: const BoxDecoration(
-                  color: AppColors.surfaceHighest,
-                  shape: BoxShape.circle,
-                ),
-                // The arrow points where its end of the row is, whatever
-                // the reading direction.
-                child: Icon(
-                  onLeft ? Icons.chevron_left : Icons.chevron_right,
-                  textDirection: TextDirection.ltr,
-                  size: 22,
-                  color: AppColors.textPrimary,
+          child: Stack(
+            children: [
+              // The fade lets clicks and hover through to the row; only
+              // the circle is the arrow.
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(gradient: fade),
+                  ),
                 ),
               ),
-            ),
+              Align(
+                alignment: onLeft
+                    ? Alignment.centerLeft
+                    : Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: Spacing.xs),
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: onPressed,
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: const BoxDecoration(
+                          color: AppColors.surfaceHighest,
+                          shape: BoxShape.circle,
+                        ),
+                        // The arrow points where its end of the row is, whatever
+                        // the reading direction.
+                        child: Icon(
+                          onLeft ? Icons.chevron_left : Icons.chevron_right,
+                          textDirection: TextDirection.ltr,
+                          size: 22,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

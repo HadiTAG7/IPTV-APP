@@ -27,8 +27,12 @@ class OsdButton extends StatelessWidget {
     this.focusNode,
     this.active = false,
     this.onFocus,
-    this.width = 88,
+    this.width = defaultWidth,
   });
+
+  /// The widest a button gets, and the narrowest the OSD row makes it.
+  static const double defaultWidth = 88;
+  static const double minWidth = 64;
 
   final IconData icon;
   final String label;

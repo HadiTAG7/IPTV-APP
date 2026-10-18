@@ -137,11 +137,11 @@ void main() {
         await press(tester, LogicalKeyboardKey.select);
         expect(find.byKey(_panel), findsOneWidget);
         expect(find.byKey(_osd), findsNothing);
-        // At the start edge: left in English, right in Arabic; 45 % of
-        // the 960 dp TV canvas plus the overscan margin.
+        // At the start edge: left in English, right in Arabic; on TV a
+        // wider share of the 960 dp canvas plus the overscan margin.
         final rect = tester.getRect(find.byKey(_panel));
         expect(rtl ? rect.right : rect.left, rtl ? 960 : 0);
-        expect(rect.width, 960 * ChannelPanel.widthFraction + 48);
+        expect(rect.width, 960 * ChannelPanel.tvWidthFraction + 48);
         // News, on the channel playing (highlighted).
         expect(_panelState(tester).selected, const LiveList.category('news'));
         expect(_rowFocused(1), isTrue);
@@ -629,6 +629,9 @@ void main() {
           kind: PointerDeviceKind.mouse,
         );
         await settle(tester);
+        // Clicks right after opening are ignored (a double click).
+        await tester.pump(ChannelPanel.openGuard);
+        await tester.pump();
         expect(find.byKey(_panel), findsOneWidget);
       }
 
@@ -734,6 +737,8 @@ void main() {
         expect(find.byKey(_osd), findsOneWidget);
         await tester.tap(find.byKey(const ValueKey('player-osd-channels')));
         await settle(tester);
+        await tester.pump(ChannelPanel.openGuard);
+        await tester.pump();
         expect(find.byKey(_panel), findsOneWidget);
       }
 

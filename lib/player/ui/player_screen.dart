@@ -574,7 +574,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// focus in once its entries are read.
   void _openPanel() {
     if (!_session.isLive || _cardShown || _exiting || _panelVisible) return;
-    _session.cancelNumber();
+    // The panel opens on the channel playing: nothing tunes behind it.
+    _session.cancelPendingZap();
     _hideOsd();
     _bannerTimer?.cancel();
     setState(() {
@@ -1543,53 +1544,61 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     required bool topBar,
   }) {
     final s = _session;
-    final buttons = <Widget>[];
-    var first = true;
-    FocusNode? firstNode() {
-      if (!first) return null;
-      first = false;
-      return _osdFirstNode;
-    }
+    final actions = [
+      if (s.isLive) PlayerAction.channels,
+      PlayerAction.audio,
+      PlayerAction.subtitles,
+      PlayerAction.aspect,
+      if (s.isLive) PlayerAction.favorite,
+      if (s.isLive) PlayerAction.addToList,
+      PlayerAction.switchPlayer,
+      if (s.isLive) PlayerAction.guide,
+      PlayerAction.stats,
+    ];
+    final count = actions.length + (s.isLive ? 0 : 1);
 
-    void add(PlayerAction a, {bool active = false}) {
-      buttons.add(
-        OsdButton(
-          key: ValueKey('player-osd-${a.name}'),
-          focusNode: firstNode(),
-          icon: _icon(a),
-          label: _label(l10n, a),
-          active: active,
-          onFocus: _restartOsdTimer,
-          onSelect: () => unawaited(_perform(a)),
-        ),
-      );
-    }
+    /// The row's buttons, [width] wide each.
+    List<Widget> buttons(double width) {
+      var first = true;
+      FocusNode? firstNode() {
+        if (!first) return null;
+        first = false;
+        return _osdFirstNode;
+      }
 
-    if (!s.isLive) {
-      final node = firstNode();
-      buttons.add(
-        ValueListenableBuilder<bool>(
-          valueListenable: _playing,
-          builder: (context, playing, _) => OsdButton(
-            key: const ValueKey('player-osd-playPause'),
-            focusNode: node,
-            icon: playing ? Icons.pause : Icons.play_arrow,
-            label: playing ? l10n.player_pause : l10n.vodPlay,
-            onFocus: _restartOsdTimer,
-            onSelect: () => unawaited(_controller.togglePlayPause()),
+      // Taken before the builder below runs (later, on every play/pause).
+      final playNode = s.isLive ? null : firstNode();
+      return [
+        if (!s.isLive)
+          ValueListenableBuilder<bool>(
+            valueListenable: _playing,
+            builder: (context, playing, _) => OsdButton(
+              key: const ValueKey('player-osd-playPause'),
+              focusNode: playNode,
+              icon: playing ? Icons.pause : Icons.play_arrow,
+              label: playing ? l10n.player_pause : l10n.vodPlay,
+              width: width,
+              onFocus: _restartOsdTimer,
+              onSelect: () => unawaited(_controller.togglePlayPause()),
+            ),
           ),
-        ),
-      );
+        for (final a in actions)
+          OsdButton(
+            key: ValueKey('player-osd-${a.name}'),
+            focusNode: firstNode(),
+            icon: _icon(a),
+            label: _label(l10n, a),
+            width: width,
+            active: switch (a) {
+              PlayerAction.favorite => s.favorite,
+              PlayerAction.stats => _statsVisible,
+              _ => false,
+            },
+            onFocus: _restartOsdTimer,
+            onSelect: () => unawaited(_perform(a)),
+          ),
+      ];
     }
-    if (s.isLive) add(PlayerAction.channels);
-    add(PlayerAction.audio);
-    add(PlayerAction.subtitles);
-    add(PlayerAction.aspect);
-    if (s.isLive) add(PlayerAction.favorite, active: s.favorite);
-    if (s.isLive) add(PlayerAction.addToList);
-    add(PlayerAction.switchPlayer);
-    if (s.isLive) add(PlayerAction.guide);
-    add(PlayerAction.stats, active: _statsVisible);
 
     final theme = Theme.of(context);
     final episode = s.episode;
@@ -1702,9 +1711,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     ),
                   ),
                 const SizedBox(height: Spacing.md),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(children: buttons),
+                // The buttons share the row (narrower down to a limit), so
+                // all of them show on TV and phones.
+                LayoutBuilder(
+                  builder: (context, c) {
+                    final width = (c.maxWidth / count - 2 * Spacing.xs).clamp(
+                      OsdButton.minWidth,
+                      OsdButton.defaultWidth,
+                    );
+                    return SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(children: buttons(width)),
+                    );
+                  },
                 ),
               ],
             ),

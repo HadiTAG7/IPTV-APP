@@ -450,6 +450,10 @@ class PlayerSession extends ChangeNotifier {
   /// Drops a half-typed number. False when none was typed.
   bool cancelNumber() => _zap?.cancelNumber() ?? false;
 
+  /// Drops a pending zap (its debounce) and a half-typed number; the
+  /// banner goes back to the channel playing.
+  void cancelPendingZap() => _zap?.cancelPending();
+
   /// A channel row from the cache (rows are read when the banner moves).
   ChannelRow? channelFor(String key) => _channels[key];
 

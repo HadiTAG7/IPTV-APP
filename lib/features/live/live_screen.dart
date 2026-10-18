@@ -183,6 +183,9 @@ class LiveViewState extends ConsumerState<LiveView> {
       _pending = null;
       return;
     }
+    // The user moved on: the list shown must not pull focus back into its
+    // rows once they have loaded.
+    _list.currentState?.cancelPendingFocus();
     _pending = list;
     _selectTimer = Timer(LiveView.selectDelay, () {
       if (mounted) _select(list);

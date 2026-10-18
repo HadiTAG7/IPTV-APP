@@ -6,10 +6,12 @@ import 'package:iptv_player/app/scroll_behavior.dart';
 const _back = ValueKey('row-scroll-back');
 const _forward = ValueKey('row-scroll-forward');
 
-/// A 400-wide page: a 30-chip row (100 each) above a tall list.
+/// A 400-wide screen with a 30-chip row (100 each), on its own or above a
+/// tall list in a vertical page.
 Future<({ScrollController row, ScrollController page})> _pump(
   WidgetTester tester, {
   TextDirection direction = TextDirection.ltr,
+  bool inPage = false,
 }) async {
   tester.view.physicalSize = const Size(400, 600);
   tester.view.devicePixelRatio = 1;
@@ -18,29 +20,32 @@ Future<({ScrollController row, ScrollController page})> _pump(
   final page = ScrollController();
   addTearDown(row.dispose);
   addTearDown(page.dispose);
+  final chips = SizedBox(
+    height: 52,
+    child: ListView.builder(
+      controller: row,
+      scrollDirection: Axis.horizontal,
+      itemCount: 30,
+      itemExtent: 100,
+      itemBuilder: (_, i) => Center(child: Text('chip $i')),
+    ),
+  );
   await tester.pumpWidget(
     MaterialApp(
       scrollBehavior: const AppScrollBehavior(),
       home: Directionality(
         textDirection: direction,
         child: Scaffold(
-          body: ListView(
-            controller: page,
-            children: [
-              SizedBox(
-                height: 52,
-                child: ListView.builder(
-                  controller: row,
-                  scrollDirection: Axis.horizontal,
-                  itemCount: 30,
-                  itemExtent: 100,
-                  itemBuilder: (_, i) => Center(child: Text('chip $i')),
-                ),
-              ),
-              for (var i = 0; i < 30; i++)
-                SizedBox(height: 80, child: Text('row $i')),
-            ],
-          ),
+          body: inPage
+              ? ListView(
+                  controller: page,
+                  children: [
+                    chips,
+                    for (var i = 0; i < 30; i++)
+                      SizedBox(height: 80, child: Text('row $i')),
+                  ],
+                )
+              : Column(children: [chips]),
         ),
       ),
     ),
@@ -59,20 +64,32 @@ Future<void> _wheel(WidgetTester tester, Offset at, double dy) async {
 void main() {
   final desktop = TargetPlatformVariant.only(TargetPlatform.windows);
 
-  testWidgets('the wheel moves a row sideways, then the page', (tester) async {
+  testWidgets('the wheel moves a row on its own sideways', (tester) async {
     final c = await _pump(tester);
     await _wheel(tester, const Offset(200, 26), 120);
     expect(c.row.offset, 120);
-    expect(c.page.offset, 0);
     await _wheel(tester, const Offset(200, 26), -120);
     expect(c.row.offset, 0);
+    // Nothing to move toward the start: nothing happens.
+    await _wheel(tester, const Offset(200, 26), -120);
+    expect(c.row.offset, 0);
+  }, variant: desktop);
 
-    // At the end of the row the wheel scrolls the page again.
-    c.row.jumpTo(c.row.position.maxScrollExtent);
-    await tester.pump();
+  testWidgets('inside a page the page scrolls first, then the row', (
+    tester,
+  ) async {
+    final c = await _pump(tester, inPage: true);
     await _wheel(tester, const Offset(200, 26), 120);
-    expect(c.row.offset, c.row.position.maxScrollExtent);
     expect(c.page.offset, 120);
+    expect(c.row.offset, 0);
+
+    // At the top of the page, wheeling up moves the row back.
+    c.page.jumpTo(0);
+    c.row.jumpTo(200);
+    await tester.pump();
+    await _wheel(tester, const Offset(200, 26), -120);
+    expect(c.page.offset, 0);
+    expect(c.row.offset, 80);
   }, variant: desktop);
 
   testWidgets('arrows page the row and show only where there is more', (

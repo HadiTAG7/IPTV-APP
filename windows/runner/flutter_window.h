@@ -46,6 +46,9 @@ class FlutterWindow : public Win32Window {
   LONG ex_style_before_fullscreen_ = 0;
   RECT rect_before_fullscreen_ = {};
   WINDOWPLACEMENT placement_before_fullscreen_ = {};
+  // The monitor the window was on, and its work area then.
+  HMONITOR monitor_before_fullscreen_ = nullptr;
+  RECT work_area_before_fullscreen_ = {};
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -68,6 +69,17 @@ class ChannelPanel extends ConsumerStatefulWidget {
   static const minWidth = 360.0;
   static const maxWidth = 560.0;
 
+  /// TV: a wider panel with a fixed category column, so channel names
+  /// (variants like "beIN SPORTS 1 HD" next to "… FHD") show in full on
+  /// the 960-wide TV canvas.
+  static const tvWidthFraction = 0.575;
+  static const tvMaxWidth = 620.0;
+  static const tvCategoryWidth = 184.0;
+
+  /// Pointer input is ignored this long after the panel opens: the second
+  /// click of a double click on the Channels button would land on it.
+  static const openGuard = kDoubleTapTimeout;
+
   final int sourceId;
 
   /// The list to open on; All channels when it has no entry (hidden or
@@ -104,6 +116,10 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
   /// Focus moves in once the entries have loaded.
   bool _focusWhenReady = true;
 
+  /// Pointer input waits until [ChannelPanel.openGuard] has passed.
+  bool _justOpened = true;
+  Timer? _openGuardTimer;
+
   int get _id => widget.sourceId;
 
   /// The list shown, for tests.
@@ -117,6 +133,9 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
   @override
   void initState() {
     super.initState();
+    _openGuardTimer = Timer(ChannelPanel.openGuard, () {
+      if (mounted) setState(() => _justOpened = false);
+    });
     _store = NowNextStore(
       load: (keys, now) => ref.read(epgDaoProvider).nowNext(_id, keys, now),
       clock: ref.read(clockProvider),
@@ -135,6 +154,7 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
   @override
   void dispose() {
     _selectTimer?.cancel();
+    _openGuardTimer?.cancel();
     _store.dispose();
     _scope.dispose();
     super.dispose();
@@ -184,6 +204,9 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
       _pending = null;
       return;
     }
+    // The user moved on: the list shown must not pull focus back into its
+    // rows once they have loaded.
+    _list.currentState?.cancelPendingFocus();
     _pending = list;
     _selectTimer = Timer(ChannelPanel.selectDelay, () {
       if (mounted) _select(list);
@@ -311,25 +334,26 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
   ) {
     final selected = _selected;
     final menu = widget.onChannelMenu;
+    final categories = PaneScope(
+      key: _catsPane,
+      debugLabel: 'panel-categories',
+      onExitEnd: _enterChannels,
+      child: LiveCategoryPane(
+        key: _categories,
+        entries: entries,
+        selected: _pending ?? selected,
+        onFocusList: _onCategoryFocus,
+        onSelectList: (l) => _select(l, enter: true),
+        onFocusedEntryGone: _focusSelectedCategory,
+      ),
+    );
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          flex: 2,
-          child: PaneScope(
-            key: _catsPane,
-            debugLabel: 'panel-categories',
-            onExitEnd: _enterChannels,
-            child: LiveCategoryPane(
-              key: _categories,
-              entries: entries,
-              selected: _pending ?? selected,
-              onFocusList: _onCategoryFocus,
-              onSelectList: (l) => _select(l, enter: true),
-              onFocusedEntryGone: _focusSelectedCategory,
-            ),
-          ),
-        ),
+        if (FormFactorScope.isTv(context))
+          SizedBox(width: ChannelPanel.tvCategoryWidth, child: categories)
+        else
+          Expanded(flex: 2, child: categories),
         const SizedBox(width: Spacing.xs),
         Expanded(
           flex: 3,
@@ -420,22 +444,31 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
       ),
     );
     void activity(PointerEvent _) => widget.onActivity?.call();
+    final tv = formFactor == FormFactor.tv;
     return Listener(
       onPointerDown: activity,
       onPointerMove: activity,
+      onPointerHover: activity,
       onPointerSignal: activity,
+      onPointerPanZoomStart: activity,
+      onPointerPanZoomUpdate: activity,
       child: LayoutBuilder(
         builder: (context, c) {
           final width = full
               ? c.maxWidth
               : math.min(
                   c.maxWidth,
-                  (c.maxWidth * ChannelPanel.widthFraction + side).clamp(
-                    ChannelPanel.minWidth,
-                    ChannelPanel.maxWidth,
-                  ),
+                  (c.maxWidth *
+                              (tv
+                                  ? ChannelPanel.tvWidthFraction
+                                  : ChannelPanel.widthFraction) +
+                          side)
+                      .clamp(
+                        ChannelPanel.minWidth,
+                        tv ? ChannelPanel.tvMaxWidth : ChannelPanel.maxWidth,
+                      ),
                 );
-          return Stack(
+          final stack = Stack(
             children: [
               if (!full)
                 Positioned.fill(
@@ -454,6 +487,9 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
               ),
             ],
           );
+          // The click that opened the panel may be the first of a double
+          // click: its second click must not pick a category or close it.
+          return AbsorbPointer(absorbing: _justOpened, child: stack);
         },
       ),
     );
