@@ -132,8 +132,14 @@ class MpvCore {
       player = _player = _createPlayer(lite: lite);
       _video = _createVideo(player, hardwareDecoding: hardwareDecoding);
     } else {
-      // The previous engine's track choices go, as with a new core.
-      properties.addAll({'aid': 'auto', 'sid': 'auto'});
+      // The previous engine's track and volume choices go, as with a new
+      // core.
+      properties.addAll({
+        'aid': 'auto',
+        'sid': 'auto',
+        'volume': '100',
+        'mute': 'no',
+      });
       if (_hardwareDecoding != hardwareDecoding) {
         properties['hwdec'] = hardwareDecoding ? 'auto-safe' : 'no';
       }
@@ -525,6 +531,31 @@ class MpvEngine implements PlayerEngine {
       // Player already torn down.
     }
     _state.value = PlaybackState.idle;
+  }
+
+  @override
+  Future<void> setVolume(double volume) async {
+    if (_disposed) return;
+    // An explicit level wins over the borrowed core's reset.
+    _leaseProperties = {..._leaseProperties}..remove('volume');
+    try {
+      await _player.setVolume(volume.clamp(0.0, 1.0) * 100);
+    } catch (_) {
+      // Player torn down, or a platform player without volume.
+    }
+  }
+
+  @override
+  Future<void> setMuted(bool muted) async {
+    if (_disposed) return;
+    _leaseProperties = {..._leaseProperties}..remove('mute');
+    final native = _player.platform;
+    if (native is! NativePlayer) return;
+    try {
+      await native.setProperty('mute', muted ? 'yes' : 'no');
+    } catch (_) {
+      // Player torn down.
+    }
   }
 
   Iterable<T> _real<T>(List<T> tracks, String Function(T) id) =>

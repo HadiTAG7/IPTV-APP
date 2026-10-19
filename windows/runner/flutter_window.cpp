@@ -1,14 +1,49 @@
 #include "flutter_window.h"
 
 #include <flutter/standard_method_codec.h>
+#include <flutter_windows.h>
 #include <objbase.h>
 #include <shobjidl.h>
 
+#include <algorithm>
 #include <optional>
+#include <string>
+#include <variant>
 
 #include "flutter/generated_plugin_registrant.h"
 
 namespace {
+
+// The compact window: a 16:9 client area this share of the work area's
+// width, at least this wide, this far from the work area's edges (sizes in
+// pixels at 96 DPI).
+constexpr int kCompactWidthPercent = 30;
+constexpr int kCompactMinClientWidth = 320;
+constexpr int kCompactMargin = 16;
+
+// The size of a window with |window|'s styles whose client area is
+// |client_width| x |client_height| at |dpi|. AdjustWindowRectExForDpi exists
+// from Windows 10 1607 on; without it the frame is the system DPI's.
+SIZE WindowSizeForClient(HWND window, int client_width, int client_height,
+                         UINT dpi) {
+  RECT rect = {0, 0, client_width, client_height};
+  const DWORD style = static_cast<DWORD>(::GetWindowLong(window, GWL_STYLE));
+  const DWORD ex_style =
+      static_cast<DWORD>(::GetWindowLong(window, GWL_EXSTYLE));
+  using AdjustForDpi = BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
+  AdjustForDpi adjust_for_dpi = nullptr;
+  HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+  if (user32 != nullptr) {
+    adjust_for_dpi = reinterpret_cast<AdjustForDpi>(
+        ::GetProcAddress(user32, "AdjustWindowRectExForDpi"));
+  }
+  if (adjust_for_dpi == nullptr ||
+      !adjust_for_dpi(&rect, style, FALSE, ex_style, dpi)) {
+    ::AdjustWindowRectEx(&rect, style, FALSE, ex_style);
+  }
+  SIZE size = {rect.right - rect.left, rect.bottom - rect.top};
+  return size;
+}
 
 // Tells the taskbar to stay behind |window| while it is fullscreen, or to
 // come back. Windows usually works this out by itself; this makes it sure.
@@ -63,6 +98,28 @@ bool FlutterWindow::OnCreate() {
           result->Success();
         } else if (call.method_name() == "exitFullscreen") {
           ExitFullscreen();
+          result->Success();
+        } else if (call.method_name() == "setAlwaysOnTop") {
+          const auto* always_on_top = std::get_if<bool>(call.arguments());
+          if (always_on_top == nullptr) {
+            result->Error("bad-arguments", "setAlwaysOnTop expects a bool");
+            return;
+          }
+          SetAlwaysOnTop(*always_on_top);
+          result->Success();
+        } else if (call.method_name() == "setTitle") {
+          const auto* title = std::get_if<std::string>(call.arguments());
+          if (title == nullptr) {
+            result->Error("bad-arguments", "setTitle expects a string");
+            return;
+          }
+          SetTitle(*title);
+          result->Success();
+        } else if (call.method_name() == "enterCompact") {
+          EnterCompact();
+          result->Success();
+        } else if (call.method_name() == "exitCompact") {
+          ExitCompact();
           result->Success();
         } else {
           result->NotImplemented();
@@ -160,6 +217,9 @@ void FlutterWindow::EnterFullscreen() {
   if (fullscreen_ || window == nullptr) {
     return;
   }
+  // A compact window goes back to its normal placement first, so leaving
+  // fullscreen brings that back rather than the small corner window.
+  ExitCompact();
   fullscreen_ = true;
   // A maximized window stays maximized: restoring it first, and maximizing
   // it again on exit, makes Windows animate a small window across the
@@ -227,4 +287,112 @@ void FlutterWindow::ExitFullscreen() {
                        SWP_FRAMECHANGED);
   }
   MarkFullscreenInTaskbar(window, false);
+}
+
+void FlutterWindow::SetAlwaysOnTop(bool always_on_top) {
+  always_on_top_ = always_on_top;
+  ApplyTopmost();
+}
+
+void FlutterWindow::ApplyTopmost() {
+  HWND window = GetHandle();
+  if (window == nullptr) {
+    return;
+  }
+  HWND insert_after =
+      always_on_top_ || compact_ ? HWND_TOPMOST : HWND_NOTOPMOST;
+  ::SetWindowPos(window, insert_after, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+void FlutterWindow::SetTitle(const std::string& title) {
+  HWND window = GetHandle();
+  // Titles come from the app and are short; anything huge is not one.
+  if (window == nullptr || title.size() > 4096) {
+    return;
+  }
+  std::wstring wide;
+  if (!title.empty()) {
+    const int utf8_length = static_cast<int>(title.size());
+    const int length = ::MultiByteToWideChar(CP_UTF8, 0, title.data(),
+                                             utf8_length, nullptr, 0);
+    if (length <= 0) {
+      return;
+    }
+    wide.resize(static_cast<size_t>(length));
+    if (::MultiByteToWideChar(CP_UTF8, 0, title.data(), utf8_length,
+                              wide.data(), length) != length) {
+      return;
+    }
+  }
+  ::SetWindowTextW(window, wide.c_str());
+}
+
+void FlutterWindow::EnterCompact() {
+  HWND window = GetHandle();
+  if (compact_ || window == nullptr) {
+    return;
+  }
+  // Compact is the normal captioned window, only small: fullscreen ends
+  // first.
+  ExitFullscreen();
+  placement_before_compact_.length = sizeof(placement_before_compact_);
+  if (!::GetWindowPlacement(window, &placement_before_compact_)) {
+    return;
+  }
+  if (::IsZoomed(window) || ::IsIconic(window)) {
+    ::ShowWindow(window, SW_RESTORE);
+  }
+  HMONITOR monitor = ::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO info = {};
+  info.cbSize = sizeof(info);
+  if (!::GetMonitorInfo(monitor, &info)) {
+    return;
+  }
+  const RECT& work = info.rcWork;
+  const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+  const int scale = static_cast<int>(dpi);
+  const int margin = ::MulDiv(kCompactMargin, scale, 96);
+  const int work_width = work.right - work.left;
+  const int work_height = work.bottom - work.top;
+  int client_width =
+      std::max(work_width * kCompactWidthPercent / 100,
+               ::MulDiv(kCompactMinClientWidth, scale, 96));
+  SIZE size =
+      WindowSizeForClient(window, client_width, client_width * 9 / 16, dpi);
+  int width = static_cast<int>(size.cx);
+  int height = static_cast<int>(size.cy);
+  // A tiny work area still holds the whole window (still 16:9).
+  const int max_width = std::max(work_width - 2 * margin, 1);
+  const int max_height = std::max(work_height - 2 * margin, 1);
+  if (width > max_width || height > max_height) {
+    const int frame_width = width - client_width;
+    const int frame_height = height - client_width * 9 / 16;
+    client_width = std::min(max_width - frame_width,
+                            (max_height - frame_height) * 16 / 9);
+    client_width = std::max(client_width, 16);
+    size =
+        WindowSizeForClient(window, client_width, client_width * 9 / 16, dpi);
+    width = static_cast<int>(size.cx);
+    height = static_cast<int>(size.cy);
+  }
+  compact_ = true;
+  const int x = static_cast<int>(work.right) - margin - width;
+  const int y = static_cast<int>(work.bottom) - margin - height;
+  ::SetWindowPos(window, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+}
+
+void FlutterWindow::ExitCompact() {
+  HWND window = GetHandle();
+  if (!compact_ || window == nullptr) {
+    return;
+  }
+  compact_ = false;
+  // Never back to minimized: compact is left from the window's own button.
+  WINDOWPLACEMENT placement = placement_before_compact_;
+  if (placement.showCmd == static_cast<UINT>(SW_SHOWMINIMIZED)) {
+    placement.showCmd = static_cast<UINT>(SW_SHOWNORMAL);
+  }
+  ::SetWindowPlacement(window, &placement);
+  ApplyTopmost();
 }

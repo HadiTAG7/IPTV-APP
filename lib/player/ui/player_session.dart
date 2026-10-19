@@ -242,16 +242,7 @@ class PlayerSession extends ChangeNotifier {
     _notify();
     final StreamRequest stream;
     try {
-      stream = source.adapter.resolve(
-        PlayableRef(
-          kind: ref.kind,
-          key: ref.key,
-          url: ref.url,
-          ext: _liveExt ?? ref.ext,
-          headers: ref.headers,
-          title: ref.title,
-        ),
-      );
+      stream = source.resolveLive(ref, ext: _liveExt);
     } on Object catch (e) {
       _log.warn('Player: cannot resolve channel: ${source.redactText('$e')}');
       _setError(e);

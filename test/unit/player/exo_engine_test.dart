@@ -88,6 +88,11 @@ class FakeVpc extends VideoPlayerController {
   }
 
   @override
+  Future<void> setVolume(double volume) async {
+    calls.add('setVolume $volume');
+  }
+
+  @override
   Future<void> dispose() async {
     calls.add('dispose');
     disposed = true;
@@ -245,6 +250,34 @@ void main() {
       'Referer': 'r',
       'User-Agent': 'Y',
     });
+  });
+
+  test('volume and mute last across opens; mute plays at 0', () async {
+    final rig = Rig();
+    // Before any controller: remembered for the next one.
+    await rig.engine.setVolume(0.5);
+    await rig.engine.open(live);
+    rig.c.ready();
+    await settle();
+    expect(rig.c.calls, containsAllInOrder(['setVolume 0.5', 'play']));
+    await rig.engine.setMuted(true);
+    expect(rig.c.calls.last, 'setVolume 0.0');
+    await rig.engine.open(movie);
+    rig.c.ready();
+    await settle();
+    expect(rig.c.calls, contains('setVolume 0.0'));
+    await rig.engine.setMuted(false);
+    expect(rig.c.calls.last, 'setVolume 0.5');
+    await rig.engine.dispose();
+  });
+
+  test('a new engine at full volume never touches the volume', () async {
+    final rig = Rig();
+    await rig.engine.open(live);
+    rig.c.ready();
+    await settle();
+    expect(rig.c.calls.where((c) => c.startsWith('setVolume')), isEmpty);
+    await rig.engine.dispose();
   });
 
   group('open', () {

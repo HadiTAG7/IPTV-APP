@@ -56,6 +56,9 @@ class FakePlatformPlayer extends PlatformPlayer {
       calls.add('subtitle ${track.id}');
 
   @override
+  Future<void> setVolume(double volume) async => calls.add('volume $volume');
+
+  @override
   Future<void> dispose() async {
     calls.add('dispose');
     await super.dispose();
@@ -478,6 +481,23 @@ void main() {
     });
   });
 
+  test(
+    'volume goes to mpv in percent, clamped; nothing after dispose',
+    () async {
+      final rig = Rig();
+      await rig.engine.setVolume(0.25);
+      await rig.engine.setVolume(3);
+      await rig.engine.setVolume(-1);
+      // Mute is an mpv property: no libmpv here, and no throw either.
+      await rig.engine.setMuted(true);
+      expect(rig.fake.calls, ['volume 25.0', 'volume 100.0', 'volume 0.0']);
+      await rig.engine.dispose();
+      await rig.engine.setVolume(0.5);
+      await rig.engine.setMuted(false);
+      expect(rig.fake.calls.where((c) => c.startsWith('volume')), hasLength(3));
+    },
+  );
+
   group('shared core', () {
     late List<FakePlatformPlayer> players;
     late List<bool> lites;
@@ -528,18 +548,26 @@ void main() {
       await b.dispose();
     });
 
-    test('a borrowed core resets tracks and applies hwdec changes', () {
+    test('a borrowed core resets tracks and volume and applies hwdec '
+        'changes', () {
       final first = core.lease(lite: false, hardwareDecoding: true);
       expect(first.shared, isTrue);
       expect(first.properties, isEmpty);
       unawaited(first.release());
       final same = core.lease(lite: false, hardwareDecoding: true);
-      expect(same.properties, {'aid': 'auto', 'sid': 'auto'});
+      expect(same.properties, {
+        'aid': 'auto',
+        'sid': 'auto',
+        'volume': '100',
+        'mute': 'no',
+      });
       unawaited(same.release());
       final software = core.lease(lite: false, hardwareDecoding: false);
       expect(software.properties, {
         'aid': 'auto',
         'sid': 'auto',
+        'volume': '100',
+        'mute': 'no',
         'hwdec': 'no',
       });
       expect(identical(software.player, first.player), isTrue);

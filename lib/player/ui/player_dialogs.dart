@@ -26,17 +26,19 @@ class PlayerChoice<T> {
 
 /// A remote-friendly list dialog (tracks, aspect ratio, options). Returns
 /// the picked value, or null when dismissed. The selected option (else the
-/// first) has the initial focus.
+/// first) has the initial focus; [message] shows above the options.
 Future<T?> showPlayerChoiceDialog<T>(
   BuildContext context, {
   required String title,
   required List<PlayerChoice<T>> choices,
+  String? message,
   String? emptyMessage,
 }) => showDialog<T>(
   context: context,
   builder: (context) => _PlayerChoiceDialog<T>(
     title: title,
     choices: choices,
+    message: message,
     emptyMessage: emptyMessage,
   ),
 );
@@ -45,11 +47,13 @@ class _PlayerChoiceDialog<T> extends StatelessWidget {
   const _PlayerChoiceDialog({
     required this.title,
     required this.choices,
+    this.message,
     this.emptyMessage,
   });
 
   final String title;
   final List<PlayerChoice<T>> choices;
+  final String? message;
   final String? emptyMessage;
 
   @override
@@ -58,6 +62,7 @@ class _PlayerChoiceDialog<T> extends StatelessWidget {
     final theme = Theme.of(context);
     final focusIndex = choices.indexWhere((c) => c.selected);
     final empty = emptyMessage;
+    final message = this.message;
     return AlertDialog(
       title: Text(title),
       contentPadding: const EdgeInsets.symmetric(vertical: Spacing.md),
@@ -75,6 +80,16 @@ class _PlayerChoiceDialog<T> extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (message != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(
+                          Spacing.xl,
+                          0,
+                          Spacing.xl,
+                          Spacing.md,
+                        ),
+                        child: Text(message, style: theme.textTheme.bodyMedium),
+                      ),
                     for (final (i, c) in choices.indexed)
                       Padding(
                         padding: const EdgeInsets.symmetric(

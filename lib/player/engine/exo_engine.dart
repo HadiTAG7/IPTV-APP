@@ -122,6 +122,10 @@ class ExoEngine implements PlayerEngine {
   /// before `initialize()` completes clears it.
   bool _playWhenReady = true;
 
+  /// [setVolume] and [setMuted]; every new controller starts at full.
+  double _volume = 1;
+  bool _muted = false;
+
   /// Live or unknown length: the position comes from [_poll].
   Duration? _rawPosition;
   Timer? _poll;
@@ -201,6 +205,7 @@ class ExoEngine implements PlayerEngine {
       if (!raw && startAt != null && startAt > Duration.zero) {
         await c.seekTo(startAt);
       }
+      if (_volume != 1 || _muted) await _applyVolume();
       if (gen != _generation || !_playWhenReady) return;
       await _resume(c);
     } catch (e) {
@@ -395,6 +400,29 @@ class ExoEngine implements PlayerEngine {
       await c.selectAudioTrack(id);
     } catch (_) {
       // Unknown id or platform without track selection.
+    }
+  }
+
+  @override
+  Future<void> setVolume(double volume) async {
+    _volume = volume.clamp(0.0, 1.0);
+    await _applyVolume();
+  }
+
+  @override
+  Future<void> setMuted(bool muted) async {
+    _muted = muted;
+    await _applyVolume();
+  }
+
+  /// video_player has no mute: a muted controller plays at volume 0.
+  Future<void> _applyVolume() async {
+    final c = _controller.value;
+    if (c == null || !c.value.isInitialized) return;
+    try {
+      await c.setVolume(_muted ? 0 : _volume);
+    } catch (_) {
+      // Controller disposed meanwhile.
     }
   }
 

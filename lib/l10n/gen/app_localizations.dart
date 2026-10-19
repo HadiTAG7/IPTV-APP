@@ -998,6 +998,90 @@ abstract class AppLocalizations {
   /// **'Channels'**
   String get playerChannels;
 
+  /// Desktop player OSD button and options entry: plays the live channel in a window of its own (movable to another monitor) and closes the player.
+  ///
+  /// In en, this message translates to:
+  /// **'Separate window'**
+  String get playerDetach;
+
+  /// Snack bar when the separate player window could not be started.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t open the separate window.'**
+  String get playerDetachFailed;
+
+  /// Title of the dialog shown when a channel is opened while the subscription's only connection is used by a separate player window.
+  ///
+  /// In en, this message translates to:
+  /// **'“⁨{channel}⁩” is playing in a separate window'**
+  String detachInUseTitle(String channel);
+
+  /// No description provided for @detachInUseMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Your subscription can\'t play another channel at the same time.'**
+  String get detachInUseMessage;
+
+  /// Choice in the in-use dialog: the separate window switches to the channel just picked.
+  ///
+  /// In en, this message translates to:
+  /// **'Play this channel in the window instead'**
+  String get detachPlayInWindow;
+
+  /// No description provided for @detachCloseWindow.
+  ///
+  /// In en, this message translates to:
+  /// **'Close the window and play here'**
+  String get detachCloseWindow;
+
+  /// No description provided for @detachPlayInWindowFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t play in the separate window.'**
+  String get detachPlayInWindowFailed;
+
+  /// No description provided for @viewerMute.
+  ///
+  /// In en, this message translates to:
+  /// **'Mute'**
+  String get viewerMute;
+
+  /// No description provided for @viewerUnmute.
+  ///
+  /// In en, this message translates to:
+  /// **'Unmute'**
+  String get viewerUnmute;
+
+  /// No description provided for @viewerVolume.
+  ///
+  /// In en, this message translates to:
+  /// **'Volume'**
+  String get viewerVolume;
+
+  /// Separate player window button: keeps the window above all other windows.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep on top'**
+  String get viewerPin;
+
+  /// No description provided for @viewerUnpin.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop keeping on top'**
+  String get viewerUnpin;
+
+  /// Separate player window button: shrinks it to a small window in the screen's corner, above other windows (picture in picture).
+  ///
+  /// In en, this message translates to:
+  /// **'Small window'**
+  String get viewerCompact;
+
+  /// No description provided for @viewerNormalSize.
+  ///
+  /// In en, this message translates to:
+  /// **'Normal size'**
+  String get viewerNormalSize;
+
   /// No description provided for @playerLive.
   ///
   /// In en, this message translates to:

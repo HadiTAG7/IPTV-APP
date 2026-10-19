@@ -13,6 +13,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../app/providers.dart';
 import '../core/db/app_db.dart';
+import '../core/log/ring_log.dart';
 import '../core/net/redact.dart';
 import '../core/platform/device_caps.dart';
 import '../core/platform/window_fullscreen.dart';
@@ -128,15 +129,19 @@ final onChannelPlayedProvider = Provider<ChannelPlayedCallback>((ref) {
 
 /// Keeps the screen on while something plays ([WakelockPlus]); failures
 /// (no plugin, desktop without a session bus) are logged and ignored.
-final playerWakelockProvider = Provider<ValueChanged<bool>>((ref) {
-  final log = ref.watch(ringLogProvider);
-  return (on) {
-    unawaited(
-      Future<void>.sync(() => WakelockPlus.toggle(enable: on))
-          .catchError((Object e) => log.warn('Wakelock: $e')),
-    );
-  };
-}, name: 'playerWakelockProvider');
+final playerWakelockProvider = Provider<ValueChanged<bool>>(
+  (ref) => playerWakelock(ref.watch(ringLogProvider)),
+  name: 'playerWakelockProvider',
+);
+
+/// Turns the screen wakelock on or off ([WakelockPlus]), logging failures
+/// to [log]; detached windows use it too.
+ValueChanged<bool> playerWakelock(RingLog log) => (on) {
+  unawaited(
+    Future<void>.sync(() => WakelockPlus.toggle(enable: on))
+        .catchError((Object e) => log.warn('Wakelock: $e')),
+  );
+};
 
 /// The desktop window the player makes truly fullscreen; null on Android
 /// (and the web), where the player hides the system bars instead.
@@ -270,6 +275,19 @@ class PlayerSource {
 
   /// [text] with URL credentials and this source's secrets masked.
   String redactText(String text) => redact(text, secrets: secrets);
+
+  /// The stream of the live channel [ref]; [ext] (`ts` or `m3u8`) replaces
+  /// its container (the player's "Try other format").
+  StreamRequest resolveLive(PlayableRef ref, {String? ext}) => adapter.resolve(
+    PlayableRef(
+      kind: ref.kind,
+      key: ref.key,
+      url: ref.url,
+      ext: ext ?? ref.ext,
+      headers: ref.headers,
+      title: ref.title,
+    ),
+  );
 
   void close() => adapter.close();
 }
