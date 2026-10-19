@@ -90,7 +90,8 @@ Future<void> openMultiView(
 ///   otherwise a message says which tiles (or separate windows) use it.
 ///   Unknown limits (M3U) are never limited. Tiles hold their connection
 ///   ([multiViewTilesProvider]) from opening until they fail, are emptied
-///   or the screen closes.
+///   or the screen closes; a channel sent to a separate window keeps it
+///   counted until the window has it.
 /// * Mouse: a click makes a tile active, a double click maximizes it (the
 ///   others keep playing, hidden) and restores it. Hovering a tile shows
 ///   Change channel, Separate window (not on a failed tile) and Remove, and
@@ -183,6 +184,13 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
   late final MultiViewTiles _connections;
   late final FullscreenPlayback _fullscreen;
 
+  /// Channels on their way to a separate window ([_detach]), under keys of
+  /// their own (below 0, never a tile's): their connection still counts
+  /// from the moment their tile lets it go until the window is listed
+  /// ([detachedWindowsProvider]) or failed to open.
+  final _handovers = <int, _Handover>{};
+  int _nextHandover = -1;
+
   /// The split screen reported as fullscreen playback and whose tiles are
   /// in the connection budget: a closing one never undoes what one opened
   /// meanwhile reported.
@@ -217,6 +225,10 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
         )..addListener(_onTileChanged),
     ];
     _configureTiles();
+    ref.listenManual<List<DetachedViewer>>(
+      detachedWindowsProvider,
+      (_, windows) => _onWindows(windows),
+    );
     _lifecycle = AppLifecycleListener(onStateChange: _onLifecycle);
     _onlineSub = ref.read(playerOnlineProvider)?.listen(_setOnline);
     if (widget.fullscreen) _setWindowFullscreen(true);
@@ -291,14 +303,25 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     _rebuild();
   }
 
-  /// Tells the connection budget which tiles hold a connection. Once
+  /// Tells the connection budget which tiles hold a connection, and the
+  /// channels on their way to a separate window ([_handovers]). Once
   /// closing, [_release] has emptied it.
   void _syncConnections() {
     if (_closing || !identical(_owner, this)) return;
     _connections.set({
       for (final t in _slots)
         if (t.holdsConnection) t.id: t.channel!.sourceId,
+      for (final MapEntry(:key, value: h) in _handovers.entries)
+        key: h.sourceId,
     });
+  }
+
+  /// The separate window a channel was handed over to is listed: it counts
+  /// the connection from now on.
+  void _onWindows(List<DetachedViewer> windows) {
+    final before = _handovers.length;
+    _handovers.removeWhere((_, h) => h.listedIn(windows));
+    if (_handovers.length != before) _syncConnections();
   }
 
   /// Only the active tile is heard (unless muted); the others use the Lite
@@ -442,7 +465,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
           ? -1
           : _slots.indexWhere((t) => t.id == tiles.first);
       if (slot >= 0) return l10n.multiviewInUseTile(source, slot + 1);
-      if (budget.viewersOn(sourceId).isNotEmpty) {
+      if (_windowsOn(budget, sourceId) > 0) {
         return l10n.multiviewInUseWindow(source);
       }
     }
@@ -463,7 +486,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
       for (final id in budget.tilesOn(sourceId))
         _slots.indexWhere((t) => t.id == id),
     ].where((slot) => slot >= 0).toList()..sort();
-    final windows = budget.viewersOn(sourceId).length;
+    final windows = _windowsOn(budget, sourceId);
     final places = [
       for (final slot in slots) l10n.multiviewPlaceTile(slot + 1),
       if (windows > 0) l10n.multiviewPlaceWindows(windows),
@@ -474,6 +497,12 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
       places.last,
     );
   }
+
+  /// Separate windows using [budget]'s connections of [sourceId]: those
+  /// open and those a tile is handing its channel to ([_handovers]).
+  int _windowsOn(ConnectionBudget budget, int sourceId) =>
+      budget.viewersOn(sourceId).length +
+      budget.tilesOn(sourceId).where(_handovers.containsKey).length;
 
   Future<void> _showInUse(String message) async {
     final l10n = AppLocalizations.of(context);
@@ -520,7 +549,8 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
 
   /// Plays [tile]'s channel in a separate window ([DetachedWindows.detach])
   /// and empties the tile: its stream stops first, so a one-connection
-  /// account never has two open.
+  /// account never has two open. Its connection stays counted meanwhile
+  /// ([_handovers]): no tile takes it before the window has it.
   Future<void> _detach(MultiViewTile tile) async {
     final channel = tile.channel;
     if (!_desktop || _closing || channel == null) return;
@@ -565,21 +595,37 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     }
     log.info('Split screen: detaching tile ${tile.id}');
     if (identical(_maximized, tile)) setState(() => _maximized = null);
-    await tile.clear();
-    // Its next channel follows the sound as it is now (no longer muted).
-    if (mounted) _configureTiles();
+    // Counted from the moment the tile lets the connection go (clear tells
+    // the budget) while its stream stops, which can wait for an opening
+    // one to finish.
+    final key = _nextHandover--;
+    final handover = _Handover(channel.sourceId, channel.key);
+    _handovers[key] = handover;
     try {
-      await windows.detach(request);
-    } on ViewerLaunchException catch (e) {
-      if (e.closedOnPurpose) {
-        log.info('Split screen: the separate window was closed early');
-        return;
+      await tile.clear();
+      if (mounted) {
+        // Its next channel follows the sound as it is now (no longer
+        // muted).
+        _configureTiles();
+        handover.windowsBefore = {
+          for (final w in ref.read(detachedWindowsProvider)) w.id,
+        };
       }
-      log.warn('Split screen: the separate window failed: $e');
-      failed();
-    } on Object catch (e) {
-      log.warn('Split screen: the separate window failed: $e');
-      failed();
+      try {
+        await windows.detach(request);
+      } on ViewerLaunchException catch (e) {
+        if (e.closedOnPurpose) {
+          log.info('Split screen: the separate window was closed early');
+          return;
+        }
+        log.warn('Split screen: the separate window failed: $e');
+        failed();
+      } on Object catch (e) {
+        log.warn('Split screen: the separate window failed: $e');
+        failed();
+      }
+    } finally {
+      if (_handovers.remove(key) != null) _syncConnections();
     }
   }
 
@@ -1208,6 +1254,30 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
         ),
       ),
     );
+  }
+}
+
+/// A tile's channel on its way to a separate window
+/// ([_MultiViewScreenState._detach]).
+class _Handover {
+  _Handover(this.sourceId, this.channelKey);
+
+  final int sourceId;
+  final String channelKey;
+
+  /// The windows listed when the window was asked for; null before.
+  Set<int>? windowsBefore;
+
+  /// Whether [windows] lists the window asked for.
+  bool listedIn(List<DetachedViewer> windows) {
+    final before = windowsBefore;
+    return before != null &&
+        windows.any(
+          (w) =>
+              !before.contains(w.id) &&
+              w.sourceId == sourceId &&
+              w.channelKey == channelKey,
+        );
   }
 }
 

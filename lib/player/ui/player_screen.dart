@@ -89,7 +89,8 @@ enum PlayerAction {
 ///   window of their own ([DetachedWindows]): the player closes, and only
 ///   once its stream is stopped does the window open it. Split screen (S)
 ///   hands the channel over to the first tile of a [MultiViewScreen] the
-///   same way.
+///   same way. Tab never takes the keyboard away from the player, and a
+///   click gives it back should it have gone elsewhere.
 /// * Phones and desktop: the OSD's top bar has a Back button.
 class PlayerScreen extends ConsumerStatefulWidget {
   const PlayerScreen({super.key, required this.request});
@@ -775,6 +776,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       return KeyEventResult.handled;
     }
     if (_panelVisible) return _onPanelKey(event);
+    // Nothing on screen takes focus while the OSD and the cards are away:
+    // Tab (and Shift+Tab) would take it off the player, and none of its
+    // keys would work any more.
+    if (key == LogicalKeyboardKey.tab &&
+        _rootNode.hasPrimaryFocus &&
+        !_osdVisible &&
+        !_cardShown) {
+      return KeyEventResult.handled;
+    }
     if (key == LogicalKeyboardKey.keyD && _canDetach) {
       if (down) unawaited(_detach());
       return KeyEventResult.handled;
@@ -1594,8 +1604,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           ? MouseCursor.defer
           : SystemMouseCursors.none,
       onHover: (_) => _onMouseMoved(),
-      child: child,
+      child: Listener(onPointerDown: _onPointerDown, child: child),
     );
+  }
+
+  /// A click gives the keyboard back to the player, should focus have
+  /// gone elsewhere (the OSD, a card and the channel panel keep their own).
+  void _onPointerDown(PointerDownEvent _) {
+    if (_exiting || _rootNode.hasFocus) return;
+    _focusRoot();
   }
 
   /// Engine errors and stats on screen: source secrets masked and no URL

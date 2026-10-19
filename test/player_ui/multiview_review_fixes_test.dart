@@ -1,20 +1,23 @@
 // The split screen's review fixes: the sound of a tile emptied while
 // muted, the keyboard that never leaves the split screen (nor acts on it
-// under a message), double clicks on things that go away (the "no free
-// connection" message too), a maximized tile (its sound icon, the way back
-// to the grid, the layout), the picker's source row, Separate window on a
-// failed tile and the refusal of a subscription with more than one
-// connection. Synthetic data only.
+// under a message) or the desktop player (its S key), double clicks on
+// things that go away (the "no free connection" message too), a maximized
+// tile (its sound icon, the way back to the grid, the layout), the
+// picker's source row, Separate window on a failed tile or on one still
+// opening (its connection stays counted), and the refusal of a
+// subscription with more than one connection. Synthetic data only.
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
+import 'package:iptv_player/player/connection_budget.dart';
 import 'package:iptv_player/player/detach/detached_windows.dart';
 import 'package:iptv_player/player/multiview/multiview_screen.dart';
 import 'package:iptv_player/sources/models.dart';
 
 import '../support/fake_engine.dart';
+import 'support/fake_detached_windows.dart';
 import 'support/multiview_harness.dart';
 import 'support/player_harness.dart';
 
@@ -219,6 +222,81 @@ void main() {
       await press(tester, LogicalKeyboardKey.keyL);
       expect(slot(3), findsOneWidget);
       expect(sport.count('stop'), 0);
+      await disposeRig(tester, rig);
+    });
+  });
+
+  group('the keyboard stays with the desktop player (its S key)', () {
+    testWidgets('Tab and Shift+Tab: S still opens the split screen', (
+      tester,
+    ) async {
+      final rig = PlayerRig()..autoPlay();
+      final id = await seedLive(rig);
+      await pumpSplitApp(tester, rig);
+      await openPlayerFor(tester, liveRequest(id));
+      expect(focusLabel, 'player');
+
+      await press(tester, LogicalKeyboardKey.tab);
+      expect(focusLabel, 'player');
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await press(tester, LogicalKeyboardKey.tab);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      expect(focusLabel, 'player');
+      await press(tester, LogicalKeyboardKey.keyS);
+      await settleSplit(tester);
+      expect(find.byType(MultiViewScreen), findsOneWidget);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('after Tab, Escape in fullscreen leaves fullscreen only; '
+        'the player stays', (tester) async {
+      final rig = PlayerRig()..autoPlay();
+      final id = await seedLive(rig);
+      await pumpSplitApp(tester, rig);
+      final closed = await openPlayerFor(tester, liveRequest(id));
+      var done = false;
+      ignore(closed.then((_) => done = true));
+      expect(rig.window, ['enter']);
+
+      await press(tester, LogicalKeyboardKey.tab);
+      await press(tester, LogicalKeyboardKey.escape);
+      expect(rig.window, ['enter', 'exit']);
+      expect(done, isFalse);
+      expect(rig.engines.created.single.count('stop'), 0);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('focus taken away: a click on the video gives the keys back', (
+      tester,
+    ) async {
+      final rig = PlayerRig()..autoPlay();
+      final id = await seedLive(rig);
+      await pumpSplitApp(tester, rig);
+      await openPlayerFor(tester, liveRequest(id));
+      FocusManager.instance.primaryFocus!.unfocus();
+      await tester.pump();
+      expect(focusLabel, isNot('player'));
+
+      await click(tester, find.byKey(const ValueKey('player-gestures')));
+      expect(focusLabel, 'player');
+      await press(tester, LogicalKeyboardKey.keyS);
+      await settleSplit(tester);
+      expect(find.byType(MultiViewScreen), findsOneWidget);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('the OSD opened with a key: Tab still moves between its '
+        'buttons', (tester) async {
+      final rig = PlayerRig()..autoPlay();
+      final id = await seedLive(rig);
+      await pumpSplitApp(tester, rig);
+      await openPlayerFor(tester, liveRequest(id));
+      await press(tester, LogicalKeyboardKey.arrowLeft);
+      expect(focusLabel, 'player:osd-first');
+
+      await press(tester, LogicalKeyboardKey.tab);
+      expect(focusLabel, isNot('player:osd-first'));
+      expect(focusedIn(const ValueKey('player-osd')), isTrue);
       await disposeRig(tester, rig);
     });
   });
@@ -766,4 +844,113 @@ void main() {
       });
     });
   });
+
+  group('D on a tile still opening its stream', () {
+    /// Tile 1 plays Panel News (Xtream, one connection), whose open takes
+    /// 6 s: its stop waits for it. Free 1 is in tile 2. Returns the Xtream
+    /// source.
+    Future<int> slowNewsInTile1(
+      WidgetTester tester,
+      PlayerRig rig,
+      RecordingDetachedWindows windows,
+    ) async {
+      rig.engines.onCreate = (e) => e.onOpen = (e, r) async {
+        if (r.url.contains('/501.')) {
+          await Future<void>.delayed(const Duration(seconds: 6));
+        }
+        e.emitFirstFrame();
+      };
+      final xtream = await seedXtream(rig);
+      final free = await seedFree(rig);
+      await pumpPlayerApp(
+        tester,
+        rig,
+        tv: false,
+        platform: TargetPlatform.windows,
+        overrides: [detachedWindowsProvider.overrideWith(() => windows)],
+      );
+      await openSplit(tester, freeRequest(free, 'f1'));
+      await press(tester, LogicalKeyboardKey.keyC);
+      await openedPicker(tester);
+      await pickChannel(tester, 'Panel News', sourceId: xtream);
+      expect(
+        containerOf(tester).read(connectionBudgetProvider).fits(xtream),
+        isFalse,
+      );
+      return xtream;
+    }
+
+    testWidgets('its connection stays counted until the window has it: the '
+        'same subscription in another tile is refused', (tester) async {
+      final rig = PlayerRig();
+      final windows = _ListingWindows(rig);
+      final xtream = await slowNewsInTile1(tester, rig, windows);
+      final l10n = await AppLocalizations.delegate.load(en);
+      final container = containerOf(tester);
+
+      await press(tester, LogicalKeyboardKey.keyD);
+      expect(windows.detached, isEmpty);
+      expect(container.read(connectionBudgetProvider).usedOn(xtream), 1);
+      await tester.tap(inSlot(1, find.byKey(const ValueKey('multiview-add'))));
+      await openedPicker(tester);
+      await pickChannel(tester, 'Panel Sport', sourceId: xtream);
+      expect(find.text(l10n.multiviewInUseWindow('Panel')), findsOneWidget);
+      await press(tester, LogicalKeyboardKey.enter);
+      await press(tester, LogicalKeyboardKey.escape);
+
+      // The stop is done and the window listed: it holds the connection,
+      // once.
+      await tester.pump(const Duration(seconds: 7));
+      await settleSplit(tester);
+      expect(windows.detached.single.channelKey, '501');
+      final budget = container.read(connectionBudgetProvider);
+      expect(budget.usedOn(xtream), 1);
+      expect(budget.viewersOn(xtream), hasLength(1));
+      expect(rig.openedUrls.where((u) => u.contains('/502.')), isEmpty);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('the window fails to open: the connection is free again', (
+      tester,
+    ) async {
+      final rig = PlayerRig();
+      final windows = RecordingDetachedWindows(rig)..fail = true;
+      final xtream = await slowNewsInTile1(tester, rig, windows);
+      final container = containerOf(tester);
+
+      await press(tester, LogicalKeyboardKey.keyD);
+      await tester.pump(const Duration(seconds: 7));
+      await settleSplit(tester);
+      expect(windows.detached.single.channelKey, '501');
+      expect(container.read(connectionBudgetProvider).usedOn(xtream), 0);
+
+      await addChannel(tester, 1, 'Panel Sport', sourceId: xtream);
+      expect(find.byKey(_inUse), findsNothing);
+      expect(rig.openedUrls.where((u) => u.contains('/502.')), hasLength(1));
+      await disposeRig(tester, rig);
+    });
+  });
+}
+
+/// Separate windows listed as soon as they are asked for, as
+/// [DetachedWindows.detach] does once its server is up.
+class _ListingWindows extends RecordingDetachedWindows {
+  _ListingWindows(super.rig);
+
+  @override
+  Future<int> detach(DetachRequest request) async {
+    final id = await super.detach(request);
+    state = [
+      ...state,
+      DetachedViewer(
+        id: id,
+        sourceId: request.sourceId,
+        channelKey: request.channelKey,
+        title: request.title,
+        maxConnections: request.maxConnections,
+        status: ViewerStatus.playing,
+      ),
+    ];
+    return id;
+  }
 }
