@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/home_shell.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../../theme/tokens.dart';
+import '../../tv/key_repeat.dart' show arrowDirection;
 import '../../widgets/dialog_click_guard.dart';
 import '../connection_budget.dart';
 import '../detach/detached_windows.dart';
@@ -161,6 +163,7 @@ class _StopsWaitDialog extends StatefulWidget {
 
 class _StopsWaitDialogState extends State<_StopsWaitDialog> {
   bool _closed = false;
+  final _cancelNode = FocusNode(debugLabel: 'player-wait-stops-cancel');
 
   @override
   void initState() {
@@ -177,7 +180,17 @@ class _StopsWaitDialogState extends State<_StopsWaitDialog> {
   @override
   void dispose() {
     widget.wait._close = null;
+    _cancelNode.dispose();
     super.dispose();
+  }
+
+  /// Any arrow on the message goes to Cancel, the dialog's only control.
+  KeyEventResult _onMessageKey(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent || arrowDirection(event.logicalKey) == null) {
+      return KeyEventResult.ignored;
+    }
+    _cancelNode.requestFocus();
+    return KeyEventResult.handled;
   }
 
   void _close(bool go) {
@@ -203,10 +216,12 @@ class _StopsWaitDialogState extends State<_StopsWaitDialog> {
       title: Text(l10n.playerWaitStopsTitle),
       // Focus starts on the message, not on Cancel: OK pressed again on the
       // remote or keyboard (as for the channel) leaves the wait alone.
-      // Back cancels; the arrows reach Cancel.
+      // Back cancels; any arrow reaches Cancel, and none comes back.
       content: Focus(
         key: const ValueKey('player-wait-stops-message'),
         autofocus: true,
+        skipTraversal: true,
+        onKeyEvent: _onMessageKey,
         child: SizedBox(
           width: 360,
           child: Row(
@@ -229,6 +244,7 @@ class _StopsWaitDialogState extends State<_StopsWaitDialog> {
       actions: [
         TextButton(
           key: const ValueKey('player-wait-stops-cancel'),
+          focusNode: _cancelNode,
           onPressed: () => _close(false),
           child: Text(l10n.commonCancel),
         ),

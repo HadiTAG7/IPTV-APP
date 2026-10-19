@@ -9,12 +9,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/app/providers.dart';
+import 'package:iptv_player/player/connection_budget.dart';
 import 'package:iptv_player/player/ui/player_route.dart';
 import 'package:iptv_player/player/ui/player_screen.dart';
 
 import 'support/player_harness.dart';
 
 const _wait = ValueKey('player-wait-stops');
+const _message = ValueKey('player-wait-stops-message');
+const _cancel = ValueKey('player-wait-stops-cancel');
 
 /// Panel Sport, slow to open, is left with Escape while it still opens: its
 /// stream keeps the connection for seconds (mpv's dispose stops it once the
@@ -192,4 +195,54 @@ void main() {
     expect(_newsOpens(rig), 0);
     await _end(tester, rig);
   });
+
+  for (final locale in [en, ar]) {
+    for (final arrow in [
+      LogicalKeyboardKey.arrowLeft,
+      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowUp,
+    ]) {
+      testWidgets('${locale.languageCode} TV: ${arrow.debugName} on the '
+          'message reaches Cancel, and Up does not leave it', (tester) async {
+        final rig = PlayerRig()..autoPlay();
+        final xtream = await seedXtream(rig);
+        await pumpPlayerApp(tester, rig, tv: true, locale: locale);
+        final container = ProviderScope.containerOf(
+          tester.element(find.byKey(launcherKey)),
+        );
+        container.listen(sourcesProvider, (_, _) {}, fireImmediately: true);
+        for (var i = 0; i < 100; i++) {
+          if (container.read(sourcesProvider).hasValue) break;
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)),
+          );
+          await tester.pump();
+        }
+        // A stream of the subscription still stopping.
+        final stopped = Completer<void>();
+        container
+            .read(connectionDrainsProvider.notifier)
+            .add(xtream, stopped.future);
+        unawaited(
+          openPlayer(
+            tester.element(find.byKey(launcherKey)),
+            xtreamRequest(xtream, '501'),
+          ),
+        );
+        await settle(tester);
+        expect(focusedIn(_message), isTrue);
+
+        await press(tester, arrow);
+        expect(focusedIn(_cancel), isTrue);
+        await press(tester, LogicalKeyboardKey.arrowUp);
+        expect(focusedIn(_cancel), isTrue);
+
+        stopped.complete();
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump(const Duration(seconds: 10));
+        await rig.db.close();
+      });
+    }
+  }
 }
