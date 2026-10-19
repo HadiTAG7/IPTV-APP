@@ -415,6 +415,10 @@ class ExoEngine implements PlayerEngine {
     await _applyVolume();
   }
 
+  /// ExoPlayer keeps its own buffer sizes.
+  @override
+  Future<void> setLite(bool lite) async {}
+
   /// video_player has no mute: a muted controller plays at volume 0.
   Future<void> _applyVolume() async {
     final c = _controller.value;

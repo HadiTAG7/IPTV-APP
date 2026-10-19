@@ -2,13 +2,15 @@
 //
 // One [PlaybackController] lives in [playbackControllerProvider] while a
 // player screen watches it and is disposed (closing its engine and stream)
-// once the screen is gone. Engines come from [playerEngineFactoryProvider]
+// once the screen is gone. The split screen's tiles build their own with
+// [createPlaybackController]. Engines come from [playerEngineFactoryProvider]
 // with the current Settings; tests override [engineFactoryBuilderProvider]
 // with fake engines.
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../app/providers.dart';
@@ -129,9 +131,44 @@ final onChannelPlayedProvider = Provider<ChannelPlayedCallback>((ref) {
 
 /// Keeps the screen on while something plays ([WakelockPlus]); failures
 /// (no plugin, desktop without a session bus) are logged and ignored.
+/// Players report through [playerWakelockHoldsProvider], which turns it on
+/// for the first one that plays and off after the last one stops.
 final playerWakelockProvider = Provider<ValueChanged<bool>>(
   (ref) => playerWakelock(ref.watch(ringLogProvider)),
   name: 'playerWakelockProvider',
+);
+
+/// The screen wakelock shared by everything that plays in the app's window
+/// (the player, every split-screen tile): it stays on while any of them
+/// asks for it, so one tile going idle never turns it off for the others.
+class WakelockHolds {
+  WakelockHolds(this._toggle);
+
+  final ValueChanged<bool> _toggle;
+  int _held = 0;
+
+  /// Whether a holder asks for the wakelock now.
+  bool get isOn => _held > 0;
+
+  /// A new holder's switch (a [PlaybackController.onWakelockChanged]):
+  /// repeated values are ignored. A holder going away switches off first
+  /// (a disposed controller does).
+  ValueChanged<bool> holder() {
+    var on = false;
+    return (value) {
+      if (value == on) return;
+      on = value;
+      _held += value ? 1 : -1;
+      if (value && _held == 1) _toggle(true);
+      if (!value && _held == 0) _toggle(false);
+    };
+  }
+}
+
+/// The app window's [WakelockHolds] over [playerWakelockProvider].
+final playerWakelockHoldsProvider = Provider<WakelockHolds>(
+  (ref) => WakelockHolds(ref.watch(playerWakelockProvider)),
+  name: 'playerWakelockHoldsProvider',
 );
 
 /// Turns the screen wakelock on or off ([WakelockPlus]), logging failures
@@ -185,44 +222,64 @@ final playerOnlineProvider = Provider<Stream<bool>?>(
 
 /// The app's [PlaybackController]. It exists while a player screen watches
 /// it; the last listener going away disposes it, which disposes its engine
-/// and closes the connection.
+/// and closes the connection. Built by [createPlaybackController].
+final playbackControllerProvider = Provider.autoDispose<PlaybackController>((
+  ref,
+) {
+  final controller = createPlaybackController(
+    read: ref.read,
+    mounted: () => ref.mounted,
+  );
+  ref.onDispose(controller.dispose);
+  return controller;
+}, name: 'playbackControllerProvider');
+
+/// Reads a provider: `Ref.read` in providers, `WidgetRef.read` in widgets.
+typedef ProviderReader = T Function<T>(ProviderListenable<T> provider);
+
+/// A [PlaybackController] wired like the app's player; the caller owns and
+/// disposes it ([playbackControllerProvider], the split screen's tiles).
 ///
-/// * Engines come from [playerEngineFactoryProvider], read when each engine
-///   is created so Settings changes apply to the next one.
+/// * Engines come from [engines] (default: [playerEngineFactoryProvider]),
+///   read when each engine is created so Settings changes apply to the
+///   next one; once [mounted] is false the first one read is used.
 /// * The policy input combines the device, the source's engine overrides
 ///   and the Settings ([enginePolicyInputFor]).
 /// * Learned engine choices go to `channel_prefs` and VOD progress to
 ///   `watch_progress`; item keys are [PlayerItemKey]s.
-final playbackControllerProvider = Provider.autoDispose<PlaybackController>((
-  ref,
-) {
-  final db = ref.read(databaseProvider);
-  final log = ref.read(ringLogProvider);
+/// * The wakelock is one holder of [playerWakelockHoldsProvider].
+PlaybackController createPlaybackController({
+  required ProviderReader read,
+  required bool Function() mounted,
+  EngineFactory Function()? engines,
+}) {
+  final db = read(databaseProvider);
+  final log = read(ringLogProvider);
   late final PlaybackController controller;
 
   EnginePolicyInput policyInput() {
     final item = PlayerItemKey.tryDecode(controller.itemKey);
-    final sources = ref.mounted
-        ? ref.read(sourcesProvider).value ?? const <SourceView>[]
+    final sources = mounted()
+        ? read(sourcesProvider).value ?? const <SourceView>[]
         : const <SourceView>[];
     return enginePolicyInputFor(
-      caps: ref.read(deviceCapsProvider),
-      platform: ref.read(targetPlatformProvider),
-      settings: ref.read(settingsProvider),
+      caps: read(deviceCapsProvider),
+      platform: read(targetPlatformProvider),
+      settings: read(settingsProvider),
       source: item == null
           ? null
           : sources.where((s) => s.id == item.sourceId).firstOrNull,
     );
   }
 
-  final fallbackFactory = ref.read(playerEngineFactoryProvider);
+  final engineFactory = engines ?? () => read(playerEngineFactoryProvider);
+  final fallbackFactory = engineFactory();
   controller = PlaybackController(
-    factory: (kind) => ref.mounted
-        ? ref.read(playerEngineFactoryProvider)(kind)
-        : fallbackFactory(kind),
+    factory: (kind) =>
+        mounted() ? engineFactory()(kind) : fallbackFactory(kind),
     policyInput: policyInput,
-    clock: ref.read(clockProvider),
-    onWakelockChanged: ref.read(playerWakelockProvider),
+    clock: read(clockProvider),
+    onWakelockChanged: read(playerWakelockHoldsProvider).holder(),
     onEnginePreferenceLearned: (itemKey, kind) {
       final item = PlayerItemKey.tryDecode(itemKey);
       if (item == null) return;
@@ -249,9 +306,8 @@ final playbackControllerProvider = Provider.autoDispose<PlaybackController>((
       }
     },
   );
-  ref.onDispose(controller.dispose);
   return controller;
-}, name: 'playbackControllerProvider');
+}
 
 /// A source opened for playback: its row (account limits, kind), an adapter
 /// for `resolve` and the credential strings to mask in reports.

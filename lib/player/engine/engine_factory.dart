@@ -36,6 +36,14 @@ class EngineOptions {
   /// Subtitle language order for mpv when it differs from the audio one;
   /// null uses [preferredLanguages].
   final List<String>? subtitleLanguages;
+
+  EngineOptions copyWith({bool? lite}) => EngineOptions(
+    lite: lite ?? this.lite,
+    hardwareDecoding: hardwareDecoding,
+    exoViewType: exoViewType,
+    preferredLanguages: preferredLanguages,
+    subtitleLanguages: subtitleLanguages,
+  );
 }
 
 /// The production factory: ExoPlayer via `video_player`, mpv via media_kit.

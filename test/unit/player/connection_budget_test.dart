@@ -39,6 +39,7 @@ DetachedViewer _window(
 
 const _viewer = ConnectionHolder.viewer;
 const _player = ConnectionHolder.player;
+const _tile = ConnectionHolder.tile;
 
 void main() {
   group('ConnectionBudget', () {
@@ -96,6 +97,27 @@ void main() {
         expect(budget.freeOn(1), isNull);
         expect(budget.fits(1), isTrue);
       }
+    });
+
+    test('split-screen tiles count; a budget without one of them', () {
+      const budget = ConnectionBudget(
+        limits: {1: 1},
+        uses: [ConnectionUse(sourceId: 1, holder: _tile, tileId: 2)],
+      );
+      expect(budget.fits(1), isFalse);
+      expect(budget.tilesOn(1), [2]);
+      expect(budget.viewersOn(1), isEmpty);
+      expect(budget.usedOn(1, holder: _tile), 1);
+      expect(budget.without(tileId: 2).fits(1), isTrue);
+      expect(budget.without(tileId: 3).fits(1), isFalse);
+      // A window id never drops a tile, nor a tile id a window.
+      expect(budget.without(viewerId: 2).fits(1), isFalse);
+      const window = ConnectionBudget(
+        limits: {1: 1},
+        uses: [ConnectionUse(sourceId: 1, holder: _viewer, viewerId: 2)],
+      );
+      expect(window.without(tileId: 2).fits(1), isFalse);
+      expect(window.without(viewerId: 2).fits(1), isTrue);
     });
 
     test('sources count separately', () {
@@ -193,6 +215,18 @@ void main() {
       expect(budget().usedOn(xtream, holder: _player), 1);
       expect(connectionFits(container, xtream), isFalse);
       container.read(mainPlayerSourceProvider.notifier).set(null);
+      expect(connectionFits(container, xtream), isTrue);
+    });
+
+    test('split-screen tiles count too, until the screen clears them', () {
+      final tiles = container.read(multiViewTilesProvider.notifier)
+        ..set({0: xtream, 1: m3u});
+      expect(budget().tilesOn(xtream), [0]);
+      expect(budget().usedOn(xtream, holder: _tile), 1);
+      expect(connectionFits(container, xtream), isFalse);
+      expect(connectionFits(container, m3u), isTrue);
+      tiles.set(const {});
+      expect(budget().tilesOn(xtream), isEmpty);
       expect(connectionFits(container, xtream), isTrue);
     });
 

@@ -266,7 +266,7 @@ class MpvEngine implements PlayerEngine {
 
   MpvEngine._(
     this._lease, {
-    required this.lite,
+    required this._lite,
     required this.hardwareDecoding,
     required this.preferredLanguages,
     this.subtitleLanguages,
@@ -277,8 +277,10 @@ class MpvEngine implements PlayerEngine {
     _listen();
   }
 
-  /// Smaller demuxer cache for low-RAM devices.
-  final bool lite;
+  /// Smaller demuxer cache for low-RAM devices (and split-screen tiles
+  /// without sound, [setLite]).
+  bool get lite => _lite;
+  bool _lite;
   final bool hardwareDecoding;
   final List<String> preferredLanguages;
 
@@ -500,7 +502,24 @@ class MpvEngine implements PlayerEngine {
     }
   }
 
-  int get _cacheBytes => (lite ? 32 : 64) * _mib;
+  int get _cacheBytes => (_lite ? 32 : 64) * _mib;
+
+  /// Sizes the demuxer cache at once while a stream is open (mpv applies
+  /// it on the fly), else from the next open ([_configure]).
+  @override
+  Future<void> setLite(bool lite) async {
+    if (_disposed || lite == _lite) return;
+    _lite = lite;
+    final native = _player.platform;
+    if (!_active || native is! NativePlayer) return;
+    for (final name in const ['demuxer-max-bytes', 'demuxer-max-back-bytes']) {
+      try {
+        await native.setProperty(name, '$_cacheBytes');
+      } catch (_) {
+        // Player torn down.
+      }
+    }
+  }
 
   @override
   Future<void> play() async {
@@ -649,7 +668,7 @@ class MpvEngine implements PlayerEngine {
     return {
       'engine': 'mpv',
       'hwdec': hwdec,
-      'cache': '${lite ? 32 : 64} MB',
+      'cache': '${_lite ? 32 : 64} MB',
       if ((_width ?? 0) > 0 && (_height ?? 0) > 0)
         'resolution': '${_width}x$_height',
       if (video?.codec != null) 'video': video!.codec!,

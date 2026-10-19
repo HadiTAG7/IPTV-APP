@@ -1100,6 +1100,78 @@ abstract class AppLocalizations {
   /// **'The subscription\'s connection is in use in another separate window.'**
   String get viewerInUseOtherWindow;
 
+  /// Desktop player OSD button, options entry and title of the split screen: watch 2 or 4 live channels at once in tiles of the app's window.
+  ///
+  /// In en, this message translates to:
+  /// **'Split screen'**
+  String get playerSplitScreen;
+
+  /// Split screen: the big button of an empty tile, and the title of the channel picker for it.
+  ///
+  /// In en, this message translates to:
+  /// **'Add channel'**
+  String get multiviewAddChannel;
+
+  /// Split screen: tile button (and channel picker title) that plays another channel in the tile.
+  ///
+  /// In en, this message translates to:
+  /// **'Change channel'**
+  String get multiviewChangeChannel;
+
+  /// Split screen: tile button that stops the tile's channel and empties the tile.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove channel'**
+  String get multiviewRemoveChannel;
+
+  /// Split screen layout button: two tiles side by side.
+  ///
+  /// In en, this message translates to:
+  /// **'2 channels'**
+  String get multiviewTwoChannels;
+
+  /// Split screen layout button: four tiles, two by two.
+  ///
+  /// In en, this message translates to:
+  /// **'4 channels'**
+  String get multiviewFourChannels;
+
+  /// Split screen channel picker: label of the row of the user's sources (subscriptions and playlists) to pick a channel from.
+  ///
+  /// In en, this message translates to:
+  /// **'Source'**
+  String get multiviewSource;
+
+  /// Split screen: spoken name of a tile's number badge.
+  ///
+  /// In en, this message translates to:
+  /// **'Tile {tile}'**
+  String multiviewTile(int tile);
+
+  /// Split screen: title of the message shown when a channel can't play because its subscription's connections are all in use.
+  ///
+  /// In en, this message translates to:
+  /// **'No free connection'**
+  String get multiviewNoConnectionTitle;
+
+  /// Split screen: a channel can't play in a tile because its one-connection subscription is used by another tile (numbered as on screen).
+  ///
+  /// In en, this message translates to:
+  /// **'Subscription “⁨{source}⁩” allows one connection, and it is in use in tile {tile}. Choose a channel from another source, or upgrade your subscription.'**
+  String multiviewInUseTile(String source, int tile);
+
+  /// Split screen: a channel can't play in a tile because its one-connection subscription is used by a separate player window.
+  ///
+  /// In en, this message translates to:
+  /// **'Subscription “⁨{source}⁩” allows one connection, and it is in use in a separate window. Choose a channel from another source, or upgrade your subscription.'**
+  String multiviewInUseWindow(String source);
+
+  /// Split screen: a channel can't play in a tile because all the connections its subscription allows are in use (tiles and separate windows).
+  ///
+  /// In en, this message translates to:
+  /// **'Subscription “⁨{source}⁩” allows {limit} connections, and all of them are in use. Choose a channel from another source, or upgrade your subscription.'**
+  String multiviewInUseMany(String source, int limit);
+
   /// No description provided for @playerLive.
   ///
   /// In en, this message translates to:

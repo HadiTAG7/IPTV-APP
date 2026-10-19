@@ -204,6 +204,32 @@ void main() {
       await app.windows.close(id);
     });
 
+    test('Retry while a split-screen tile holds the one connection is '
+        'refused as the main window', () async {
+      final app = _App();
+      final (id, p) = await app.failedWindow();
+      app.container.read(multiViewTilesProvider.notifier).set({0: 7});
+
+      p.send(const RetryMessage());
+      await until(() => p.received.length == 2);
+      expect(
+        p.received.last,
+        isA<InUseMessage>().having(
+          (m) => m.by,
+          'by',
+          ConnectionInUseBy.mainWindow,
+        ),
+      );
+      expect(app.window(id).status, ViewerStatus.failed);
+
+      // The split screen closed: Retry plays again.
+      app.container.read(multiViewTilesProvider.notifier).set(const {});
+      p.send(const RetryMessage());
+      await until(() => p.received.length == 3);
+      expect(p.received.last, isA<PlayMessage>());
+      await app.windows.close(id);
+    });
+
     test(
       'Retry while another window holds the one connection is refused',
       () async {

@@ -623,6 +623,50 @@ class AppLocalizationsAr extends AppLocalizations {
       'اتصال الاشتراك مستخدم في نافذة منفصلة أخرى.';
 
   @override
+  String get playerSplitScreen => 'تقسيم الشاشة';
+
+  @override
+  String get multiviewAddChannel => 'أضف قناة';
+
+  @override
+  String get multiviewChangeChannel => 'غيّر القناة';
+
+  @override
+  String get multiviewRemoveChannel => 'أزل القناة';
+
+  @override
+  String get multiviewTwoChannels => 'قناتان';
+
+  @override
+  String get multiviewFourChannels => '4 قنوات';
+
+  @override
+  String get multiviewSource => 'المصدر';
+
+  @override
+  String multiviewTile(int tile) {
+    return 'الخانة $tile';
+  }
+
+  @override
+  String get multiviewNoConnectionTitle => 'لا يوجد اتصال متاح';
+
+  @override
+  String multiviewInUseTile(String source, int tile) {
+    return 'اشتراك «⁨$source⁩» يسمح باتصال واحد فقط، وهو مستخدم الآن في الخانة $tile. اختر قناة من مصدر آخر، أو قم بترقية اشتراكك.';
+  }
+
+  @override
+  String multiviewInUseWindow(String source) {
+    return 'اشتراك «⁨$source⁩» يسمح باتصال واحد فقط، وهو مستخدم الآن في نافذة منفصلة. اختر قناة من مصدر آخر، أو قم بترقية اشتراكك.';
+  }
+
+  @override
+  String multiviewInUseMany(String source, int limit) {
+    return 'عدد الاتصالات المسموح بها في اشتراك «⁨$source⁩» هو $limit، وكلها مستخدمة الآن. اختر قناة من مصدر آخر، أو قم بترقية اشتراكك.';
+  }
+
+  @override
   String get playerLive => 'مباشر';
 
   @override
