@@ -1,10 +1,9 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart'
     show defaultEnterNativeFullscreen, defaultExitNativeFullscreen;
 
-/// The Windows runner's window channel (`windows/runner/flutter_window.cpp`).
-@visibleForTesting
+/// The Windows runner's window channel (`windows/runner/flutter_window.cpp`),
+/// also used by the detached player windows (`window_controls.dart`).
 const windowsWindowChannel = MethodChannel('iptv_player/window');
 
 /// True fullscreen for the desktop app window: no title bar, covering the

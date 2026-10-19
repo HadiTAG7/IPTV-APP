@@ -473,7 +473,7 @@ class PlayerFailureCard extends StatelessWidget {
     required this.message,
     required this.retryNode,
     required this.onRetry,
-    required this.onCopyReport,
+    this.onCopyReport,
     this.details,
     this.onTryOtherFormat,
   });
@@ -483,7 +483,9 @@ class PlayerFailureCard extends StatelessWidget {
   final FocusNode retryNode;
   final VoidCallback onRetry;
   final VoidCallback? onTryOtherFormat;
-  final VoidCallback onCopyReport;
+
+  /// Copies the playback report; null hides the button.
+  final VoidCallback? onCopyReport;
 
   @override
   Widget build(BuildContext context) {
@@ -491,6 +493,7 @@ class PlayerFailureCard extends StatelessWidget {
     final theme = Theme.of(context);
     final details = this.details;
     final other = onTryOtherFormat;
+    final copy = onCopyReport;
     return PlayerPanel(
       key: const ValueKey('player-failure'),
       padding: const EdgeInsets.all(Spacing.xl),
@@ -538,12 +541,13 @@ class PlayerFailureCard extends StatelessWidget {
                   label: l10n.playerTryOtherFormat,
                   onSelect: other,
                 ),
-              PlayerCardButton(
-                key: const ValueKey('player-copy-report'),
-                icon: Icons.copy_all_outlined,
-                label: l10n.playerCopyReport,
-                onSelect: onCopyReport,
-              ),
+              if (copy != null)
+                PlayerCardButton(
+                  key: const ValueKey('player-copy-report'),
+                  icon: Icons.copy_all_outlined,
+                  label: l10n.playerCopyReport,
+                  onSelect: copy,
+                ),
             ],
           ),
         ],

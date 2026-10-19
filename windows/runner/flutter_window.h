@@ -7,6 +7,7 @@
 #include <flutter/method_channel.h>
 
 #include <memory>
+#include <string>
 
 #include "win32_window.h"
 
@@ -31,6 +32,16 @@ class FlutterWindow : public Win32Window {
   void EnterFullscreen();
   void ExitFullscreen();
 
+  // A detached player window (lib/core/platform/window_controls.dart): kept
+  // on top of other windows, titled with the channel's name, or shrunk to a
+  // small always-on-top window in the corner of its monitor ("compact").
+  void SetAlwaysOnTop(bool always_on_top);
+  void SetTitle(const std::string& title);
+  void EnterCompact();
+  void ExitCompact();
+  // Applies the topmost state: on while compact or asked to stay on top.
+  void ApplyTopmost();
+
   // The project to run.
   flutter::DartProject project_;
 
@@ -49,6 +60,12 @@ class FlutterWindow : public Win32Window {
   // The monitor the window was on, and its work area then.
   HMONITOR monitor_before_fullscreen_ = nullptr;
   RECT work_area_before_fullscreen_ = {};
+
+  // SetAlwaysOnTop's choice; compact windows are on top regardless.
+  bool always_on_top_ = false;
+  // The window is compact; its placement before, restored by ExitCompact.
+  bool compact_ = false;
+  WINDOWPLACEMENT placement_before_compact_ = {};
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

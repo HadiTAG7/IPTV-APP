@@ -23,6 +23,8 @@ import '../../tv/dpad_shortcuts.dart';
 import '../../tv/focus_watchdog.dart';
 import '../../tv/key_repeat.dart';
 import '../../widgets/bidi_text.dart';
+import '../connection_budget.dart';
+import '../detach/detached_windows.dart';
 import '../engine/player_engine.dart';
 import '../player_providers.dart';
 import '../session/playback_controller.dart';
@@ -39,6 +41,9 @@ import 'seek_accumulator.dart';
 /// Actions of the OSD and the Menu-key options list.
 enum PlayerAction {
   channels,
+
+  /// Desktop live: plays the channel in a window of its own.
+  detach,
   audio,
   subtitles,
   aspect,
@@ -74,7 +79,9 @@ enum PlayerAction {
 ///   taskbar) while the player is open, unless the user last chose a
 ///   window; the fullscreen button, F, F11 and double clicks toggle it and
 ///   Escape leaves it. Moving the mouse shows the OSD; the cursor hides
-///   with it.
+///   with it. Live channels can be detached (Separate window, D) into a
+///   window of their own ([DetachedWindows]): the player closes, and only
+///   once its stream is stopped does the window open it.
 /// * Phones and desktop: the OSD's top bar has a Back button.
 class PlayerScreen extends ConsumerStatefulWidget {
   const PlayerScreen({super.key, required this.request});
@@ -164,6 +171,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   static Object? _fullscreenOwner;
   late final FullscreenPlayback _fullscreen;
 
+  /// The connection budget's record of this player, handed over the same
+  /// way.
+  late final MainPlayerSource _mainPlayer;
+
   /// The desktop window ([playerWindowProvider]); null on Android.
   WindowFullscreen? _window;
   bool _windowFullscreen = false;
@@ -205,10 +216,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     HardwareKeyboard.instance.addHandler(_onAnyKey);
     _onlineSub = ref.read(playerOnlineProvider)?.listen(_controller.setOnline);
     _fullscreen = ref.read(fullscreenPlaybackProvider.notifier);
+    _mainPlayer = ref.read(mainPlayerSourceProvider.notifier);
     _fullscreenOwner = this;
     // Not while the route is being built.
     scheduleMicrotask(() {
-      if (identical(_fullscreenOwner, this)) _fullscreen.set(true);
+      if (!identical(_fullscreenOwner, this)) return;
+      _fullscreen.set(true);
+      _mainPlayer.set(widget.request.sourceId);
     });
     _window = ref.read(playerWindowProvider);
     if (ref.read(playerOpensFullscreenProvider)) _setWindowFullscreen(true);
@@ -277,17 +291,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     super.dispose();
   }
 
-  /// Ends the fullscreen playback report while this player holds it;
-  /// [later] when the widget tree is being finalized (providers cannot
-  /// change then).
+  /// Ends the fullscreen playback report (and the player's place in the
+  /// connection budget) while this player holds it; [later] when the
+  /// widget tree is being finalized (providers cannot change then).
   void _releaseFullscreen({bool later = false}) {
     if (!identical(_fullscreenOwner, this)) return;
     _fullscreenOwner = null;
     final fullscreen = _fullscreen;
-    if (later) {
-      scheduleMicrotask(() => fullscreen.set(false));
-    } else {
+    final mainPlayer = _mainPlayer;
+    void release() {
       fullscreen.set(false);
+      mainPlayer.set(null);
+    }
+
+    if (later) {
+      scheduleMicrotask(release);
+    } else {
+      release();
     }
   }
 
@@ -754,6 +774,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       return KeyEventResult.handled;
     }
     if (_panelVisible) return _onPanelKey(event);
+    if (key == LogicalKeyboardKey.keyD && _canDetach) {
+      if (down) unawaited(_detach());
+      return KeyEventResult.handled;
+    }
     // Escape leaves window fullscreen (and the OSD) before it means Back.
     if (key == LogicalKeyboardKey.escape && _windowFullscreen) {
       if (down) {
@@ -984,7 +1008,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// controller stops first: during the exit transition a new player may
   /// already be using it.
   void _exit() {
-    if (_exiting) return;
+    final stopped = _beginExit();
+    if (stopped == null) return;
+    unawaited(stopped);
+    Navigator.of(context).pop();
+  }
+
+  /// Everything of [_exit] but closing the route. Returns when the stream
+  /// is stopped (its connection closed), or null when already exiting.
+  Future<void>? _beginExit() {
+    if (_exiting) return null;
     setState(() {
       _exiting = true;
       _panelVisible = false;
@@ -999,8 +1032,62 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _releaseOrientation();
     _releaseFullscreen();
     _setWindowFullscreen(false);
-    unawaited(_controller.stop());
-    Navigator.of(context).pop();
+    return _controller.stop();
+  }
+
+  /// Whether the channel can go to a window of its own: live, on desktop.
+  bool get _canDetach => _window != null && _session.isLive && !_exiting;
+
+  /// Plays the channel in a detached window ([DetachedWindows.detach]):
+  /// the player stops its stream and closes first, and only then does the
+  /// window open the same stream, so a one-connection account never has
+  /// two open. A snack bar tells when the window could not be opened.
+  Future<void> _detach() async {
+    if (!_canDetach) return;
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final log = ref.read(ringLogProvider);
+    void failed() {
+      messenger
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(l10n.playerDetachFailed)));
+    }
+
+    final s = _session;
+    final stream = _controller.request;
+    final source = s.source;
+    // Nothing resolved to hand over yet (or a zap is still on its way).
+    if (stream == null ||
+        source == null ||
+        s.error != null ||
+        _controller.itemKey != s.itemKey.encode()) {
+      failed();
+      return;
+    }
+    final request = DetachRequest(
+      sourceId: s.sourceId,
+      channelKey: s.request.item.key,
+      title: s.channel?.name ?? s.title ?? '',
+      logo: s.channel?.logo,
+      stream: stream,
+      maxConnections: source.maxConnections,
+      secrets: source.secrets,
+      locale: Localizations.localeOf(context).languageCode == 'ar'
+          ? 'ar'
+          : 'en',
+    );
+    final windows = ref.read(detachedWindowsProvider.notifier);
+    log.info('Player: detaching the channel');
+    final stopped = _beginExit();
+    if (stopped == null) return;
+    await stopped;
+    if (mounted) Navigator.of(context).pop();
+    try {
+      await windows.detach(request);
+    } on Object catch (e) {
+      log.warn('Player: the separate window failed: $e');
+      failed();
+    }
   }
 
   /// The Guide button and key: closes the player and shows the home
@@ -1038,6 +1125,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     switch (action) {
       case PlayerAction.channels:
         _openPanel();
+      case PlayerAction.detach:
+        await _detach();
       case PlayerAction.audio:
         await _pickAudio();
       case PlayerAction.subtitles:
@@ -1179,8 +1268,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (action != null && mounted) await _perform(action);
   }
 
+  /// The OSD's buttons and the options list, in order.
   List<PlayerAction> _actions() => [
     if (_session.isLive) PlayerAction.channels,
+    if (_canDetach) PlayerAction.detach,
     PlayerAction.audio,
     PlayerAction.subtitles,
     PlayerAction.aspect,
@@ -1193,6 +1284,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   String _label(AppLocalizations l10n, PlayerAction a) => switch (a) {
     PlayerAction.channels => l10n.playerChannels,
+    PlayerAction.detach => l10n.playerDetach,
     PlayerAction.audio => l10n.playerAudio,
     PlayerAction.subtitles => l10n.playerSubtitles,
     PlayerAction.aspect => l10n.playerAspectRatio,
@@ -1206,6 +1298,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   IconData _icon(PlayerAction a) => switch (a) {
     PlayerAction.channels => Icons.list,
+    PlayerAction.detach => Icons.open_in_new,
     PlayerAction.audio => Icons.audiotrack_outlined,
     PlayerAction.subtitles => Icons.subtitles_outlined,
     PlayerAction.aspect => Icons.aspect_ratio,
@@ -1544,17 +1637,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     required bool topBar,
   }) {
     final s = _session;
-    final actions = [
-      if (s.isLive) PlayerAction.channels,
-      PlayerAction.audio,
-      PlayerAction.subtitles,
-      PlayerAction.aspect,
-      if (s.isLive) PlayerAction.favorite,
-      if (s.isLive) PlayerAction.addToList,
-      PlayerAction.switchPlayer,
-      if (s.isLive) PlayerAction.guide,
-      PlayerAction.stats,
-    ];
+    final actions = _actions();
     final count = actions.length + (s.isLive ? 0 : 1);
 
     /// The row's buttons, [width] wide each.

@@ -276,6 +276,43 @@
   "@playerChannels": {
     "description": "Player OSD button, options entry and title of the in-player channel panel: browse the channel lists and switch channel without leaving the player."
   },
+  "playerDetach": "Separate window",
+  "@playerDetach": {
+    "description": "Desktop player OSD button and options entry: plays the live channel in a window of its own (movable to another monitor) and closes the player."
+  },
+  "playerDetachFailed": "Couldn't open the separate window.",
+  "@playerDetachFailed": {
+    "description": "Snack bar when the separate player window could not be started."
+  },
+  "detachInUseTitle": "“⁨{channel}⁩” is playing in a separate window",
+  "@detachInUseTitle": {
+    "description": "Title of the dialog shown when a channel is opened while the subscription's only connection is used by a separate player window.",
+    "placeholders": {
+      "channel": {
+        "type": "String"
+      }
+    }
+  },
+  "detachInUseMessage": "Your subscription can't play another channel at the same time.",
+  "detachPlayInWindow": "Play this channel in the window instead",
+  "@detachPlayInWindow": {
+    "description": "Choice in the in-use dialog: the separate window switches to the channel just picked."
+  },
+  "detachCloseWindow": "Close the window and play here",
+  "detachPlayInWindowFailed": "Couldn't play in the separate window.",
+  "viewerMute": "Mute",
+  "viewerUnmute": "Unmute",
+  "viewerVolume": "Volume",
+  "viewerPin": "Keep on top",
+  "@viewerPin": {
+    "description": "Separate player window button: keeps the window above all other windows."
+  },
+  "viewerUnpin": "Stop keeping on top",
+  "viewerCompact": "Small window",
+  "@viewerCompact": {
+    "description": "Separate player window button: shrinks it to a small window in the screen's corner, above other windows (picture in picture)."
+  },
+  "viewerNormalSize": "Normal size",
   "playerLive": "LIVE",
   "playerBuffering": "Buffering…",
   "playerReconnecting": "Reconnecting… ({n}/{max})",

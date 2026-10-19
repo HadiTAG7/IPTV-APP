@@ -116,6 +116,22 @@ class FakeEngine implements PlayerEngine {
   @override
   Future<Map<String, String>> stats() async => {'engine': _tag, ...statsMap};
 
+  /// Set by [setVolume] and [setMuted].
+  double volume = 1;
+  bool muted = false;
+
+  @override
+  Future<void> setVolume(double volume) async {
+    calls.add('setVolume $volume');
+    this.volume = volume;
+  }
+
+  @override
+  Future<void> setMuted(bool muted) async {
+    calls.add('setMuted $muted');
+    this.muted = muted;
+  }
+
   @override
   Widget buildView({AspectMode aspect = AspectMode.fit}) =>
       SizedBox.expand(key: ValueKey('fake-$_tag-${aspect.name}'));

@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/home_shell.dart';
+import '../../l10n/gen/app_localizations.dart';
+import '../connection_budget.dart';
+import '../detach/detached_windows.dart';
 import 'play_request.dart';
+import 'player_dialogs.dart';
 import 'player_screen.dart';
 
 /// Route name of the fullscreen player.
@@ -21,7 +26,89 @@ const kPlayerFadeOut = Duration(milliseconds: 120);
 /// When [context] is inside a home tab, the player's Guide button closes the
 /// player and shows the Guide tab ([PlayerGuideScope]); elsewhere it just
 /// closes the player.
+///
+/// A live channel whose source has no connection left because detached
+/// windows use them ([connectionBudgetProvider]) asks first: play it in the
+/// (newest) window instead, close that window and play here, or cancel.
 Future<void> openPlayer(BuildContext context, PlayRequest request) {
+  if (request.isLive) {
+    final container = ProviderScope.containerOf(context, listen: false);
+    final window = _windowInTheWay(container, request);
+    if (window != null) {
+      return _offerWindow(context, container, request, window);
+    }
+  }
+  return _pushPlayer(context, request);
+}
+
+/// The newest detached window playing from [request]'s source when that
+/// source has no connection left for the player; else null.
+DetachedViewer? _windowInTheWay(
+  ProviderContainer container,
+  PlayRequest request,
+) {
+  final windows = container.read(detachedWindowsProvider);
+  if (windows.isEmpty || connectionFits(container, request.sourceId)) {
+    return null;
+  }
+  final ids = container
+      .read(connectionBudgetProvider)
+      .viewersOn(request.sourceId);
+  return windows.where((w) => ids.contains(w.id)).lastOrNull;
+}
+
+/// What to do with a channel whose source's connections are all in
+/// detached windows.
+enum _WindowChoice { playInWindow, closeWindow }
+
+Future<void> _offerWindow(
+  BuildContext context,
+  ProviderContainer container,
+  PlayRequest request,
+  DetachedViewer window,
+) async {
+  final l10n = AppLocalizations.of(context);
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final windows = container.read(detachedWindowsProvider.notifier);
+  final choice = await showPlayerChoiceDialog<_WindowChoice>(
+    context,
+    title: l10n.detachInUseTitle(
+      window.title.isEmpty ? l10n.playerDetach : window.title,
+    ),
+    message: l10n.detachInUseMessage,
+    choices: [
+      PlayerChoice(
+        value: _WindowChoice.playInWindow,
+        label: l10n.detachPlayInWindow,
+        icon: Icons.open_in_new,
+      ),
+      PlayerChoice(
+        value: _WindowChoice.closeWindow,
+        label: l10n.detachCloseWindow,
+        icon: Icons.close,
+      ),
+    ],
+  );
+  switch (choice) {
+    case null:
+      return;
+    case _WindowChoice.playInWindow:
+      if (!await windows.playInWindow(window.id, request)) {
+        messenger
+          ?..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(content: Text(l10n.detachPlayInWindowFailed)),
+          );
+      }
+    case _WindowChoice.closeWindow:
+      // Its connection is free once it has stopped and exited.
+      await windows.close(window.id);
+      if (!context.mounted) return;
+      await _pushPlayer(context, request);
+  }
+}
+
+Future<void> _pushPlayer(BuildContext context, PlayRequest request) {
   final openGuide = guideOpenerFor(context);
   return Navigator.of(context).push<void>(
     PageRouteBuilder<void>(

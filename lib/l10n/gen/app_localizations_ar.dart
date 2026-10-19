@@ -566,6 +566,51 @@ class AppLocalizationsAr extends AppLocalizations {
   String get playerChannels => 'القنوات';
 
   @override
+  String get playerDetach => 'نافذة منفصلة';
+
+  @override
+  String get playerDetachFailed => 'تعذّر فتح النافذة المنفصلة.';
+
+  @override
+  String detachInUseTitle(String channel) {
+    return '«⁨$channel⁩» تُعرض في نافذة منفصلة';
+  }
+
+  @override
+  String get detachInUseMessage =>
+      'اشتراكك لا يسمح بتشغيل قناة ثانية في الوقت نفسه.';
+
+  @override
+  String get detachPlayInWindow => 'شغّل هذه القناة في النافذة بدلاً منها';
+
+  @override
+  String get detachCloseWindow => 'أغلق النافذة وشغّلها هنا';
+
+  @override
+  String get detachPlayInWindowFailed => 'تعذّر التشغيل في النافذة المنفصلة.';
+
+  @override
+  String get viewerMute => 'كتم الصوت';
+
+  @override
+  String get viewerUnmute => 'إلغاء كتم الصوت';
+
+  @override
+  String get viewerVolume => 'مستوى الصوت';
+
+  @override
+  String get viewerPin => 'فوق كل النوافذ';
+
+  @override
+  String get viewerUnpin => 'إلغاء التثبيت فوق النوافذ';
+
+  @override
+  String get viewerCompact => 'نافذة صغيرة';
+
+  @override
+  String get viewerNormalSize => 'الحجم العادي';
+
+  @override
   String get playerLive => 'مباشر';
 
   @override

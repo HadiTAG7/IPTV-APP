@@ -598,6 +598,46 @@ void main() {
     });
   });
 
+  group('volume', () {
+    test('untouched, engines keep their defaults', () {
+      fakeAsync((async) {
+        final rig = Rig(async)..playsOn(EngineKind.exo);
+        rig.play(liveTs, key: 'ch1');
+        expect(rig.engine.calls.where((c) => c.startsWith('set')), isEmpty);
+        rig.controller.dispose();
+      });
+    });
+
+    test('volume and mute reach the engine and the next one', () {
+      fakeAsync((async) {
+        final rig = Rig(async)
+          ..playsOn(EngineKind.exo)
+          ..playsOn(EngineKind.mpv);
+        unawaited(rig.controller.setVolume(0.4));
+        unawaited(rig.controller.setMuted(true));
+        rig.play(liveTs, key: 'ch1');
+        final exo = rig.of(EngineKind.exo);
+        expect(exo.volume, 0.4);
+        expect(exo.muted, isTrue);
+        unawaited(rig.controller.setVolume(2));
+        async.flushMicrotasks();
+        expect(exo.volume, 1);
+        expect(rig.controller.volume, 1);
+        unawaited(rig.controller.setVolume(0.7));
+        unawaited(rig.controller.switchEngine());
+        async.elapse(sec);
+        final mpv = rig.of(EngineKind.mpv);
+        expect(mpv.volume, 0.7);
+        expect(mpv.muted, isTrue);
+        unawaited(rig.controller.setMuted(false));
+        async.flushMicrotasks();
+        expect(mpv.muted, isFalse);
+        expect(rig.controller.muted, isFalse);
+        rig.controller.dispose();
+      });
+    });
+  });
+
   group('reconnecting', () {
     test('error after playing: watchdog reopens the same engine', () {
       fakeAsync((async) {

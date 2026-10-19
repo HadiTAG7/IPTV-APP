@@ -547,6 +547,52 @@ class AppLocalizationsEn extends AppLocalizations {
   String get playerChannels => 'Channels';
 
   @override
+  String get playerDetach => 'Separate window';
+
+  @override
+  String get playerDetachFailed => 'Couldn\'t open the separate window.';
+
+  @override
+  String detachInUseTitle(String channel) {
+    return '“⁨$channel⁩” is playing in a separate window';
+  }
+
+  @override
+  String get detachInUseMessage =>
+      'Your subscription can\'t play another channel at the same time.';
+
+  @override
+  String get detachPlayInWindow => 'Play this channel in the window instead';
+
+  @override
+  String get detachCloseWindow => 'Close the window and play here';
+
+  @override
+  String get detachPlayInWindowFailed =>
+      'Couldn\'t play in the separate window.';
+
+  @override
+  String get viewerMute => 'Mute';
+
+  @override
+  String get viewerUnmute => 'Unmute';
+
+  @override
+  String get viewerVolume => 'Volume';
+
+  @override
+  String get viewerPin => 'Keep on top';
+
+  @override
+  String get viewerUnpin => 'Stop keeping on top';
+
+  @override
+  String get viewerCompact => 'Small window';
+
+  @override
+  String get viewerNormalSize => 'Normal size';
+
+  @override
   String get playerLive => 'LIVE';
 
   @override

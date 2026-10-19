@@ -150,6 +150,14 @@ abstract class PlayerEngine {
   /// Short technical summary for the stats overlay (codec, resolution...).
   Future<Map<String, String>> stats();
 
+  /// Playback volume from 0 (silent) to 1 (full, the default). It lasts
+  /// for this engine (also across [open]s); a new engine starts at full.
+  Future<void> setVolume(double volume);
+
+  /// Mutes or unmutes without changing [setVolume]'s level; a new engine
+  /// starts unmuted.
+  Future<void> setMuted(bool muted);
+
   Widget buildView({AspectMode aspect = AspectMode.fit});
 
   Future<void> dispose();

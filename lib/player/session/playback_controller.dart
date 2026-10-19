@@ -150,6 +150,8 @@ class PlaybackController extends ChangeNotifier {
   bool _online = true;
   bool _wakelock = false;
   bool _disposed = false;
+  double _volume = 1;
+  bool _muted = false;
 
   /// The app is in the background ([onBackground] .. [onForeground]), with
   /// or without a session: items started meanwhile start backgrounded.
@@ -328,6 +330,21 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> selectSubtitle(String? id) async => _engine?.selectSubtitle(id);
 
+  /// Volume (0 to 1) and mute, kept for later engines too; untouched they
+  /// stay at the engines' defaults (full, unmuted).
+  double get volume => _volume;
+  bool get muted => _muted;
+
+  Future<void> setVolume(double volume) async {
+    _volume = volume.clamp(0.0, 1.0);
+    await _engine?.setVolume(_volume);
+  }
+
+  Future<void> setMuted(bool muted) async {
+    _muted = muted;
+    await _engine?.setMuted(muted);
+  }
+
   /// Engine stats plus session timing for the stats overlay.
   Future<Map<String, String>> stats() async {
     final base = await _engine?.stats() ?? const <String, String>{};
@@ -501,6 +518,8 @@ class PlaybackController extends ChangeNotifier {
     _engine = engine;
     engine.state.addListener(_onEngineState);
     _engineSub = engine.events.listen((e) => _onEngineEvent(engine, e));
+    if (_volume != 1) unawaited(engine.setVolume(_volume));
+    if (_muted) unawaited(engine.setMuted(true));
     if (!_disposed) {
       _state.value = engine.state.value;
       notifyListeners();
