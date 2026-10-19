@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show max;
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/foundation.dart';
@@ -27,11 +28,14 @@ typedef ViewerEngines = EngineFactory Function(EngineOptions options);
 
 /// The detached window's only screen: the channel the app sent, full
 /// window, with a mouse-shown bar (channel name, mute and volume, keep on
-/// top, small window, fullscreen, close).
+/// top and small window where the runner has them, fullscreen, close).
 ///
 /// Plays through a [PlaybackController] of its own, so a dropped stream
 /// reconnects and a connection the account still holds is retried as in
-/// the app's player. Keys: F, F11 and double clicks toggle fullscreen,
+/// the app's player. The app hears every move into opening, playing and
+/// failed; after a failure Retry asks the app ([RetryMessage]), which
+/// sends the stream again or says what uses the connection
+/// ([InUseMessage]). Keys: F, F11 and double clicks toggle fullscreen,
 /// Escape leaves it, M mutes, Up and Down (and the mouse wheel) change the
 /// volume.
 ///
@@ -77,6 +81,10 @@ class ViewerScreen extends StatefulWidget {
   /// Volume step of Up, Down and one mouse wheel notch.
   static const volumeStep = 0.1;
 
+  /// Unmuting at volume 0 brings back the last volume above 0, at least
+  /// this.
+  static const unmuteVolume = 0.5;
+
   @override
   State<ViewerScreen> createState() => _ViewerScreenState();
 }
@@ -86,6 +94,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   late final PlaybackController _controller;
   late final AppLifecycleListener _lifecycle;
   StreamSubscription<ViewerMessage>? _messages;
+  StreamSubscription<void>? _compactEnded;
 
   final _rootNode = FocusNode(debugLabel: 'viewer');
   final _retryNode = FocusNode(debugLabel: 'viewer:retry');
@@ -93,15 +102,25 @@ class _ViewerScreenState extends State<ViewerScreen> {
   EngineOptions _options = const EngineOptions();
   PlayMessage? _play;
 
-  /// The last of playing / failed told to the app since the last play.
+  /// The last of opening / playing / failed told to the app since the
+  /// last play.
   PlaybackPhase? _reported;
   bool _failureShown = false;
+
+  /// Retry was asked of the app, which has not answered yet.
+  bool _retryAsked = false;
+
+  /// The app refused Retry: what uses the source's connection.
+  ConnectionInUseBy? _inUse;
 
   bool _pinned = false;
   bool _compact = false;
   bool _fullscreen = false;
   bool _muted = false;
   double _volume = 1;
+
+  /// The last volume above 0, for unmuting at volume 0.
+  double _audibleVolume = 1;
 
   bool _osdVisible = false;
   Timer? _osdTimer;
@@ -130,6 +149,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
     // The window's close button: stop, tell the app, then let it exit.
     _lifecycle = AppLifecycleListener(onExitRequested: _onExitRequested);
     _messages = widget.channel.messages.listen(_onMessage);
+    _compactEnded = widget.window.compactEnded.listen((_) {
+      if (mounted && _compact) setState(() => _compact = false);
+    });
     unawaited(widget.channel.done.then((_) => _onDisconnected()));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_closing) widget.channel.send(const ReadyMessage());
@@ -142,6 +164,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     _closing = true;
     _lifecycle.dispose();
     unawaited(_messages?.cancel());
+    unawaited(_compactEnded?.cancel());
     _osdTimer?.cancel();
     _hoverMuteTimer?.cancel();
     _controller
@@ -161,6 +184,14 @@ class _ViewerScreenState extends State<ViewerScreen> {
     switch (message) {
       case PlayMessage():
         _startPlay(message);
+      case InUseMessage(:final by):
+        // Retry refused: the failure stays, saying why.
+        if (_controller.phase != PlaybackPhase.failed) return;
+        _log.info('Viewer: retry refused, the connection is in use');
+        setState(() {
+          _retryAsked = false;
+          _inUse = by;
+        });
       case CloseMessage():
         unawaited(_close(notifyApp: false));
       default:
@@ -172,6 +203,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
     _play = play;
     _options = play.engineOptions;
     _reported = null;
+    _retryAsked = false;
+    _inUse = null;
     for (final secret in play.secrets) {
       _log.addSecret(secret);
     }
@@ -187,19 +220,23 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
-  /// Tells the app when the stream plays or failed (once per change).
+  /// Tells the app when the stream opens, plays or failed (once per
+  /// change), so it counts the window's connection while it holds one.
   void _onController() {
     if (_closing || !mounted) return;
     final phase = _controller.phase;
     if (phase != _reported) {
-      if (phase == PlaybackPhase.playing) {
+      final ViewerMessage? report = switch (phase) {
+        PlaybackPhase.opening => const OpeningMessage(),
+        PlaybackPhase.playing => const PlayingMessage(),
+        PlaybackPhase.failed => ViewerErrorMessage(
+          _redact(_controller.errorMessage ?? ''),
+        ),
+        PlaybackPhase.idle || PlaybackPhase.ended => null,
+      };
+      if (report != null) {
         _reported = phase;
-        widget.channel.send(const PlayingMessage());
-      } else if (phase == PlaybackPhase.failed) {
-        _reported = phase;
-        widget.channel.send(
-          ViewerErrorMessage(_redact(_controller.errorMessage ?? '')),
-        );
+        widget.channel.send(report);
       }
     }
     final failed = phase == PlaybackPhase.failed;
@@ -294,23 +331,30 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   Future<void> _setFullscreen(bool on) async {
     if (on == _fullscreen) return;
-    final wasCompact = _compact;
     setState(() {
       _fullscreen = on;
       if (on) _compact = false;
     });
     _muteHover();
     _restartOsdTimer();
-    // Fullscreen from the small window leaves it first, so leaving
-    // fullscreen later brings back the normal window.
-    if (on && wasCompact) await widget.window.exitCompact();
+    // Fullscreen from the small window: the runner leaves it first (on the
+    // monitor it is on now), so leaving fullscreen later brings back the
+    // normal window.
     await (on
         ? widget.window.fullscreen.enter()
         : widget.window.fullscreen.exit());
   }
 
+  /// Whether nothing is heard: muted, or the volume is 0.
+  bool get _silent => _muted || _volume == 0;
+
   Future<void> _toggleMute() async {
     if (_closing) return;
+    if (_volume == 0) {
+      // Unmuting at volume 0 must be heard.
+      await _setVolume(max(_audibleVolume, ViewerScreen.unmuteVolume));
+      return;
+    }
     final muted = !_muted;
     setState(() => _muted = muted);
     _restartOsdTimer();
@@ -319,10 +363,13 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   Future<void> _setVolume(double volume) async {
     if (_closing) return;
-    final v = volume.clamp(0.0, 1.0);
+    var v = volume.clamp(0.0, 1.0);
+    // Steps leave rounding crumbs (ten steps down from 1 are not quite 0).
+    if (v < 0.001) v = 0;
     final unmute = _muted && v > 0;
     setState(() {
       _volume = v;
+      if (v > 0) _audibleVolume = v;
       if (unmute) _muted = false;
     });
     _restartOsdTimer();
@@ -330,9 +377,16 @@ class _ViewerScreenState extends State<ViewerScreen> {
     await _controller.setVolume(v);
   }
 
-  Future<void> _retry() async {
-    _reported = null;
-    await _controller.retry();
+  /// Asks the app to play the channel again; it answers with the stream
+  /// or with what uses the connection. Nothing opens before it answers.
+  void _retry() {
+    if (_closing || _retryAsked || _play == null) return;
+    if (!widget.channel.send(const RetryMessage())) return;
+    _log.info('Viewer: retry asked');
+    setState(() {
+      _retryAsked = true;
+      _inUse = null;
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -470,17 +524,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                           ),
                         ),
                       ),
-                      if (failed)
-                        Center(
-                          child: SingleChildScrollView(
-                            child: PlayerFailureCard(
-                              message: l10n.playerPlaybackFailed,
-                              details: _redact(_controller.errorMessage ?? ''),
-                              retryNode: _retryNode,
-                              onRetry: () => unawaited(_retry()),
-                            ),
-                          ),
-                        ),
+                      if (failed) Center(child: _failure(l10n)),
                     ],
                   ),
                 ),
@@ -488,6 +532,30 @@ class _ViewerScreenState extends State<ViewerScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// The failure card (the bar is hidden then): Retry, which asks the app,
+  /// Exit fullscreen and Close, so a frameless fullscreen window can be
+  /// left with the mouse too. After a refused Retry it says what uses the
+  /// connection.
+  Widget _failure(AppLocalizations l10n) {
+    final inUse = _inUse;
+    return SingleChildScrollView(
+      child: PlayerFailureCard(
+        message: switch (inUse) {
+          null => l10n.playerPlaybackFailed,
+          ConnectionInUseBy.mainWindow => l10n.viewerInUseMainWindow,
+          ConnectionInUseBy.otherWindow => l10n.viewerInUseOtherWindow,
+        },
+        details: inUse == null ? _redact(_controller.errorMessage ?? '') : null,
+        retryNode: _retryNode,
+        onRetry: _retry,
+        onExitFullscreen: _fullscreen
+            ? () => unawaited(_setFullscreen(false))
+            : null,
+        onClose: () => unawaited(_close(notifyApp: true)),
       ),
     );
   }
@@ -565,10 +633,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
                   const Spacer(),
                 button(
                   id: 'mute',
-                  icon: _muted || _volume == 0
-                      ? Icons.volume_off
-                      : Icons.volume_up,
-                  label: _muted ? l10n.viewerUnmute : l10n.viewerMute,
+                  icon: _silent ? Icons.volume_off : Icons.volume_up,
+                  label: _silent ? l10n.viewerUnmute : l10n.viewerMute,
                   onSelect: () => unawaited(_toggleMute()),
                 ),
                 if (showSlider)
@@ -582,20 +648,25 @@ class _ViewerScreenState extends State<ViewerScreen> {
                       onChanged: (v) => unawaited(_setVolume(v)),
                     ),
                   ),
-                button(
-                  id: 'pin',
-                  icon: _pinned ? Icons.push_pin : Icons.push_pin_outlined,
-                  label: _pinned ? l10n.viewerUnpin : l10n.viewerPin,
-                  onSelect: () => unawaited(_togglePin()),
-                ),
-                button(
-                  id: 'compact',
-                  icon: _compact
-                      ? Icons.open_in_full
-                      : Icons.picture_in_picture_alt_outlined,
-                  label: _compact ? l10n.viewerNormalSize : l10n.viewerCompact,
-                  onSelect: () => unawaited(_toggleCompact()),
-                ),
+                // Only where the runner has them (not Linux).
+                if (widget.window.supportsCompactAndPin) ...[
+                  button(
+                    id: 'pin',
+                    icon: _pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                    label: _pinned ? l10n.viewerUnpin : l10n.viewerPin,
+                    onSelect: () => unawaited(_togglePin()),
+                  ),
+                  button(
+                    id: 'compact',
+                    icon: _compact
+                        ? Icons.open_in_full
+                        : Icons.picture_in_picture_alt_outlined,
+                    label: _compact
+                        ? l10n.viewerNormalSize
+                        : l10n.viewerCompact,
+                    onSelect: () => unawaited(_toggleCompact()),
+                  ),
+                ],
                 button(
                   id: 'fullscreen',
                   icon: _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,

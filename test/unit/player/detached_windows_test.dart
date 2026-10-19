@@ -80,14 +80,17 @@ void main() {
       final id = await rig.windows.detach(_request());
       expect(id, 1);
       final p = rig.launcher.last;
-      // Only the port, the token and the language on the command line.
+      // Only the port and the language on the command line; the token in
+      // the environment.
       expect(rig.launcher.lines.single, [
         '--viewer',
         '--port=${p.args.port}',
-        '--token=${p.args.token}',
         '--locale=ar',
       ]);
       expect(rig.launcher.lines.single.join(' '), isNot(contains('127.0.0.1')));
+      expect(rig.launcher.environments.single, {
+        kViewerTokenEnvironment: p.args.token,
+      });
       expect(p.args.token.length, greaterThanOrEqualTo(22));
 
       await until(() => p.received.isNotEmpty);
@@ -273,7 +276,7 @@ void main() {
       throwsA(isA<ViewerLaunchException>()),
     );
     expect(rig.state, isEmpty);
-    final token = ViewerLaunchArgs.parse(rig.launcher.lines.single).token;
+    final token = rig.launcher.environments.single[kViewerTokenEnvironment]!;
     expect(rig.logText, contains('could not start'));
     // ProcessException repeats the arguments: never logged.
     expect(rig.logText, isNot(contains(token)));
@@ -332,7 +335,10 @@ void main() {
       expect(rig.logText, isNot(contains('Secret-Pass-9')));
       expect(rig.logText, isNot(contains('viewer7')));
       expect(rig.container.read(connectionBudgetProvider).fits(7), isTrue);
-      // Playing again (Retry in the window) takes it again.
+      // Opening again takes it again.
+      p.send(const OpeningMessage());
+      await until(() => rig.state.single.status == ViewerStatus.opening);
+      expect(rig.container.read(connectionBudgetProvider).fits(7), isFalse);
       p.send(const PlayingMessage());
       await until(() => rig.state.single.status == ViewerStatus.playing);
       expect(rig.container.read(connectionBudgetProvider).fits(7), isFalse);
@@ -374,6 +380,12 @@ void main() {
       expect(process.pid, greaterThan(0));
       // The output is drained: a full pipe never blocks the viewer.
       expect(await process.exitCode, 3);
+      // The environment is the app's plus what is given.
+      final env = await launcher.launch(
+        ['-c', r'test "$IPTV_TEST_TOKEN" = t0k3n && test -n "$PATH"'],
+        environment: const {'IPTV_TEST_TOKEN': 't0k3n'},
+      );
+      expect(await env.exitCode, 0);
       final sleeper = await launcher.launch(['-c', 'sleep 30']);
       expect(sleeper.kill(), isTrue);
       expect(await sleeper.exitCode, isNot(0));

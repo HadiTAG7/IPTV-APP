@@ -562,6 +562,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Your subscription can\'t play another channel at the same time.';
 
   @override
+  String get detachInUseMessageVod =>
+      'Your subscription can\'t play this and the window\'s channel at the same time.';
+
+  @override
   String get detachPlayInWindow => 'Play this channel in the window instead';
 
   @override
@@ -591,6 +595,14 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get viewerNormalSize => 'Normal size';
+
+  @override
+  String get viewerInUseMainWindow =>
+      'The subscription\'s connection is in use in the main window.';
+
+  @override
+  String get viewerInUseOtherWindow =>
+      'The subscription\'s connection is in use in another separate window.';
 
   @override
   String get playerLive => 'LIVE';

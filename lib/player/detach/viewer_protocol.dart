@@ -1,17 +1,20 @@
 // The detached-window protocol between the app and its viewer processes.
 //
 // A detached channel plays in a second process of the same executable,
-// started in viewer mode (`--viewer --port=N --token=T --locale=ar|en`).
-// The viewer connects to the app's loopback server, sends the one-time
-// token first ([HelloMessage]) and then exchanges one JSON object per line:
+// started in viewer mode (`--viewer --port=N --locale=ar|en`, the one-time
+// token in the [kViewerTokenEnvironment] environment variable). The viewer
+// connects to the app's loopback server, sends the token first
+// ([HelloMessage]) and then exchanges one JSON object per line:
 //
 // * app -> viewer: [PlayMessage] (the resolved stream and engine options),
-//   [CloseMessage].
-// * viewer -> app: [HelloMessage], [ReadyMessage], [PlayingMessage],
-//   [ViewerErrorMessage] (redacted), [ClosedMessage].
+//   [InUseMessage] (Retry refused), [CloseMessage].
+// * viewer -> app: [HelloMessage], [ReadyMessage], [OpeningMessage],
+//   [PlayingMessage], [ViewerErrorMessage] (redacted), [RetryMessage],
+//   [ClosedMessage].
 //
-// Stream URLs and credentials travel only over the socket, never on the
-// command line (other processes can read it). Malformed lines are dropped.
+// Stream URLs, credentials and the token never travel on the command line
+// (other local users can read it; a process's environment only its own
+// user can). Malformed lines are dropped.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -27,7 +30,10 @@ import '../engine/mpv_engine.dart' show kDefaultPreferredLanguages;
 
 /// Version of the line protocol; the app refuses a viewer of another one
 /// (an update replaced the executable while the app ran).
-const kViewerProtocolVersion = 1;
+const kViewerProtocolVersion = 2;
+
+/// The environment variable that carries a viewer's one-time token.
+const kViewerTokenEnvironment = 'IPTV_VIEWER_TOKEN';
 
 /// Longest line either side accepts; a longer one closes the connection.
 const kMaxViewerLineBytes = 256 * 1024;
@@ -41,8 +47,9 @@ const _maxListLength = 32;
 // ---------------------------------------------------------------------------
 // Command line.
 
-/// The command line of a viewer process. Carries no stream URL or
-/// credential: only the loopback port, the one-time token and the language.
+/// How a viewer process is started. Its command line ([toArgs]) carries no
+/// stream URL, credential or token, only the loopback port and the
+/// language; the one-time token goes in its environment ([environment]).
 @immutable
 class ViewerLaunchArgs {
   const ViewerLaunchArgs({
@@ -67,17 +74,20 @@ class ViewerLaunchArgs {
   /// Whether [args] start a viewer rather than the app.
   static bool isViewer(List<String> args) => args.contains(flag);
 
-  List<String> toArgs() => [
-    flag,
-    '--port=$port',
-    '--token=$token',
-    '--locale=$locale',
-  ];
+  /// The command line (without the token).
+  List<String> toArgs() => [flag, '--port=$port', '--locale=$locale'];
 
-  /// Reads a viewer command line; throws a [FormatException] (without the
-  /// token) when the port or token is missing or invalid. An unknown
-  /// locale falls back to English.
-  static ViewerLaunchArgs parse(List<String> args) {
+  /// What the viewer's environment adds to the app's: the token.
+  Map<String, String> get environment => {kViewerTokenEnvironment: token};
+
+  /// Reads a viewer command line, and the token from [environment] (the
+  /// process's own); throws a [FormatException] (without the token) when
+  /// the port or token is missing or invalid. An unknown locale falls back
+  /// to English.
+  static ViewerLaunchArgs parse(
+    List<String> args, {
+    Map<String, String> environment = const {},
+  }) {
     if (!isViewer(args)) throw const FormatException('Not a viewer');
     String? value(String name) {
       final prefix = '--$name=';
@@ -91,7 +101,7 @@ class ViewerLaunchArgs {
     if (port == null || port <= 0 || port > 65535) {
       throw const FormatException('Viewer: bad port');
     }
-    final token = value('token') ?? '';
+    final token = environment[kViewerTokenEnvironment] ?? '';
     if (!_token.hasMatch(token)) {
       throw const FormatException('Viewer: bad token');
     }
@@ -182,6 +192,21 @@ final class ReadyMessage extends ViewerMessage {
   Map<String, Object?> toJson() => const {};
 }
 
+/// Viewer -> app: the stream is opening (or opening again); the window
+/// holds a connection from now on.
+final class OpeningMessage extends ViewerMessage {
+  const OpeningMessage();
+
+  @override
+  String get type => 'opening';
+
+  @override
+  bool get fromViewer => true;
+
+  @override
+  Map<String, Object?> toJson() => const {};
+}
+
 /// Viewer -> app: the current stream shows pictures.
 final class PlayingMessage extends ViewerMessage {
   const PlayingMessage();
@@ -217,6 +242,22 @@ final class ViewerErrorMessage extends ViewerMessage {
   String toString() => 'ViewerErrorMessage(${redact(message)})';
 }
 
+/// Viewer -> app: the user pressed Retry after a failure. The viewer opens
+/// nothing by itself: the app answers with [PlayMessage] when the source
+/// has a connection free, else with [InUseMessage].
+final class RetryMessage extends ViewerMessage {
+  const RetryMessage();
+
+  @override
+  String get type => 'retry';
+
+  @override
+  bool get fromViewer => true;
+
+  @override
+  Map<String, Object?> toJson() => const {};
+}
+
 /// Viewer -> app: the user closed the window; the viewer exits.
 final class ClosedMessage extends ViewerMessage {
   const ClosedMessage();
@@ -229,6 +270,35 @@ final class ClosedMessage extends ViewerMessage {
 
   @override
   Map<String, Object?> toJson() => const {};
+}
+
+/// What holds the connection an [InUseMessage] is about.
+enum ConnectionInUseBy {
+  /// The player of the app's main window.
+  mainWindow,
+
+  /// Another detached window.
+  otherWindow,
+}
+
+/// App -> viewer: Retry was refused; the source's connection is in use
+/// ([by]). The window keeps its failure card.
+final class InUseMessage extends ViewerMessage {
+  const InUseMessage(this.by);
+
+  final ConnectionInUseBy by;
+
+  @override
+  String get type => 'in-use';
+
+  @override
+  bool get fromViewer => false;
+
+  @override
+  Map<String, Object?> toJson() => {'by': by.name};
+
+  @override
+  String toString() => 'InUseMessage(${by.name})';
 }
 
 /// App -> viewer: stop and exit.
@@ -270,7 +340,10 @@ final class PlayMessage extends ViewerMessage {
 
   /// The message for [stream] with [options], within the protocol's
   /// limits: a long title is cut; an oversized logo or key, a header the
-  /// viewer would refuse and unusable secrets are left out.
+  /// viewer would refuse, unusable secrets and an unknown connection limit
+  /// (0 or less) are left out. Throws a [FormatException] when the viewer
+  /// would still refuse it ([checkViewerPlay]: a stream URL it does not
+  /// play, see [isViewerStreamUrl]) or the line would be too long.
   factory PlayMessage.of(
     StreamRequest stream, {
     required String title,
@@ -299,7 +372,7 @@ final class PlayMessage extends ViewerMessage {
         if (fits(l, _maxTextLength)) l,
     ];
     final subtitles = options.subtitleLanguages;
-    return PlayMessage(
+    final play = PlayMessage(
       url: stream.url,
       headers: headers,
       userAgent: userAgent,
@@ -307,7 +380,9 @@ final class PlayMessage extends ViewerMessage {
       title: _clip(title, _maxTitleLength),
       logo: optional(logo),
       channelKey: optional(channelKey),
-      maxConnections: maxConnections,
+      maxConnections: maxConnections != null && maxConnections > 0
+          ? maxConnections
+          : null,
       hardwareDecoding: options.hardwareDecoding,
       lite: options.lite,
       preferredLanguages: languages(options.preferredLanguages),
@@ -317,6 +392,11 @@ final class PlayMessage extends ViewerMessage {
           if (s.length >= 3 && s.length <= _maxTextLength) s,
       ].take(_maxListLength).toList(),
     );
+    checkViewerPlay(play);
+    if (utf8.encode(encodeViewerMessage(play)).length > kMaxViewerLineBytes) {
+      throw const FormatException('line');
+    }
+    return play;
   }
 
   final String url;
@@ -402,9 +482,12 @@ ViewerMessage? decodeViewerMessage(String line) {
         version: _int(json['version']),
       ),
       'ready' => const ReadyMessage(),
+      'opening' => const OpeningMessage(),
       'playing' => const PlayingMessage(),
       'error' => ViewerErrorMessage(_string(json['message'], empty: true)),
+      'retry' => const RetryMessage(),
       'closed' => const ClosedMessage(),
+      'in-use' => InUseMessage(_inUseBy(json['by'])),
       'close' => const CloseMessage(),
       'play' => _play(json),
       _ => null,
@@ -414,20 +497,43 @@ ViewerMessage? decodeViewerMessage(String line) {
   }
 }
 
-PlayMessage _play(Map<String, Object?> json) {
-  final url = _string(json['url'], max: _maxUrlLength);
+/// Whether a detached window plays [url]: an `http` or `https` URL with a
+/// host, of at most 8 KiB. That is what the sources build for live
+/// channels; anything else (a local file, `fd://`, `edl://`...) is refused.
+bool isViewerStreamUrl(String url) {
+  if (url.isEmpty || url.length > _maxUrlLength) return false;
   final uri = Uri.tryParse(url);
-  if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
-    throw const FormatException('url');
+  if (uri == null || uri.host.isEmpty) return false;
+  final scheme = uri.scheme.toLowerCase();
+  return scheme == 'http' || scheme == 'https';
+}
+
+/// The viewer's rules for a [PlayMessage], shared by the app
+/// ([PlayMessage.of]) and the viewer ([decodeViewerMessage]) so the app
+/// never sends a play the viewer would drop. Throws a [FormatException].
+void checkViewerPlay(PlayMessage play) {
+  if (!isViewerStreamUrl(play.url)) throw const FormatException('url');
+  final maxConnections = play.maxConnections;
+  if (maxConnections != null && maxConnections < 0) {
+    throw const FormatException('maxConnections');
   }
+}
+
+ConnectionInUseBy _inUseBy(Object? value) {
+  for (final by in ConnectionInUseBy.values) {
+    if (by.name == value) return by;
+  }
+  throw const FormatException('by');
+}
+
+PlayMessage _play(Map<String, Object?> json) {
   final maxConnections = json['maxConnections'];
-  if (maxConnections != null &&
-      (maxConnections is! int || maxConnections < 0)) {
+  if (maxConnections != null && maxConnections is! int) {
     throw const FormatException('maxConnections');
   }
   final subtitles = json['subtitleLanguages'];
-  return PlayMessage(
-    url: url,
+  final play = PlayMessage(
+    url: _string(json['url'], max: _maxUrlLength),
     headers: _headers(json['headers']),
     userAgent: _optionalString(json['userAgent'], max: _maxHeaderLength),
     isHls: _bool(json['isHls']),
@@ -441,6 +547,8 @@ PlayMessage _play(Map<String, Object?> json) {
     subtitleLanguages: subtitles == null ? null : _strings(subtitles),
     secrets: _strings(json['secrets']),
   );
+  checkViewerPlay(play);
+  return play;
 }
 
 final _control = RegExp(r'[\x00-\x1f\x7f]');

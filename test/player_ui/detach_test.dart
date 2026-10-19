@@ -5,7 +5,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/player/detach/detached_windows.dart';
+import 'package:iptv_player/player/ui/play_request.dart';
 import 'package:iptv_player/player/ui/player_screen.dart';
+import 'package:iptv_player/sources/models.dart';
 import 'package:iptv_player/tv/dpad_shortcuts.dart';
 
 import 'support/fake_detached_windows.dart';
@@ -116,6 +118,49 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(PlayerScreen), findsNothing);
       expect(windows.detached, hasLength(1));
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('a stream a window cannot play keeps playing here', (
+      tester,
+    ) async {
+      final rig = PlayerRig()..autoPlay();
+      final db = rig.db;
+      final id = await db.sourcesDao.create(
+        const SourceConfig(
+          kind: SourceKind.m3uUrl,
+          url: 'http://127.0.0.1:9/cams.m3u',
+          name: 'Cams',
+        ),
+      );
+      final gen = await db.catalogDao.beginGeneration(id);
+      await db.catalogDao.upsertChannels(id, gen, const [
+        ChannelData(key: 'cam', name: 'Camera', url: 'rtsp://127.0.0.1:9/cam'),
+      ]);
+      await db.catalogDao.commitGeneration(id, gen);
+      final windows = await _pump(tester, rig);
+      await openPlayerFor(
+        tester,
+        PlayRequest(
+          sourceId: id,
+          item: const PlayableRef(
+            kind: PlayableKind.live,
+            key: 'cam',
+            url: 'rtsp://127.0.0.1:9/cam',
+            title: 'Camera',
+          ),
+        ),
+      );
+      expect(rig.engine.lastRequest!.url, 'rtsp://127.0.0.1:9/cam');
+      await press(tester, LogicalKeyboardKey.keyD);
+      await tester.pumpAndSettle();
+
+      expect(windows.detached, isEmpty);
+      expect(find.byType(PlayerScreen), findsOneWidget);
+      expect(find.text("Couldn't open the separate window."), findsOneWidget);
+      // Never stopped.
+      expect(rig.engines.log.where((l) => l.endsWith('.stop')), isEmpty);
+      expect(rig.window, ['enter']);
       await disposeRig(tester, rig);
     });
 

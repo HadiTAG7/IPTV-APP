@@ -7,9 +7,26 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-  tearDown(
-    () => messenger.setMockMethodCallHandler(windowsWindowChannel, null),
-  );
+  tearDown(() {
+    messenger.setMockMethodCallHandler(windowsWindowChannel, null);
+    windowsWindowChannel.setMethodCallHandler(null);
+  });
+
+  test('Windows: the runner leaving compact by itself is heard', () async {
+    final window = WindowControls.native(platform: TargetPlatform.windows);
+    expect(window.supportsCompactAndPin, isTrue);
+    var heard = 0;
+    final sub = window.compactEnded.listen((_) => heard++);
+    addTearDown(sub.cancel);
+    await messenger.handlePlatformMessage(
+      windowsWindowChannel.name,
+      windowsWindowChannel.codec.encodeMethodCall(
+        const MethodCall('compactEnded'),
+      ),
+      (_) {},
+    );
+    expect(heard, 1);
+  });
 
   test('Windows: the runner channel with its arguments', () async {
     final calls = <(String, Object?)>[];

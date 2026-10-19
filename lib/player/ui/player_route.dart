@@ -27,19 +27,40 @@ const kPlayerFadeOut = Duration(milliseconds: 120);
 /// player and shows the Guide tab ([PlayerGuideScope]); elsewhere it just
 /// closes the player.
 ///
-/// A live channel whose source has no connection left because detached
-/// windows use them ([connectionBudgetProvider]) asks first: play it in the
-/// (newest) window instead, close that window and play here, or cancel.
-Future<void> openPlayer(BuildContext context, PlayRequest request) {
-  if (request.isLive) {
-    final container = ProviderScope.containerOf(context, listen: false);
-    final window = _windowInTheWay(container, request);
-    if (window != null) {
-      return _offerWindow(context, container, request, window);
+/// Anything (a channel, a movie, an episode) whose source has no connection
+/// left because detached windows use them ([connectionBudgetProvider])
+/// asks first: close the (newest) window and play here, play a live
+/// channel in that window instead, or cancel. While that question or the
+/// window's closing is pending, other calls are ignored: they would stack
+/// a second player.
+Future<void> openPlayer(BuildContext context, PlayRequest request) async {
+  final container = ProviderScope.containerOf(context, listen: false);
+  final gate = container.read(_windowQuestionProvider);
+  if (gate.pending) return;
+  final window = _windowInTheWay(container, request);
+  if (window != null) {
+    gate.pending = true;
+    final bool playHere;
+    try {
+      playHere = await _offerWindow(context, container, request, window);
+    } finally {
+      gate.pending = false;
     }
+    if (!playHere || !context.mounted) return;
   }
   return _pushPlayer(context, request);
 }
+
+/// Whether [openPlayer] is asking about a detached window or waiting for
+/// one to close (one per provider container).
+class _WindowQuestion {
+  bool pending = false;
+}
+
+final _windowQuestionProvider = Provider<_WindowQuestion>(
+  (ref) => _WindowQuestion(),
+  name: '_windowQuestionProvider',
+);
 
 /// The newest detached window playing from [request]'s source when that
 /// source has no connection left for the player; else null.
@@ -57,11 +78,13 @@ DetachedViewer? _windowInTheWay(
   return windows.where((w) => ids.contains(w.id)).lastOrNull;
 }
 
-/// What to do with a channel whose source's connections are all in
+/// What to do with a request whose source's connections are all in
 /// detached windows.
 enum _WindowChoice { playInWindow, closeWindow }
 
-Future<void> _offerWindow(
+/// Asks what to do about [window]; true when the player should open now
+/// (the window was closed and has exited: its connection is free).
+Future<bool> _offerWindow(
   BuildContext context,
   ProviderContainer container,
   PlayRequest request,
@@ -70,18 +93,21 @@ Future<void> _offerWindow(
   final l10n = AppLocalizations.of(context);
   final messenger = ScaffoldMessenger.maybeOf(context);
   final windows = container.read(detachedWindowsProvider.notifier);
+  final live = request.isLive;
   final choice = await showPlayerChoiceDialog<_WindowChoice>(
     context,
     title: l10n.detachInUseTitle(
       window.title.isEmpty ? l10n.playerDetach : window.title,
     ),
-    message: l10n.detachInUseMessage,
+    message: live ? l10n.detachInUseMessage : l10n.detachInUseMessageVod,
     choices: [
-      PlayerChoice(
-        value: _WindowChoice.playInWindow,
-        label: l10n.detachPlayInWindow,
-        icon: Icons.open_in_new,
-      ),
+      // The window plays live channels only.
+      if (live)
+        PlayerChoice(
+          value: _WindowChoice.playInWindow,
+          label: l10n.detachPlayInWindow,
+          icon: Icons.open_in_new,
+        ),
       PlayerChoice(
         value: _WindowChoice.closeWindow,
         label: l10n.detachCloseWindow,
@@ -91,7 +117,7 @@ Future<void> _offerWindow(
   );
   switch (choice) {
     case null:
-      return;
+      return false;
     case _WindowChoice.playInWindow:
       if (!await windows.playInWindow(window.id, request)) {
         messenger
@@ -100,11 +126,11 @@ Future<void> _offerWindow(
             SnackBar(content: Text(l10n.detachPlayInWindowFailed)),
           );
       }
+      return false;
     case _WindowChoice.closeWindow:
       // Its connection is free once it has stopped and exited.
       await windows.close(window.id);
-      if (!context.mounted) return;
-      await _pushPlayer(context, request);
+      return true;
   }
 }
 

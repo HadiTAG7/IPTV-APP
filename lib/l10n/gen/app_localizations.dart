@@ -1022,6 +1022,12 @@ abstract class AppLocalizations {
   /// **'Your subscription can\'t play another channel at the same time.'**
   String get detachInUseMessage;
 
+  /// Message of the in-use dialog when a movie or an episode is opened while the subscription's only connection is used by a separate player window.
+  ///
+  /// In en, this message translates to:
+  /// **'Your subscription can\'t play this and the window\'s channel at the same time.'**
+  String get detachInUseMessageVod;
+
   /// Choice in the in-use dialog: the separate window switches to the channel just picked.
   ///
   /// In en, this message translates to:
@@ -1081,6 +1087,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Normal size'**
   String get viewerNormalSize;
+
+  /// Separate player window, after Retry: the channel can't play again because the app's own player now uses the subscription's only connection.
+  ///
+  /// In en, this message translates to:
+  /// **'The subscription\'s connection is in use in the main window.'**
+  String get viewerInUseMainWindow;
+
+  /// Separate player window, after Retry: the channel can't play again because another separate window now uses the subscription's connection.
+  ///
+  /// In en, this message translates to:
+  /// **'The subscription\'s connection is in use in another separate window.'**
+  String get viewerInUseOtherWindow;
 
   /// No description provided for @playerLive.
   ///

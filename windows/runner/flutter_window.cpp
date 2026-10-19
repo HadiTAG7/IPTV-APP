@@ -178,6 +178,23 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
            command == SC_MOVE || command == SC_SIZE)) {
         return 0;
       }
+      // Maximizing the small window (a double click on its title bar, its
+      // maximize button, the system menu) leaves compact first: back to
+      // the normal size on the monitor it is on now, on top only when asked
+      // to be, and then maximized there.
+      if (compact_ && command == SC_MAXIMIZE && !::IsIconic(hwnd)) {
+        ExitCompact(::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
+        NotifyCompactEnded();
+      }
+      break;
+    }
+    case WM_SIZE: {
+      // Maximized some other way while small (by the shell): it is no
+      // longer the small window either.
+      if (compact_ &&
+          static_cast<UINT>(wparam) == static_cast<UINT>(SIZE_MAXIMIZED)) {
+        EndCompactByMaximize();
+      }
       break;
     }
     case WM_WINDOWPOSCHANGING: {
@@ -217,9 +234,11 @@ void FlutterWindow::EnterFullscreen() {
   if (fullscreen_ || window == nullptr) {
     return;
   }
-  // A compact window goes back to its normal placement first, so leaving
-  // fullscreen brings that back rather than the small corner window.
-  ExitCompact();
+  // A compact window goes back to its normal size first, so leaving
+  // fullscreen brings that back rather than the small corner window. It
+  // does so on the monitor the small window is on now (it may have been
+  // moved to another one), which fullscreen then covers.
+  ExitCompact(::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST));
   fullscreen_ = true;
   // A maximized window stays maximized: restoring it first, and maximizing
   // it again on exit, makes Windows animate a small window across the
@@ -343,12 +362,18 @@ void FlutterWindow::EnterCompact() {
   if (::IsZoomed(window) || ::IsIconic(window)) {
     ::ShowWindow(window, SW_RESTORE);
   }
+  // The normal rect in screen coordinates; for a window snapped to a side
+  // of the screen that is the snapped rect, which its placement does not
+  // hold (it keeps the rect from before the snap).
+  ::GetWindowRect(window, &rect_before_compact_);
   HMONITOR monitor = ::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
   MONITORINFO info = {};
   info.cbSize = sizeof(info);
   if (!::GetMonitorInfo(monitor, &info)) {
     return;
   }
+  monitor_before_compact_ = monitor;
+  work_area_before_compact_ = info.rcWork;
   const RECT& work = info.rcWork;
   const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   const int scale = static_cast<int>(dpi);
@@ -382,7 +407,7 @@ void FlutterWindow::EnterCompact() {
   ::SetWindowPos(window, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
 }
 
-void FlutterWindow::ExitCompact() {
+void FlutterWindow::ExitCompact(HMONITOR onto) {
   HWND window = GetHandle();
   if (!compact_ || window == nullptr) {
     return;
@@ -393,6 +418,64 @@ void FlutterWindow::ExitCompact() {
   if (placement.showCmd == static_cast<UINT>(SW_SHOWMINIMIZED)) {
     placement.showCmd = static_cast<UINT>(SW_SHOWNORMAL);
   }
-  ::SetWindowPlacement(window, &placement);
+  const bool maximized =
+      placement.showCmd == static_cast<UINT>(SW_SHOWMAXIMIZED);
+  MONITORINFO target = {};
+  target.cbSize = sizeof(target);
+  if (onto != nullptr && onto != monitor_before_compact_ &&
+      ::GetMonitorInfo(onto, &target)) {
+    // Moved to another monitor while small: the normal rect, shifted as
+    // far as the two work areas are apart and kept inside |onto|'s (screen
+    // coordinates throughout), maximized there again if it was.
+    const RECT& work = target.rcWork;
+    RECT rect = rect_before_compact_;
+    ::OffsetRect(&rect,
+                 static_cast<int>(work.left - work_area_before_compact_.left),
+                 static_cast<int>(work.top - work_area_before_compact_.top));
+    const LONG width =
+        std::min(rect.right - rect.left, work.right - work.left);
+    const LONG height =
+        std::min(rect.bottom - rect.top, work.bottom - work.top);
+    const LONG left = std::clamp(rect.left, work.left, work.right - width);
+    const LONG top = std::clamp(rect.top, work.top, work.bottom - height);
+    ::SetWindowPos(window, nullptr, left, top, width, height,
+                   SWP_NOZORDER | SWP_NOACTIVATE);
+    if (maximized) {
+      ::ShowWindow(window, SW_MAXIMIZE);
+    }
+    ApplyTopmost();
+    return;
+  }
+  // Back exactly where it was, a window snapped to a side included, while
+  // its monitor and work area are as they were (as ExitFullscreen does).
+  const RECT& before = rect_before_compact_;
+  HMONITOR monitor = ::MonitorFromRect(&before, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO now = {};
+  now.cbSize = sizeof(now);
+  const bool same_place =
+      !maximized && monitor == monitor_before_compact_ &&
+      ::GetMonitorInfo(monitor, &now) &&
+      ::EqualRect(&now.rcWork, &work_area_before_compact_);
+  if (same_place) {
+    ::SetWindowPos(window, nullptr, before.left, before.top,
+                   before.right - before.left, before.bottom - before.top,
+                   SWP_NOZORDER | SWP_NOACTIVATE);
+  } else {
+    // Maximized, or its monitor changed: the saved placement brings it
+    // back onto a monitor, maximized again if it was.
+    ::SetWindowPlacement(window, &placement);
+  }
   ApplyTopmost();
+}
+
+void FlutterWindow::EndCompactByMaximize() {
+  compact_ = false;
+  ApplyTopmost();
+  NotifyCompactEnded();
+}
+
+void FlutterWindow::NotifyCompactEnded() {
+  if (window_channel_) {
+    window_channel_->InvokeMethod("compactEnded", nullptr);
+  }
 }

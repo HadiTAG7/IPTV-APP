@@ -20,6 +20,7 @@ import 'package:iptv_player/player/engine/player_engine.dart';
 
 import '../support/fake_engine.dart';
 import 'support/player_harness.dart' show forLocales, en, ar;
+import 'support/viewer_harness.dart' show FakeViewerChannel;
 
 const _url = 'http://127.0.0.1:9/live/viewer7/Secret-Pass-9/501.ts';
 
@@ -35,46 +36,6 @@ const _play = PlayMessage(
   secrets: ['viewer7', 'Secret-Pass-9'],
 );
 
-/// The app's end of the connection, in memory.
-class FakeViewerChannel implements ViewerChannel {
-  final _incoming = StreamController<ViewerMessage>();
-  final _done = Completer<void>();
-  final sent = <ViewerMessage>[];
-  bool _closed = false;
-
-  @override
-  Stream<ViewerMessage> get messages => _incoming.stream;
-
-  @override
-  Future<void> get done => _done.future;
-
-  @override
-  bool get isClosed => _closed;
-
-  @override
-  bool send(ViewerMessage message) {
-    if (_closed) return false;
-    sent.add(message);
-    return true;
-  }
-
-  @override
-  Future<void> flush() async {}
-
-  @override
-  void close() {
-    if (_closed) return;
-    _closed = true;
-    _done.complete();
-    unawaited(_incoming.close());
-  }
-
-  /// A message from the app.
-  void deliver(ViewerMessage message) => _incoming.add(message);
-
-  List<String> get sentTypes => [for (final m in sent) m.type];
-}
-
 class _Rig {
   final channel = FakeViewerChannel();
   final engines = FakeEngineFactory();
@@ -83,6 +44,9 @@ class _Rig {
   final wakelock = <bool>[];
   final log = RingLog();
   int exits = 0;
+
+  /// What the runner tells by itself (the small window maximized).
+  final compactEnded = StreamController<void>.broadcast();
 
   late final controls = WindowControls(
     setAlwaysOnTop: (on) async => window.add('top $on'),
@@ -93,6 +57,7 @@ class _Rig {
       enter: () async => window.add('enterFullscreen'),
       exit: () async => window.add('exitFullscreen'),
     ),
+    compactEnded: compactEnded.stream,
   );
 
   FakeEngine get engine => engines.last;
@@ -182,7 +147,7 @@ void main() {
       expect(rig.options.last.hardwareDecoding, isFalse);
       expect(rig.options.last.lite, isTrue);
       expect(rig.window, ['title Panel News']);
-      expect(rig.channel.sentTypes, ['ready', 'playing']);
+      expect(rig.channel.sentTypes, ['ready', 'opening', 'playing']);
       expect(rig.wakelock.last, isTrue);
       expect(find.byKey(const ValueKey('viewer-buffering')), findsNothing);
 
@@ -220,12 +185,13 @@ void main() {
     ]);
     expect(rig.engine.calls, containsAllInOrder(['open', 'stop', 'open']));
     expect(rig.window.last, 'title Sport');
-    expect(rig.channel.sentTypes, ['ready', 'playing', 'playing']);
+    const told = ['ready', 'opening', 'playing', 'opening', 'playing'];
+    expect(rig.channel.sentTypes, told);
     await _unmount(tester);
     // Torn down with the process: nothing more is sent or ended.
     expect(rig.channel.isClosed, isTrue);
     expect(rig.exits, 0);
-    expect(rig.channel.sentTypes, ['ready', 'playing', 'playing']);
+    expect(rig.channel.sentTypes, told);
   });
 
   testWidgets('pin, small window and fullscreen call the window', (
@@ -244,15 +210,37 @@ void main() {
     rig.window.clear();
     await _tap(tester, 'compact');
     expect(rig.window, ['enterCompact']);
-    // Fullscreen from the small window leaves it first.
+    // Fullscreen from the small window: the runner leaves it first, on
+    // the monitor it is on now.
     await _tap(tester, 'fullscreen');
-    expect(rig.window, ['enterCompact', 'exitCompact', 'enterFullscreen']);
+    expect(rig.window, ['enterCompact', 'enterFullscreen']);
     // And the small window from fullscreen.
     rig.window.clear();
     await _tap(tester, 'compact');
     expect(rig.window, ['exitFullscreen', 'enterCompact']);
     await _tap(tester, 'compact');
     expect(rig.window, ['exitFullscreen', 'enterCompact', 'exitCompact']);
+    await _unmount(tester);
+  });
+
+  testWidgets('the small window maximized from its title bar is no longer '
+      'small for the bar either', (tester) async {
+    final rig = await _pump(tester);
+    rig.channel.deliver(_play);
+    await _settle(tester);
+    await _hover(tester);
+    final l10n = await AppLocalizations.delegate.load(en);
+    await _tap(tester, 'compact');
+    expect(find.byTooltip(l10n.viewerNormalSize), findsOneWidget);
+
+    rig.compactEnded.add(null);
+    await _settle(tester);
+    expect(find.byTooltip(l10n.viewerCompact), findsOneWidget);
+    expect(find.byTooltip(l10n.viewerNormalSize), findsNothing);
+    // The next click makes it small again.
+    rig.window.clear();
+    await _tap(tester, 'compact');
+    expect(rig.window, ['enterCompact']);
     await _unmount(tester);
   });
 
@@ -344,7 +332,7 @@ void main() {
     await _settle(tester);
     expect(rig.engine.opened, hasLength(2));
     expect(find.byKey(const ValueKey('player-reconnect')), findsNothing);
-    expect(rig.channel.sentTypes, ['ready', 'playing']);
+    expect(rig.channel.sentTypes, ['ready', 'opening', 'playing']);
     await _unmount(tester);
   });
 
@@ -388,13 +376,34 @@ void main() {
         isTrue,
       );
 
+      // Close is on the card too.
+      expect(find.byKey(const ValueKey('player-close')), findsOneWidget);
+
+      // Retry asks the app; nothing opens before it answers.
       rig.autoPlay();
       rig.engine.onOpen = (e, _) => e.emitFirstFrame();
       await tester.tap(retry);
       await _settle(tester);
+      expect(rig.engine.opened, hasLength(3));
+      expect(rig.channel.sentTypes, ['ready', 'opening', 'error', 'retry']);
+      // A second click while the app answers asks nothing more.
+      await tester.tap(retry);
+      await _settle(tester);
+      expect(rig.channel.sentTypes.where((t) => t == 'retry'), hasLength(1));
+
+      // The app sends the stream again.
+      rig.channel.deliver(_play);
+      await _settle(tester);
       expect(find.byKey(const ValueKey('player-failure')), findsNothing);
       expect(rig.engine.opened, hasLength(4));
-      expect(rig.channel.sentTypes, ['ready', 'error', 'playing']);
+      expect(rig.channel.sentTypes, [
+        'ready',
+        'opening',
+        'error',
+        'retry',
+        'opening',
+        'playing',
+      ]);
       await _unmount(tester);
     });
   });

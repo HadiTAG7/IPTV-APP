@@ -47,18 +47,16 @@ Future<(Socket, Socket)> _pair() async {
 void main() {
   group('command line', () {
     const token = 'abcdefghijklmnopqrstuvwxyz0123456789-_ABCDE';
+    const env = {kViewerTokenEnvironment: token};
 
-    test('round trip, without any URL', () {
+    test('round trip, the token in the environment only', () {
       const args = ViewerLaunchArgs(port: 50123, token: token, locale: 'ar');
       final line = args.toArgs();
-      expect(line, [
-        '--viewer',
-        '--port=50123',
-        '--token=$token',
-        '--locale=ar',
-      ]);
+      expect(line, ['--viewer', '--port=50123', '--locale=ar']);
+      expect(line.join(' '), isNot(contains(token)));
       expect(line.join(' '), isNot(contains('http')));
-      final parsed = ViewerLaunchArgs.parse(line);
+      expect(args.environment, env);
+      final parsed = ViewerLaunchArgs.parse(line, environment: env);
       expect(parsed.port, 50123);
       expect(parsed.token, token);
       expect(parsed.locale, 'ar');
@@ -68,21 +66,25 @@ void main() {
       expect(parsed.toString(), isNot(contains(token)));
     });
 
-    test('a broken viewer line is refused, without echoing the token', () {
-      for (final line in [
-        ['--viewer'],
-        ['--viewer', '--token=$token'],
-        ['--viewer', '--port=0', '--token=$token'],
-        ['--viewer', '--port=70000', '--token=$token'],
-        ['--viewer', '--port=x', '--token=$token'],
-        ['--viewer', '--port=5000'],
-        ['--viewer', '--port=5000', '--token=short'],
-        ['--viewer', '--port=5000', '--token=${'a' * 21}'],
-        ['--viewer', '--port=5000', '--token=has spaces in it plenty long'],
-        ['--port=5000', '--token=$token'],
+    test('a broken viewer start is refused, without echoing the token', () {
+      for (final (line, environment) in <(List<String>, Map<String, String>)>[
+        (['--viewer'], env),
+        (['--viewer', '--port=0'], env),
+        (['--viewer', '--port=70000'], env),
+        (['--viewer', '--port=x'], env),
+        (['--viewer', '--port=5000'], const {}),
+        // A token on the command line is not read.
+        (['--viewer', '--port=5000', '--token=$token'], const {}),
+        (['--viewer', '--port=5000'], const {kViewerTokenEnvironment: 'short'}),
+        (['--viewer', '--port=5000'], {kViewerTokenEnvironment: 'a' * 21}),
+        (
+          ['--viewer', '--port=5000'],
+          const {kViewerTokenEnvironment: 'has spaces in it plenty long'},
+        ),
+        (['--port=5000'], env),
       ]) {
         expect(
-          () => ViewerLaunchArgs.parse(line),
+          () => ViewerLaunchArgs.parse(line, environment: environment),
           throwsA(
             isA<FormatException>().having(
               (e) => e.message,
@@ -99,20 +101,22 @@ void main() {
       final parsed = ViewerLaunchArgs.parse([
         '--viewer',
         '--port=5000',
-        '--token=$token',
         '--locale=fr',
-      ]);
+      ], environment: env);
       expect(parsed.locale, 'en');
     });
 
-    test('tokens are long, random and fit the command line rule', () {
+    test('tokens are long, random and fit the token rule', () {
       final tokens = {for (var i = 0; i < 50; i++) newViewerToken()};
       expect(tokens, hasLength(50));
       for (final t in tokens) {
         // 32 random bytes: 256 bits.
         expect(base64Url.decode('$t='), hasLength(32));
         expect(
-          ViewerLaunchArgs.parse(['--viewer', '--port=1', '--token=$t']).token,
+          ViewerLaunchArgs.parse(
+            ['--viewer', '--port=1'],
+            environment: {kViewerTokenEnvironment: t},
+          ).token,
           t,
         );
       }
@@ -134,9 +138,13 @@ void main() {
       final messages = <ViewerMessage>[
         const HelloMessage(token: 'tok-123'),
         const ReadyMessage(),
+        const OpeningMessage(),
         const PlayingMessage(),
         const ViewerErrorMessage('HTTP error 403 Forbidden'),
+        const RetryMessage(),
         const ClosedMessage(),
+        const InUseMessage(ConnectionInUseBy.mainWindow),
+        const InUseMessage(ConnectionInUseBy.otherWindow),
         const CloseMessage(),
         _play(),
       ];
@@ -245,10 +253,15 @@ void main() {
         '{"type": "hello", "token": "t", "version": "1"}',
         '{"type": "error"}',
         '{"type": "error", "message": 5}',
+        '{"type": "in-use"}',
+        '{"type": "in-use", "by": "someone"}',
         jsonEncode(play({'url': null})),
         jsonEncode(play({'url': ''})),
         jsonEncode(play({'url': 'no scheme here'})),
         jsonEncode(play({'url': 'http://'})),
+        jsonEncode(play({'url': 'file://localhost/etc/passwd'})),
+        jsonEncode(play({'url': 'fd://3'})),
+        jsonEncode(play({'url': 'rtmp://127.0.0.1/live/1'})),
         jsonEncode(play({'url': 'http://h/${'x' * 9000}'})),
         jsonEncode(play({'headers': 'Referer: x'})),
         jsonEncode(
@@ -293,11 +306,17 @@ void main() {
     test('directions', () {
       expect(_play().fromViewer, isFalse);
       expect(const CloseMessage().fromViewer, isFalse);
+      expect(
+        const InUseMessage(ConnectionInUseBy.mainWindow).fromViewer,
+        isFalse,
+      );
       for (final m in const <ViewerMessage>[
         HelloMessage(token: 't'),
         ReadyMessage(),
+        OpeningMessage(),
         PlayingMessage(),
         ViewerErrorMessage('e'),
+        RetryMessage(),
         ClosedMessage(),
       ]) {
         expect(m.fromViewer, isTrue, reason: m.type);

@@ -2,10 +2,11 @@
 //
 // Each detached window is a second process of the app's executable in
 // viewer mode (one Flutter engine and one libmpv per process). The app
-// binds a loopback server, starts the viewer with the port and a one-time
-// token, and sends it the resolved stream once it said hello (with the
-// token) and ready. The viewer exits when the connection closes, so a
-// crashed or closed app never leaves one holding the account's connection.
+// binds a loopback server, starts the viewer with the port (and a one-time
+// token in its environment), and sends it the resolved stream once it said
+// hello (with the token) and ready. The viewer exits when the connection
+// closes, so a crashed or closed app never leaves one holding the
+// account's connection.
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show AppExitResponse;
@@ -19,6 +20,7 @@ import '../../core/db/app_db.dart';
 import '../../core/log/ring_log.dart';
 import '../../core/net/redact.dart';
 import '../../sources/models.dart';
+import '../connection_budget.dart';
 import '../player_providers.dart';
 import '../ui/play_request.dart';
 import '../ui/player_format.dart';
@@ -37,8 +39,12 @@ abstract interface class ViewerProcess {
 
 /// Starts viewer processes; tests use a fake.
 abstract interface class ViewerLauncher {
-  /// Starts the app's executable with [args] (a [ViewerLaunchArgs] line).
-  Future<ViewerProcess> launch(List<String> args);
+  /// Starts the app's executable with [args] (a [ViewerLaunchArgs] line),
+  /// adding [environment] (the token) to the app's own environment.
+  Future<ViewerProcess> launch(
+    List<String> args, {
+    Map<String, String> environment = const {},
+  });
 }
 
 /// Starts [executable] (default: this app's own) as a separate process,
@@ -49,12 +55,19 @@ class ProcessViewerLauncher implements ViewerLauncher {
   final String? executable;
 
   @override
-  Future<ViewerProcess> launch(List<String> args) async {
+  Future<ViewerProcess> launch(
+    List<String> args, {
+    Map<String, String> environment = const {},
+  }) async {
     final exe = executable ?? Platform.resolvedExecutable;
     final process = await Process.start(
       exe,
       args,
       workingDirectory: File(exe).parent.path,
+      // Only the process's own user can read its environment (unlike its
+      // command line).
+      environment: environment,
+      includeParentEnvironment: true,
       mode: ProcessStartMode.normal,
     );
     unawaited(process.stdout.drain<void>().catchError((Object _) {}));
@@ -113,6 +126,10 @@ class ViewerLaunchException implements Exception {
   const ViewerLaunchException(this.reason);
 
   final String reason;
+
+  /// The window was closed on purpose ([DetachedWindows.close], the user)
+  /// or the app is going away; nothing went wrong.
+  bool get closedOnPurpose => reason == 'closed' || reason == 'disposed';
 
   @override
   String toString() => 'ViewerLaunchException($reason)';
@@ -189,6 +206,7 @@ enum ViewerStatus {
   playing,
 
   /// Playback failed; the window shows Retry and holds no connection.
+  /// Retry asks the app first ([RetryMessage]).
   failed,
 }
 
@@ -273,6 +291,7 @@ class _Viewer {
     required this.server,
     required this.token,
     required this.request,
+    required this.play,
     required this.log,
     required this.timeouts,
   }) {
@@ -287,6 +306,10 @@ class _Viewer {
   final ViewerTimeouts timeouts;
   DetachRequest request;
 
+  /// What the window plays ([request]'s message): sent once the viewer is
+  /// ready, and again when a Retry is allowed.
+  PlayMessage play;
+
   StreamSubscription<Socket>? accepts;
 
   /// Connections that have not said hello yet.
@@ -294,13 +317,10 @@ class _Viewer {
   ViewerProcess? process;
   ViewerChannel? channel;
 
-  /// Sent once the viewer is ready.
-  PlayMessage? pendingPlay;
   bool readySeen = false;
   bool exited = false;
   bool closing = false;
   bool dropped = false;
-  int attempts = 0;
   Timer? startTimer;
   final ready = Completer<void>();
 }
@@ -309,6 +329,9 @@ class _Viewer {
 ///
 /// * [detach] starts a viewer and sends it the stream once it is ready.
 /// * [replace] (and [playInWindow]) plays another channel in a window.
+/// * A failed window's Retry plays its channel again only when its source
+///   has a connection free ([connectionBudgetProvider]); otherwise the
+///   window is told what uses it ([InUseMessage]).
 /// * [close] asks a viewer to stop and exit (killing it if it does not),
 ///   [closeAll] closes them all; the app does that when it exits.
 /// * A window disappears from the state when its process exits, its
@@ -316,11 +339,15 @@ class _Viewer {
 class DetachedWindows extends Notifier<List<DetachedViewer>> {
   final _viewers = <int, _Viewer>{};
   final _timers = <Timer>{};
+
+  /// The [close] in progress of each window, which later callers share.
+  final _closes = <int, Future<void>>{};
   int _nextId = 1;
   AppLifecycleListener? _exitHook;
 
-  /// Wrong-token or junk connections a server takes before it gives up.
-  static const _maxAttempts = 8;
+  /// Connections waiting for their hello at once; more are refused (the
+  /// server keeps listening for the viewer).
+  static const _maxPending = 8;
 
   @override
   List<DetachedViewer> build() {
@@ -330,13 +357,20 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
 
   RingLog get _log => ref.read(ringLogProvider);
 
+  /// Whether a window plays [request]'s stream ([isViewerStreamUrl]);
+  /// [detach] refuses it otherwise. Logged when not.
+  bool canPlay(DetachRequest request) => _playMessage(request) != null;
+
   /// Opens a window playing [request]. Completes with its id once the
   /// viewer is ready and has the stream; throws a [ViewerLaunchException]
-  /// when it could not be started or never answered.
+  /// when a window cannot play the stream ([isViewerStreamUrl]), it could
+  /// not be started, never answered or was closed meanwhile.
   Future<int> detach(DetachRequest request) async {
     final launcher = ref.read(viewerLauncherProvider);
     final timeouts = ref.read(viewerTimeoutsProvider);
     final log = _log;
+    final play = _playMessage(request);
+    if (play == null) throw const ViewerLaunchException('stream');
     final ServerSocket server;
     try {
       server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
@@ -354,9 +388,10 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
       server: server,
       token: newViewerToken(),
       request: request,
+      play: play,
       log: log,
       timeouts: timeouts,
-    )..pendingPlay = _playMessage(request);
+    );
     _viewers[id] = viewer;
     _ensureExitHook();
     state = [
@@ -378,12 +413,15 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
       port: server.port,
       token: viewer.token,
       locale: request.locale,
-    ).toArgs();
+    );
     final ViewerProcess process;
     try {
-      process = await launcher.launch(args);
+      process = await launcher.launch(
+        args.toArgs(),
+        environment: args.environment,
+      );
     } on Object catch (e) {
-      // ProcessException.toString() repeats the arguments (the token).
+      // Only the type: ProcessException.toString() repeats the command.
       log.warn('Detached window $id: could not start (${e.runtimeType})');
       _drop(viewer, const ViewerLaunchException('start'));
       throw const ViewerLaunchException('start');
@@ -412,18 +450,19 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
   }
 
   /// Plays [request] in the window [viewerId] instead of its channel.
-  /// False when that window is gone or closing.
+  /// False when that window is gone or closing, or cannot play the stream.
   bool replace(int viewerId, DetachRequest request) {
     final viewer = _viewers[viewerId];
     if (viewer == null || viewer.closing || viewer.dropped) return false;
     final play = _playMessage(request);
+    if (play == null) return false;
     if (viewer.readySeen) {
       final channel = viewer.channel;
       if (channel == null || !channel.send(play)) return false;
-    } else {
-      viewer.pendingPlay = play;
     }
-    viewer.request = request;
+    viewer
+      ..play = play
+      ..request = request;
     _log.info('Detached window $viewerId: new channel');
     _update(
       viewerId,
@@ -464,14 +503,31 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
 
   /// Asks the window [viewerId] to stop and exit, and waits until it has
   /// (its connection is free then); after [wait] (default
-  /// [ViewerTimeouts.close]) it is killed.
-  Future<void> close(int viewerId, {Duration? wait}) async {
+  /// [ViewerTimeouts.close]) it is killed. A window that has not connected
+  /// yet is shut out and killed at once: it never gets the stream. Every
+  /// caller waits for the same close.
+  Future<void> close(int viewerId, {Duration? wait}) {
+    final closing = _closes[viewerId];
+    if (closing != null) return closing;
     final viewer = _viewers[viewerId];
-    if (viewer == null || viewer.closing) return;
+    if (viewer == null || viewer.closing) return Future.value();
+    final done = _close(viewer, wait ?? viewer.timeouts.close);
+    _closes[viewerId] = done;
+    unawaited(done.whenComplete(() => _closes.remove(viewerId)));
+    return done;
+  }
+
+  Future<void> _close(_Viewer viewer, Duration timeout) async {
+    final viewerId = viewer.id;
     viewer.closing = true;
-    final timeout = wait ?? viewer.timeouts.close;
     final channel = viewer.channel;
-    if (channel != null && channel.send(const CloseMessage())) {
+    if (channel == null) {
+      // Still starting: nothing may connect any more, and with nothing to
+      // stop it can go at once.
+      _closeServer(viewer);
+      _closeChannels(viewer);
+      if (!viewer.exited) viewer.process?.kill();
+    } else if (channel.send(const CloseMessage())) {
       await channel.flush();
     }
     final process = viewer.process;
@@ -497,26 +553,40 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
 
   // ---------------------------------------------------------------------
 
-  PlayMessage _playMessage(DetachRequest request) => PlayMessage.of(
-    request.stream,
-    title: request.title,
-    logo: request.logo,
-    channelKey: request.channelKey,
-    maxConnections: request.maxConnections,
-    options: ref.read(engineOptionsProvider),
-    secrets: request.secrets,
-  );
+  /// The play line for [request]; null (logged) when a window cannot play
+  /// its stream.
+  PlayMessage? _playMessage(DetachRequest request) {
+    try {
+      return PlayMessage.of(
+        request.stream,
+        title: request.title,
+        logo: request.logo,
+        channelKey: request.channelKey,
+        maxConnections: request.maxConnections,
+        options: ref.read(engineOptionsProvider),
+        secrets: request.secrets,
+      );
+    } on FormatException catch (e) {
+      // The message names the field, never its value.
+      _log.warn(
+        'Detached window: source ${request.sourceId} stream refused '
+        '(${e.message})',
+      );
+      return null;
+    }
+  }
 
   /// A connection to [viewer]'s server: it must say hello with the token
   /// first, then it is the viewer's channel and the server closes.
   void _onConnection(_Viewer viewer, Socket socket) {
-    if (viewer.dropped || viewer.channel != null) {
+    if (viewer.dropped || viewer.closing || viewer.channel != null) {
       socket.destroy();
       return;
     }
-    if (++viewer.attempts > _maxAttempts) {
+    // Junk keeps the server busy only until its handshake times out; the
+    // server keeps listening, so the viewer still gets in.
+    if (viewer.pending.length >= _maxPending) {
       socket.destroy();
-      _closeServer(viewer);
       return;
     }
     final log = viewer.log;
@@ -558,7 +628,8 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
           message.version == kViewerProtocolVersion &&
           tokensMatch(viewer.token, message.token) &&
           viewer.channel == null &&
-          !viewer.dropped) {
+          !viewer.dropped &&
+          !viewer.closing) {
         authenticated = true;
         viewer.channel = channel;
         // One viewer per server: nothing else may connect now.
@@ -593,14 +664,22 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
         if (viewer.readySeen) return;
         viewer.readySeen = true;
         viewer.startTimer?.cancel();
-        final play = viewer.pendingPlay;
-        viewer.pendingPlay = null;
-        if (play != null && !(viewer.channel?.send(play) ?? false)) {
+        if (viewer.closing) {
+          // Closed while it started: it never gets the stream (close()
+          // has told it to exit).
+          if (!viewer.ready.isCompleted) {
+            viewer.ready.completeError(const ViewerLaunchException('closed'));
+          }
+          return;
+        }
+        if (!(viewer.channel?.send(viewer.play) ?? false)) {
           _drop(viewer, const ViewerLaunchException('disconnected'));
           return;
         }
         _update(id, (v) => v.copyWith(status: ViewerStatus.opening));
         if (!viewer.ready.isCompleted) viewer.ready.complete();
+      case OpeningMessage():
+        _update(id, (v) => v.copyWith(status: ViewerStatus.opening));
       case PlayingMessage():
         _update(id, (v) => v.copyWith(status: ViewerStatus.playing));
       case ViewerErrorMessage(:final message):
@@ -610,13 +689,54 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
           '${hideUrlPaths(redact(message, secrets: secrets))}',
         );
         _update(id, (v) => v.copyWith(status: ViewerStatus.failed));
+      case RetryMessage():
+        _onRetry(viewer);
       case ClosedMessage():
         viewer.log.info('Detached window $id: closed by the user');
         viewer.closing = true;
         _drop(viewer, const ViewerLaunchException('closed'));
-      case HelloMessage() || PlayMessage() || CloseMessage():
+      case HelloMessage() || PlayMessage() || InUseMessage() || CloseMessage():
         break;
     }
+  }
+
+  /// Retry in [viewer]'s failed window: its channel plays again only when
+  /// its source has a connection free without this window (the main
+  /// player or another window may have taken it since it failed); else the
+  /// window hears what uses it and opens nothing.
+  void _onRetry(_Viewer viewer) {
+    final id = viewer.id;
+    final channel = viewer.channel;
+    final status = state.where((v) => v.id == id).firstOrNull?.status;
+    // Not failed: a new channel is already on its way to the window.
+    if (channel == null || viewer.closing || status != ViewerStatus.failed) {
+      return;
+    }
+    final sourceId = viewer.request.sourceId;
+    // As connectionBudgetProvider counts (it depends on this notifier, so
+    // it cannot be read from here).
+    final others = connectionBudgetOf(
+      sources: ref.read(sourcesProvider).value ?? const [],
+      viewers: state,
+      player: ref.read(mainPlayerSourceProvider),
+    ).without(viewerId: id);
+    if (!others.fits(sourceId)) {
+      final by = others.usedOn(sourceId, holder: ConnectionHolder.player) > 0
+          ? ConnectionInUseBy.mainWindow
+          : ConnectionInUseBy.otherWindow;
+      viewer.log.info(
+        'Detached window $id: retry refused, the connection is in use '
+        '(${by.name})',
+      );
+      channel.send(InUseMessage(by));
+      return;
+    }
+    if (!channel.send(viewer.play)) {
+      _drop(viewer, const ViewerLaunchException('disconnected'));
+      return;
+    }
+    viewer.log.info('Detached window $id: playing again');
+    _update(id, (v) => v.copyWith(status: ViewerStatus.opening));
   }
 
   void _onExit(_Viewer viewer, int code) {
@@ -629,8 +749,9 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
   }
 
   /// Forgets [viewer]: closes its server and channel, fails a pending
-  /// [detach] with [failure], and kills the process if it does not exit by
-  /// itself (it does once its channel is closed).
+  /// [detach] with [failure] (with 'closed' for a window being closed), and
+  /// kills the process if it does not exit by itself (it does once its
+  /// channel is closed).
   void _drop(_Viewer viewer, ViewerLaunchException failure) {
     if (viewer.dropped) return;
     viewer.dropped = true;
@@ -638,7 +759,11 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
     _viewers.remove(viewer.id);
     _closeServer(viewer);
     _closeChannels(viewer);
-    if (!viewer.ready.isCompleted) viewer.ready.completeError(failure);
+    if (!viewer.ready.isCompleted) {
+      viewer.ready.completeError(
+        viewer.closing ? const ViewerLaunchException('closed') : failure,
+      );
+    }
     final process = viewer.process;
     if (process != null && !viewer.exited) {
       late final Timer reaper;

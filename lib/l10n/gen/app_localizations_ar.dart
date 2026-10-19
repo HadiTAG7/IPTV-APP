@@ -581,6 +581,10 @@ class AppLocalizationsAr extends AppLocalizations {
       'اشتراكك لا يسمح بتشغيل قناة ثانية في الوقت نفسه.';
 
   @override
+  String get detachInUseMessageVod =>
+      'اشتراكك لا يسمح بتشغيل هذا مع قناة النافذة في الوقت نفسه.';
+
+  @override
   String get detachPlayInWindow => 'شغّل هذه القناة في النافذة بدلاً منها';
 
   @override
@@ -609,6 +613,14 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get viewerNormalSize => 'الحجم العادي';
+
+  @override
+  String get viewerInUseMainWindow =>
+      'اتصال الاشتراك مستخدم في النافذة الرئيسية.';
+
+  @override
+  String get viewerInUseOtherWindow =>
+      'اتصال الاشتراك مستخدم في نافذة منفصلة أخرى.';
 
   @override
   String get playerLive => 'مباشر';

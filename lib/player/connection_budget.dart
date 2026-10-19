@@ -88,6 +88,15 @@ class ConnectionBudget {
     return free == null || free >= count;
   }
 
+  /// This budget without the connection of the detached window [viewerId].
+  ConnectionBudget without({required int viewerId}) => ConnectionBudget(
+    limits: limits,
+    uses: [
+      for (final u in uses)
+        if (u.viewerId != viewerId) u,
+    ],
+  );
+
   /// Ids of the detached windows playing from [sourceId], oldest first.
   List<int> viewersOn(int sourceId) => [
     for (final u in uses)
@@ -117,31 +126,40 @@ class MainPlayerSource extends Notifier<int?> {
   }
 }
 
-/// The current [ConnectionBudget]: the saved sources' limits (a detached
-/// window remembers its source's limit too), the fullscreen player and the
-/// detached windows that hold a connection.
-final connectionBudgetProvider = Provider<ConnectionBudget>((ref) {
-  final sources = ref.watch(sourcesProvider).value ?? const <SourceView>[];
-  final viewers = ref.watch(detachedWindowsProvider);
-  final player = ref.watch(mainPlayerSourceProvider);
-  return ConnectionBudget(
-    limits: {
-      for (final v in viewers) v.sourceId: v.maxConnections,
-      for (final s in sources) s.id: s.maxConnections,
-    },
-    uses: [
-      if (player != null)
-        ConnectionUse(sourceId: player, holder: ConnectionHolder.player),
-      for (final v in viewers)
-        if (v.holdsConnection)
-          ConnectionUse(
-            sourceId: v.sourceId,
-            holder: ConnectionHolder.viewer,
-            viewerId: v.id,
-          ),
-    ],
-  );
-}, name: 'connectionBudgetProvider');
+/// The current [ConnectionBudget] ([connectionBudgetOf]).
+final connectionBudgetProvider = Provider<ConnectionBudget>(
+  (ref) => connectionBudgetOf(
+    sources: ref.watch(sourcesProvider).value ?? const [],
+    viewers: ref.watch(detachedWindowsProvider),
+    player: ref.watch(mainPlayerSourceProvider),
+  ),
+  name: 'connectionBudgetProvider',
+);
+
+/// The budget of the saved [sources]' limits (a detached window remembers
+/// its source's limit too), the fullscreen [player]'s source and the
+/// detached [viewers] that hold a connection.
+ConnectionBudget connectionBudgetOf({
+  required List<SourceView> sources,
+  required List<DetachedViewer> viewers,
+  int? player,
+}) => ConnectionBudget(
+  limits: {
+    for (final v in viewers) v.sourceId: v.maxConnections,
+    for (final s in sources) s.id: s.maxConnections,
+  },
+  uses: [
+    if (player != null)
+      ConnectionUse(sourceId: player, holder: ConnectionHolder.player),
+    for (final v in viewers)
+      if (v.holdsConnection)
+        ConnectionUse(
+          sourceId: v.sourceId,
+          holder: ConnectionHolder.viewer,
+          viewerId: v.id,
+        ),
+  ],
+);
 
 /// Sources whose unknown limit was already logged.
 final _unknownLimitLogged = Provider<Set<int>>((ref) => <int>{});
