@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart'
     show defaultEnterNativeFullscreen, defaultExitNativeFullscreen;
@@ -40,4 +42,40 @@ class WindowFullscreen {
 
   final Future<void> Function() enter;
   final Future<void> Function() exit;
+}
+
+/// One screen's hold on the app window's fullscreen (the player, the split
+/// screen). The last screen that entered fullscreen owns it, and only the
+/// owner gives it back: a closing screen never undoes the fullscreen of
+/// the one that opened during its exit transition, or of the one it handed
+/// over to.
+class WindowFullscreenHold {
+  WindowFullscreenHold(this.window);
+
+  /// The desktop window; null on Android (nothing to hold).
+  final WindowFullscreen? window;
+
+  /// The hold that entered fullscreen last.
+  static WindowFullscreenHold? _owner;
+
+  bool _on = false;
+
+  /// Whether this screen wants the window fullscreen.
+  bool get isOn => _on;
+
+  /// Enters ([on]) or gives back fullscreen. False when nothing changed
+  /// (no window, or already so).
+  bool set(bool on) {
+    final window = this.window;
+    if (window == null || on == _on) return false;
+    _on = on;
+    if (on) {
+      _owner = this;
+      unawaited(window.enter());
+    } else if (identical(_owner, this)) {
+      _owner = null;
+      unawaited(window.exit());
+    }
+    return true;
+  }
 }

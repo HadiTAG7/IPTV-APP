@@ -719,9 +719,14 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
       sources: ref.read(sourcesProvider).value ?? const [],
       viewers: state,
       player: ref.read(mainPlayerSourceProvider),
+      tiles: ref.read(multiViewTilesProvider),
     ).without(viewerId: id);
     if (!others.fits(sourceId)) {
-      final by = others.usedOn(sourceId, holder: ConnectionHolder.player) > 0
+      // The player and the split screen's tiles are in the main window.
+      final inMain =
+          others.usedOn(sourceId, holder: ConnectionHolder.player) +
+          others.usedOn(sourceId, holder: ConnectionHolder.tile);
+      final by = inMain > 0
           ? ConnectionInUseBy.mainWindow
           : ConnectionInUseBy.otherWindow;
       viewer.log.info(

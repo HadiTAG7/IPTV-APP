@@ -26,6 +26,8 @@ import '../../widgets/bidi_text.dart';
 import '../connection_budget.dart';
 import '../detach/detached_windows.dart';
 import '../engine/player_engine.dart';
+import '../multiview/multiview_screen.dart';
+import '../multiview/multiview_tile.dart';
 import '../player_providers.dart';
 import '../session/playback_controller.dart';
 import 'channel_panel.dart';
@@ -44,6 +46,10 @@ enum PlayerAction {
 
   /// Desktop live: plays the channel in a window of its own.
   detach,
+
+  /// Desktop live: the split screen ([MultiViewScreen]) with the channel
+  /// in its first tile.
+  split,
   audio,
   subtitles,
   aspect,
@@ -81,7 +87,9 @@ enum PlayerAction {
 ///   Escape leaves it. Moving the mouse shows the OSD; the cursor hides
 ///   with it. Live channels can be detached (Separate window, D) into a
 ///   window of their own ([DetachedWindows]): the player closes, and only
-///   once its stream is stopped does the window open it.
+///   once its stream is stopped does the window open it. Split screen (S)
+///   hands the channel over to the first tile of a [MultiViewScreen] the
+///   same way.
 /// * Phones and desktop: the OSD's top bar has a Back button.
 class PlayerScreen extends ConsumerStatefulWidget {
   const PlayerScreen({super.key, required this.request});
@@ -177,11 +185,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   /// The desktop window ([playerWindowProvider]); null on Android.
   WindowFullscreen? _window;
-  bool _windowFullscreen = false;
 
-  /// The player holding the window fullscreen, with the same hand-over
-  /// rule as the orientation.
-  static Object? _windowOwner;
+  /// This player's hold on the window's fullscreen, handed over like the
+  /// orientation (also to the split screen).
+  late final WindowFullscreenHold _windowHold;
+  bool get _windowFullscreen => _windowHold.isOn;
 
   /// Mouse moves are ignored for a moment after the window changed size:
   /// Windows reports one when the window moves under a still cursor.
@@ -225,6 +233,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       _mainPlayer.set(widget.request.sourceId);
     });
     _window = ref.read(playerWindowProvider);
+    _windowHold = WindowFullscreenHold(_window);
     if (ref.read(playerOpensFullscreenProvider)) _setWindowFullscreen(true);
     // New guide data: the banner and OSD read now/next again.
     ref.listenManual<GuideRefreshStatus>(
@@ -340,25 +349,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   /// Makes the desktop window fullscreen ([on]) or gives it back. Only the
-  /// player holding it gives it back, so a closing player never undoes the
-  /// fullscreen of one opened during its exit transition.
+  /// screen holding it gives it back ([WindowFullscreenHold]), so a closing
+  /// player never undoes the fullscreen of one opened during its exit
+  /// transition, nor of the split screen it handed over to.
   void _setWindowFullscreen(bool on) {
-    final window = _window;
-    if (window == null || on == _windowFullscreen) return;
-    _windowFullscreen = on;
+    if (!_windowHold.set(on)) return;
     _hoverMuted = true;
     _hoverMuteTimer?.cancel();
     _hoverMuteTimer = Timer(
       const Duration(milliseconds: 600),
       () => _hoverMuted = false,
     );
-    if (on) {
-      _windowOwner = this;
-      unawaited(window.enter());
-    } else if (identical(_windowOwner, this)) {
-      _windowOwner = null;
-      unawaited(window.exit());
-    }
   }
 
   /// The fullscreen button, F, F11 and double clicks. The choice also
@@ -778,6 +779,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       if (down) unawaited(_detach());
       return KeyEventResult.handled;
     }
+    if (key == LogicalKeyboardKey.keyS && _canDetach) {
+      if (down) unawaited(_splitScreen());
+      return KeyEventResult.handled;
+    }
     // Escape leaves window fullscreen (and the OSD) before it means Back.
     if (key == LogicalKeyboardKey.escape && _windowFullscreen) {
       if (down) {
@@ -1016,7 +1021,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   /// Everything of [_exit] but closing the route. Returns when the stream
   /// is stopped (its connection closed), or null when already exiting.
-  Future<void>? _beginExit() {
+  /// [keepWindow] leaves the window fullscreen for the screen it is handed
+  /// over to (the split screen).
+  Future<void>? _beginExit({bool keepWindow = false}) {
     if (_exiting) return null;
     // Nothing on screen takes a click any more (the route may only close
     // once the stream has stopped).
@@ -1035,12 +1042,47 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _onlineSub = null;
     _releaseOrientation();
     _releaseFullscreen();
-    _setWindowFullscreen(false);
+    if (!keepWindow) _setWindowFullscreen(false);
     return _controller.stop();
   }
 
-  /// Whether the channel can go to a window of its own: live, on desktop.
+  /// Whether the channel can go to a window of its own or to the split
+  /// screen: live, on desktop.
   bool get _canDetach => _window != null && _session.isLive && !_exiting;
+
+  /// Opens the split screen with this channel in its first tile: the
+  /// player stops its stream and closes first, and only then does the tile
+  /// open the channel (a one-connection account never has two open). The
+  /// window stays as it is (fullscreen or not).
+  Future<void> _splitScreen() async {
+    if (!_canDetach) return;
+    final s = _session;
+    final row = s.channel;
+    final first = MultiViewChannel(
+      sourceId: s.sourceId,
+      item: row?.toPlayable() ?? s.request.item,
+      name: row?.name ?? s.title,
+      logo: row?.logo,
+      list: _panelList(),
+    );
+    ref.read(ringLogProvider).info('Player: split screen');
+    final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
+    final fullscreen = _windowFullscreen;
+    final stopped = _beginExit(keepWindow: true);
+    if (stopped == null) return;
+    await stopped;
+    // Gone meanwhile (the app is closing): its dispose gives the window
+    // back.
+    if (route == null || !route.isActive || !navigator.mounted) return;
+    // This player's route, whatever may have opened above it meanwhile.
+    if (route.isCurrent) {
+      navigator.pop();
+    } else {
+      navigator.removeRoute(route);
+    }
+    unawaited(openMultiView(navigator, first: first, fullscreen: fullscreen));
+  }
 
   /// Plays the channel in a detached window ([DetachedWindows.detach]):
   /// the player stops its stream and closes first, and only then does the
@@ -1155,6 +1197,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         _openPanel();
       case PlayerAction.detach:
         await _detach();
+      case PlayerAction.split:
+        await _splitScreen();
       case PlayerAction.audio:
         await _pickAudio();
       case PlayerAction.subtitles:
@@ -1300,6 +1344,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   List<PlayerAction> _actions() => [
     if (_session.isLive) PlayerAction.channels,
     if (_canDetach) PlayerAction.detach,
+    if (_canDetach) PlayerAction.split,
     PlayerAction.audio,
     PlayerAction.subtitles,
     PlayerAction.aspect,
@@ -1313,6 +1358,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   String _label(AppLocalizations l10n, PlayerAction a) => switch (a) {
     PlayerAction.channels => l10n.playerChannels,
     PlayerAction.detach => l10n.playerDetach,
+    PlayerAction.split => l10n.playerSplitScreen,
     PlayerAction.audio => l10n.playerAudio,
     PlayerAction.subtitles => l10n.playerSubtitles,
     PlayerAction.aspect => l10n.playerAspectRatio,
@@ -1327,6 +1373,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   IconData _icon(PlayerAction a) => switch (a) {
     PlayerAction.channels => Icons.list,
     PlayerAction.detach => Icons.open_in_new,
+    PlayerAction.split => Icons.grid_view,
     PlayerAction.audio => Icons.audiotrack_outlined,
     PlayerAction.subtitles => Icons.subtitles_outlined,
     PlayerAction.aspect => Icons.aspect_ratio,

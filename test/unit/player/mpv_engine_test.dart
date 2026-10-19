@@ -498,6 +498,20 @@ void main() {
     },
   );
 
+  test('the Lite cache can be chosen later; nothing after dispose', () async {
+    final rig = Rig();
+    expect(rig.engine.lite, isFalse);
+    await rig.engine.setLite(true);
+    expect(rig.engine.lite, isTrue);
+    await rig.engine.open(live);
+    expect((await rig.engine.stats())['cache'], '32 MB');
+    await rig.engine.setLite(false);
+    expect((await rig.engine.stats())['cache'], '64 MB');
+    await rig.engine.dispose();
+    await rig.engine.setLite(true);
+    expect(rig.engine.lite, isFalse);
+  });
+
   group('shared core', () {
     late List<FakePlatformPlayer> players;
     late List<bool> lites;

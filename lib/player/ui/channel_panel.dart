@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/form_factor.dart';
@@ -19,6 +20,7 @@ import '../../features/live/providers.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../../sources/models.dart';
 import '../../theme/tokens.dart';
+import '../../tv/key_repeat.dart';
 import '../../tv/pane_scope.dart';
 import '../../widgets/states.dart';
 import 'player_overlays.dart';
@@ -48,6 +50,10 @@ typedef PanelChannelCallback = void Function(LiveEntry entry, bool favorite);
 ///
 /// The player owns Back, the auto-hide timer and tuning. Pointer activity
 /// on the panel reports [onActivity].
+///
+/// The split screen's channel picker uses it with its own [title] and a
+/// [header] under it (the source switcher): Up from the top of the
+/// categories reaches the header, Down from the header goes back in.
 class ChannelPanel extends ConsumerStatefulWidget {
   const ChannelPanel({
     super.key,
@@ -58,6 +64,9 @@ class ChannelPanel extends ConsumerStatefulWidget {
     required this.onClose,
     this.onChannelMenu,
     this.onActivity,
+    this.title,
+    this.header,
+    this.slideIn = true,
   });
 
   /// Focus rests this long on a category before its channels show.
@@ -93,12 +102,22 @@ class ChannelPanel extends ConsumerStatefulWidget {
   final PanelChannelCallback? onChannelMenu;
   final VoidCallback? onActivity;
 
+  /// The panel's title; "Channels" by default.
+  final String? title;
+
+  /// Shown under the title, above the columns.
+  final Widget? header;
+
+  /// Whether the panel slides in from the start edge (at once when false).
+  final bool slideIn;
+
   @override
   ConsumerState<ChannelPanel> createState() => ChannelPanelState();
 }
 
 class ChannelPanelState extends ConsumerState<ChannelPanel> {
   final _scope = FocusScopeNode(debugLabel: 'channel-panel');
+  final _headerScope = FocusScopeNode(debugLabel: 'channel-panel:header');
   final _catsPane = GlobalKey<PaneScopeState>();
   final _channelsPane = GlobalKey<PaneScopeState>();
   final _categories = GlobalKey<LiveCategoryPaneState>();
@@ -156,8 +175,24 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
     _selectTimer?.cancel();
     _openGuardTimer?.cancel();
     _store.dispose();
+    _headerScope.dispose();
     _scope.dispose();
     super.dispose();
+  }
+
+  /// Up from the top of the categories: into the [ChannelPanel.header].
+  void _focusHeader() {
+    if (!focusRememberedOrFirst(_headerScope)) _focusSelectedCategory();
+  }
+
+  /// Down from the header goes back to the lists.
+  KeyEventResult _onHeaderKey(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        arrowDirection(event.logicalKey) != TraversalDirection.down) {
+      return KeyEventResult.ignored;
+    }
+    focusIn();
+    return KeyEventResult.handled;
   }
 
   // -------------------------------------------------------------------------
@@ -338,6 +373,7 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
       key: _catsPane,
       debugLabel: 'panel-categories',
       onExitEnd: _enterChannels,
+      onExitUp: widget.header == null ? null : _focusHeader,
       child: LiveCategoryPane(
         key: _categories,
         entries: entries,
@@ -399,6 +435,7 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
     final side = overscan.horizontal / 2;
     final full = !isLargeLayout(context);
     final theme = Theme.of(context);
+    final header = widget.header;
     final panel = Material(
       key: const ValueKey('channel-panel'),
       color: _panelColor,
@@ -420,7 +457,7 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
                   const SizedBox(width: Spacing.sm),
                   Expanded(
                     child: Text(
-                      l10n.playerChannels,
+                      widget.title ?? l10n.playerChannels,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.titleLarge,
@@ -437,6 +474,19 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
                 ],
               ),
               const SizedBox(height: Spacing.sm),
+              if (header != null) ...[
+                FocusScope(
+                  node: _headerScope,
+                  child: Focus(
+                    canRequestFocus: false,
+                    skipTraversal: true,
+                    includeSemantics: false,
+                    onKeyEvent: _onHeaderKey,
+                    child: header,
+                  ),
+                ),
+                const SizedBox(height: Spacing.sm),
+              ],
               Expanded(child: body),
             ],
           ),
@@ -483,7 +533,10 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
                 top: 0,
                 bottom: 0,
                 width: width,
-                child: FocusScope(node: _scope, child: _slideIn(panel)),
+                child: FocusScope(
+                  node: _scope,
+                  child: widget.slideIn ? _slideIn(panel) : panel,
+                ),
               ),
             ],
           );

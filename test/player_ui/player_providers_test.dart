@@ -87,6 +87,30 @@ void main() {
     });
   });
 
+  group('WakelockHolds', () {
+    test('on with the first holder, off only after the last', () {
+      final calls = <bool>[];
+      final holds = WakelockHolds(calls.add);
+      final a = holds.holder();
+      final b = holds.holder();
+      a(false);
+      expect(calls, isEmpty);
+      a(true);
+      b(true);
+      a(true);
+      expect(calls, [true]);
+      a(false);
+      expect(calls, [true]);
+      expect(holds.isOn, isTrue);
+      b(false);
+      b(false);
+      expect(calls, [true, false]);
+      expect(holds.isOn, isFalse);
+      b(true);
+      expect(calls, [true, false, true]);
+    });
+  });
+
   group('playbackControllerProvider', () {
     late PlayerRig rig;
     late ProviderContainer container;

@@ -605,6 +605,50 @@ class AppLocalizationsEn extends AppLocalizations {
       'The subscription\'s connection is in use in another separate window.';
 
   @override
+  String get playerSplitScreen => 'Split screen';
+
+  @override
+  String get multiviewAddChannel => 'Add channel';
+
+  @override
+  String get multiviewChangeChannel => 'Change channel';
+
+  @override
+  String get multiviewRemoveChannel => 'Remove channel';
+
+  @override
+  String get multiviewTwoChannels => '2 channels';
+
+  @override
+  String get multiviewFourChannels => '4 channels';
+
+  @override
+  String get multiviewSource => 'Source';
+
+  @override
+  String multiviewTile(int tile) {
+    return 'Tile $tile';
+  }
+
+  @override
+  String get multiviewNoConnectionTitle => 'No free connection';
+
+  @override
+  String multiviewInUseTile(String source, int tile) {
+    return 'Subscription “⁨$source⁩” allows one connection, and it is in use in tile $tile. Choose a channel from another source, or upgrade your subscription.';
+  }
+
+  @override
+  String multiviewInUseWindow(String source) {
+    return 'Subscription “⁨$source⁩” allows one connection, and it is in use in a separate window. Choose a channel from another source, or upgrade your subscription.';
+  }
+
+  @override
+  String multiviewInUseMany(String source, int limit) {
+    return 'Subscription “⁨$source⁩” allows $limit connections, and all of them are in use. Choose a channel from another source, or upgrade your subscription.';
+  }
+
+  @override
   String get playerLive => 'LIVE';
 
   @override

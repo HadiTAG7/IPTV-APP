@@ -153,6 +153,9 @@ class PlaybackController extends ChangeNotifier {
   double _volume = 1;
   bool _muted = false;
 
+  /// The cache size [setLite] chose; null leaves engines as created.
+  bool? _lite;
+
   /// The app is in the background ([onBackground] .. [onForeground]), with
   /// or without a session: items started meanwhile start backgrounded.
   bool _appBackground = false;
@@ -345,6 +348,16 @@ class PlaybackController extends ChangeNotifier {
     await _engine?.setMuted(muted);
   }
 
+  /// The Lite (smaller) or normal cache for this engine and later ones
+  /// ([PlayerEngine.setLite]); untouched, engines keep the size they were
+  /// created with.
+  bool? get lite => _lite;
+
+  Future<void> setLite(bool lite) async {
+    _lite = lite;
+    await _engine?.setLite(lite);
+  }
+
   /// Engine stats plus session timing for the stats overlay.
   Future<Map<String, String>> stats() async {
     final base = await _engine?.stats() ?? const <String, String>{};
@@ -520,6 +533,8 @@ class PlaybackController extends ChangeNotifier {
     _engineSub = engine.events.listen((e) => _onEngineEvent(engine, e));
     if (_volume != 1) unawaited(engine.setVolume(_volume));
     if (_muted) unawaited(engine.setMuted(true));
+    final lite = _lite;
+    if (lite != null) unawaited(engine.setLite(lite));
     if (!_disposed) {
       _state.value = engine.state.value;
       notifyListeners();

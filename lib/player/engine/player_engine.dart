@@ -158,6 +158,11 @@ abstract class PlayerEngine {
   /// starts unmuted.
   Future<void> setMuted(bool muted);
 
+  /// Uses the smaller Lite cache ([lite]) or the normal one from now on,
+  /// whatever the engine was created with. Engines whose buffer is not
+  /// theirs to size ignore it.
+  Future<void> setLite(bool lite);
+
   Widget buildView({AspectMode aspect = AspectMode.fit});
 
   Future<void> dispose();

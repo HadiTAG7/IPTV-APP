@@ -132,6 +132,15 @@ class FakeEngine implements PlayerEngine {
     this.muted = muted;
   }
 
+  /// Set by [setLite]; null until called.
+  bool? lite;
+
+  @override
+  Future<void> setLite(bool lite) async {
+    calls.add('setLite $lite');
+    this.lite = lite;
+  }
+
   @override
   Widget buildView({AspectMode aspect = AspectMode.fit}) =>
       SizedBox.expand(key: ValueKey('fake-$_tag-${aspect.name}'));

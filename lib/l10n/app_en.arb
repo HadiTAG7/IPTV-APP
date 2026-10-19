@@ -325,6 +325,80 @@
   "@viewerInUseOtherWindow": {
     "description": "Separate player window, after Retry: the channel can't play again because another separate window now uses the subscription's connection."
   },
+  "playerSplitScreen": "Split screen",
+  "@playerSplitScreen": {
+    "description": "Desktop player OSD button, options entry and title of the split screen: watch 2 or 4 live channels at once in tiles of the app's window."
+  },
+  "multiviewAddChannel": "Add channel",
+  "@multiviewAddChannel": {
+    "description": "Split screen: the big button of an empty tile, and the title of the channel picker for it."
+  },
+  "multiviewChangeChannel": "Change channel",
+  "@multiviewChangeChannel": {
+    "description": "Split screen: tile button (and channel picker title) that plays another channel in the tile."
+  },
+  "multiviewRemoveChannel": "Remove channel",
+  "@multiviewRemoveChannel": {
+    "description": "Split screen: tile button that stops the tile's channel and empties the tile."
+  },
+  "multiviewTwoChannels": "2 channels",
+  "@multiviewTwoChannels": {
+    "description": "Split screen layout button: two tiles side by side."
+  },
+  "multiviewFourChannels": "4 channels",
+  "@multiviewFourChannels": {
+    "description": "Split screen layout button: four tiles, two by two."
+  },
+  "multiviewSource": "Source",
+  "@multiviewSource": {
+    "description": "Split screen channel picker: label of the row of the user's sources (subscriptions and playlists) to pick a channel from."
+  },
+  "multiviewTile": "Tile {tile}",
+  "@multiviewTile": {
+    "description": "Split screen: spoken name of a tile's number badge.",
+    "placeholders": {
+      "tile": {
+        "type": "int"
+      }
+    }
+  },
+  "multiviewNoConnectionTitle": "No free connection",
+  "@multiviewNoConnectionTitle": {
+    "description": "Split screen: title of the message shown when a channel can't play because its subscription's connections are all in use."
+  },
+  "multiviewInUseTile": "Subscription “⁨{source}⁩” allows one connection, and it is in use in tile {tile}. Choose a channel from another source, or upgrade your subscription.",
+  "@multiviewInUseTile": {
+    "description": "Split screen: a channel can't play in a tile because its one-connection subscription is used by another tile (numbered as on screen).",
+    "placeholders": {
+      "source": {
+        "type": "String"
+      },
+      "tile": {
+        "type": "int"
+      }
+    }
+  },
+  "multiviewInUseWindow": "Subscription “⁨{source}⁩” allows one connection, and it is in use in a separate window. Choose a channel from another source, or upgrade your subscription.",
+  "@multiviewInUseWindow": {
+    "description": "Split screen: a channel can't play in a tile because its one-connection subscription is used by a separate player window.",
+    "placeholders": {
+      "source": {
+        "type": "String"
+      }
+    }
+  },
+  "multiviewInUseMany": "Subscription “⁨{source}⁩” allows {limit} connections, and all of them are in use. Choose a channel from another source, or upgrade your subscription.",
+  "@multiviewInUseMany": {
+    "description": "Split screen: a channel can't play in a tile because all the connections its subscription allows are in use (tiles and separate windows).",
+    "placeholders": {
+      "source": {
+        "type": "String"
+      },
+      "limit": {
+        "type": "int"
+      }
+    }
+  },
   "playerLive": "LIVE",
   "playerBuffering": "Buffering…",
   "playerReconnecting": "Reconnecting… ({n}/{max})",

@@ -636,6 +636,27 @@ void main() {
         rig.controller.dispose();
       });
     });
+
+    test('the Lite cache choice reaches the engine and the next one', () {
+      fakeAsync((async) {
+        final rig = Rig(async)
+          ..playsOn(EngineKind.exo)
+          ..playsOn(EngineKind.mpv);
+        expect(rig.controller.lite, isNull);
+        unawaited(rig.controller.setLite(true));
+        rig.play(liveTs, key: 'ch1');
+        final exo = rig.of(EngineKind.exo);
+        expect(exo.lite, isTrue);
+        unawaited(rig.controller.setLite(false));
+        async.flushMicrotasks();
+        expect(exo.lite, isFalse);
+        unawaited(rig.controller.switchEngine());
+        async.elapse(sec);
+        expect(rig.of(EngineKind.mpv).lite, isFalse);
+        expect(rig.controller.lite, isFalse);
+        rig.controller.dispose();
+      });
+    });
   });
 
   group('reconnecting', () {
