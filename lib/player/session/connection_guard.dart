@@ -24,7 +24,7 @@ class _Switch {
 class ConnectionGuard {
   ConnectionGuard({
     this._clock = const SystemClock(),
-    this.singleConnectionGap = const Duration(milliseconds: 150),
+    this.singleConnectionGap = defaultSingleConnectionGap,
     this.heldWindow = const Duration(seconds: 3),
     this.heldRetryDelays = const [Duration(seconds: 1), Duration(seconds: 2)],
     this.stepTimeout = defaultStepTimeout,
@@ -32,6 +32,16 @@ class ConnectionGuard {
 
   /// The [stepTimeout] of the app's guards.
   static const defaultStepTimeout = Duration(seconds: 10);
+
+  /// The [singleConnectionGap] of the app's guards.
+  static const defaultSingleConnectionGap = Duration(milliseconds: 150);
+
+  /// The longest a [stop] of the app's guards takes: the step still
+  /// running (an open, or a switch's stop and its gap) and then its own
+  /// stop step, each bounded by [defaultStepTimeout]. Switches queued
+  /// behind the running one are dropped by the stop.
+  static final longestStop =
+      defaultStepTimeout * 2 + defaultSingleConnectionGap;
 
   /// Pause between closing and opening when the panel allows 1 connection.
   final Duration singleConnectionGap;

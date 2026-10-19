@@ -1046,6 +1046,18 @@ abstract class AppLocalizations {
   /// **'Couldn\'t play in the separate window.'**
   String get detachPlayInWindowFailed;
 
+  /// Title of the dialog shown when something is opened while the subscription's connection is still used by a stream that is closing (a split-screen tile left while its channel was still opening). It closes by itself and the player opens once that stream has closed; Cancel opens nothing.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for the connection'**
+  String get playerWaitStopsTitle;
+
+  /// No description provided for @playerWaitStopsMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'The subscription\'s previous stream is still closing. This opens as soon as it has closed.'**
+  String get playerWaitStopsMessage;
+
   /// No description provided for @viewerMute.
   ///
   /// In en, this message translates to:

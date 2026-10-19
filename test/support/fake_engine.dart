@@ -36,6 +36,13 @@ class FakeEngine implements PlayerEngine {
   /// Makes [dispose] take this long, like ExoEngine awaiting the platform.
   Duration disposeDelay = Duration.zero;
 
+  /// Makes [stop] take this long, like a server slow to close a stream.
+  Duration stopDelay = Duration.zero;
+
+  /// Whether the stream of the last [open] is open: from the open's start
+  /// until a [stop] has completed or the engine is disposed.
+  bool streamOpen = false;
+
   bool disposed = false;
   bool _disposing = false;
   String? selectedAudio;
@@ -62,6 +69,7 @@ class FakeEngine implements PlayerEngine {
     calls.add('open');
     log.add('$_tag.open ${request.url}');
     opened.add(request);
+    streamOpen = true;
     _state.value = const PlaybackState(buffering: true);
     if (openDelay > Duration.zero) await Future<void>.delayed(openDelay);
     await onOpen?.call(this, request);
@@ -89,6 +97,8 @@ class FakeEngine implements PlayerEngine {
   Future<void> stop() async {
     calls.add('stop');
     log.add('$_tag.stop');
+    if (stopDelay > Duration.zero) await Future<void>.delayed(stopDelay);
+    streamOpen = false;
     if (!disposed) _state.value = PlaybackState.idle;
   }
 
@@ -153,6 +163,7 @@ class FakeEngine implements PlayerEngine {
     log.add('$_tag.dispose');
     if (disposeDelay > Duration.zero) await Future<void>.delayed(disposeDelay);
     disposed = true;
+    streamOpen = false;
     await _events.close();
   }
 

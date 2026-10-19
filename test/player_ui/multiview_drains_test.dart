@@ -4,7 +4,9 @@
 // (ConnectionDrains), whatever gave it up: Delete, a channel of another
 // source, 4 -> 2 tiles, leaving the split screen (then the player), or a
 // separate window (then leaving and the player). What waits for it opens
-// once it has stopped. Synthetic data only.
+// once it has stopped, also when the stop itself is slow: the stream goes
+// with its own player, which nothing else uses. The player shows that it
+// waits. Synthetic data only.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,6 +15,7 @@ import 'package:iptv_player/l10n/gen/app_localizations.dart';
 import 'package:iptv_player/player/connection_budget.dart';
 import 'package:iptv_player/player/detach/detached_windows.dart';
 import 'package:iptv_player/player/multiview/multiview_screen.dart';
+import 'package:iptv_player/player/session/connection_guard.dart';
 import 'package:iptv_player/player/ui/player_screen.dart';
 
 import '../support/fake_engine.dart';
@@ -25,29 +28,31 @@ const _slowOpen = Duration(seconds: 9);
 
 const _inUse = ValueKey('multiview-in-use');
 const _buffering = ValueKey('multiview-buffering');
+const _waitDialog = ValueKey('player-wait-stops');
 
 /// The streams of the one-connection subscription (Panel News 501, Panel
 /// Sport 502), in the engines and in separate windows, and whether two were
-/// ever open at once. An engine's stream is open from its open until that
-/// open is done and the engine was stopped or disposed after it; a
-/// window's from [DetachedWindows.detach] until it is closed.
+/// ever open at once. An engine's stream is open from its open until a stop
+/// of it has completed ([stopDelay] after it began) or the engine is
+/// disposed; a window's from [DetachedWindows.detach] until it is closed.
 class _Streams {
-  _Streams(this.rig) {
+  _Streams(this.rig, {this.stopDelay = Duration.zero}) {
     rig.engines.onCreate = (e) => e.onOpen = (e, r) async {
       final channel = _channel(r.url);
       if (channel != null) {
+        e.stopDelay = stopDelay;
         _opens('engine $channel', engine: e);
-        _opening.add(e);
       }
       // Panel News opens slowly.
       if (channel == '501') await Future<void>.delayed(_slowOpen);
-      _opening.remove(e);
       e.emitFirstFrame();
     };
   }
 
   final PlayerRig rig;
-  final _opening = <FakeEngine>{};
+
+  /// How long a stream of the subscription takes to stop.
+  final Duration stopDelay;
 
   /// The channels of the separate windows playing.
   final windows = <String>[];
@@ -67,10 +72,7 @@ class _Streams {
   /// Whether [e] has a stream of the subscription open.
   bool _holds(FakeEngine e) {
     final last = e.opened.lastOrNull;
-    if (last == null || _channel(last.url) == null) return false;
-    if (_opening.contains(e)) return true;
-    final after = e.calls.skip(e.calls.lastIndexOf('open') + 1);
-    return !after.any((c) => c == 'stop' || c == 'dispose');
+    return e.streamOpen && last != null && _channel(last.url) != null;
   }
 
   void _opens(String what, {FakeEngine? engine}) {
@@ -143,6 +145,35 @@ Future<(int, int)> _newsOpening(WidgetTester tester, _Streams streams) async {
 Future<void> _newsDone(WidgetTester tester) async {
   await tester.pump(_slowOpen);
   await settleSplit(tester);
+}
+
+/// Lets [time] pass in steps of 100 ms, so what waits on another step
+/// moves on.
+Future<void> _pass(WidgetTester tester, Duration time) async {
+  const step = Duration(milliseconds: 100);
+  for (var t = Duration.zero; t < time; t += step) {
+    await tester.pump(step);
+  }
+}
+
+/// Pumps until [engine]'s stop of the stream it opened last has begun
+/// (its stop waited for the open until then).
+Future<void> _untilStopping(WidgetTester tester, FakeEngine engine) async {
+  for (var i = 0; i < 300; i++) {
+    if (engine.calls.skip(engine.calls.lastIndexOf('open')).contains('stop')) {
+      return;
+    }
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+  fail('the stream never began to stop');
+}
+
+/// [disposeRig] once the engines' slow stops (and their guards' steps) are
+/// over.
+Future<void> _disposeSlow(WidgetTester tester, PlayerRig rig) async {
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.pump(ConnectionGuard.longestStop);
+  await disposeRig(tester, rig);
 }
 
 /// Back out of the split screen (window fullscreen first, if on).
@@ -265,9 +296,11 @@ void main() {
       expect(container.read(connectionBudgetProvider).usedOn(xtream), 1);
       await openPlayerFor(tester, xtreamRequest(xtream, '502'));
       expect(find.byType(PlayerScreen), findsNothing);
+      expect(find.byKey(_waitDialog), findsOneWidget);
       expect(streams.opens, ['engine 501']);
 
       await _newsDone(tester);
+      expect(find.byKey(_waitDialog), findsNothing);
       expect(find.byType(PlayerScreen), findsOneWidget);
       expect(streams.opens, ['engine 501', 'engine 502']);
       expect(streams.overlaps, isEmpty);
@@ -289,6 +322,7 @@ void main() {
       expect(_app(tester).read(connectionBudgetProvider).usedOn(xtream), 1);
       await openPlayerFor(tester, xtreamRequest(xtream, '502'));
       expect(find.byType(PlayerScreen), findsNothing);
+      expect(find.byKey(_waitDialog), findsOneWidget);
 
       await _newsDone(tester);
       expect(find.byType(PlayerScreen), findsOneWidget);
@@ -317,11 +351,13 @@ void main() {
       expect(find.byType(PlayerScreen), findsNothing);
 
       // Panel News stopped, then went to the window the user asked for,
-      // which the player now finds in its way.
+      // which the player (on its way, it counts) now finds in its way.
       await _newsDone(tester);
       expect(windows.detached.single.channelKey, '501');
       expect(container.read(connectionDrainsProvider), isEmpty);
-      expect(container.read(connectionBudgetProvider).usedOn(xtream), 1);
+      final budget = container.read(connectionBudgetProvider);
+      expect(budget.usedOn(xtream, holder: ConnectionHolder.viewer), 1);
+      expect(budget.usedOn(xtream, holder: ConnectionHolder.player), 1);
       expect(find.text(l10n.detachInUseTitle('Panel News')), findsOneWidget);
       expect(find.byType(PlayerScreen), findsNothing);
       expect(streams.opens, ['engine 501', 'window 501']);
@@ -332,6 +368,158 @@ void main() {
       expect(find.byType(PlayerScreen), findsOneWidget);
       expect(streams.opens, ['engine 501', 'window 501', 'engine 502']);
       expect(streams.overlaps, isEmpty);
+      await disposeRig(tester, rig);
+    });
+  });
+
+  group('Panel News is slow to stop too', () {
+    testWidgets('a channel of another source in tile 1 (a 2 s stop): Panel '
+        'Sport in tile 2 opens only once Panel News has stopped', (
+      tester,
+    ) async {
+      final rig = PlayerRig();
+      final streams = _Streams(rig, stopDelay: const Duration(seconds: 2));
+      final (xtream, free) = await _newsOpening(tester, streams);
+      final news = engineFor(rig, '/501.');
+
+      await press(tester, LogicalKeyboardKey.keyC);
+      await openedPicker(tester);
+      await pickChannel(tester, 'Free 2', sourceId: free);
+      // Free 2 opens at once on a player of its own; News's waits for its
+      // open, then stops, and nothing else ever uses it.
+      final freeAtOnce = rig.openedUrls.where((u) => u.contains('/f2.')).length;
+      await _pickIn(tester, 1, 'Panel Sport', sourceId: xtream);
+      expect(find.byKey(_inUse), findsNothing);
+      expect(inSlot(1, find.byKey(_buffering)), findsOneWidget);
+
+      // Its open is done and its stop runs: Panel Sport still waits.
+      await _untilStopping(tester, news);
+      await _pass(tester, const Duration(seconds: 1));
+      expect(news.streamOpen, isTrue);
+      expect(streams.opens, ['engine 501']);
+      expect(containerOf(tester).read(connectionDrainsProvider), hasLength(1));
+
+      await _pass(tester, const Duration(seconds: 1));
+      await settleSplit(tester);
+      expect(news.streamOpen, isFalse);
+      expect(news.disposed, isTrue);
+      expect(streams.opens, ['engine 501', 'engine 502']);
+      expect(streams.overlaps, isEmpty);
+      expect(find.byKey(_inUse), findsNothing);
+      expect(freeAtOnce, 1);
+      expect(news.opened.map((r) => r.url), everyElement(contains('/501.')));
+      await _disposeSlow(tester, rig);
+    });
+
+    testWidgets('Delete (a 5 s stop after the 9 s open): Panel Sport waits '
+        'as long as the stop takes, then plays', (tester) async {
+      final rig = PlayerRig();
+      final streams = _Streams(rig, stopDelay: const Duration(seconds: 5));
+      final (xtream, _) = await _newsOpening(tester, streams);
+      final news = engineFor(rig, '/501.');
+
+      await press(tester, LogicalKeyboardKey.delete);
+      await addChannel(tester, 1, 'Panel Sport', sourceId: xtream);
+      expect(inSlot(1, find.byKey(_buffering)), findsOneWidget);
+
+      // 13 s or more after Delete, past the step timeout + 2 s: the stop
+      // still runs, and its stream still counts.
+      await _untilStopping(tester, news);
+      await _pass(tester, const Duration(seconds: 4));
+      expect(news.streamOpen, isTrue);
+      expect(streams.opens, ['engine 501']);
+      expect(containerOf(tester).read(connectionDrainsProvider), hasLength(1));
+      expect(inSlot(1, find.byKey(_buffering)), findsOneWidget);
+
+      await _pass(tester, const Duration(seconds: 1));
+      await settleSplit(tester);
+      expect(news.streamOpen, isFalse);
+      expect(streams.opens, ['engine 501', 'engine 502']);
+      expect(streams.overlaps, isEmpty);
+      expect(find.byKey(_inUse), findsNothing);
+      expect(rig.log.dump(), isNot(contains('did not stop')));
+      await _disposeSlow(tester, rig);
+    });
+
+    testWidgets('leaving the split screen (a 2 s stop): the player on the '
+        'same subscription opens once it has stopped', (tester) async {
+      final rig = PlayerRig();
+      final streams = _Streams(rig, stopDelay: const Duration(seconds: 2));
+      final (xtream, _) = await _newsOpening(tester, streams);
+      final news = engineFor(rig, '/501.');
+
+      await _leave(tester);
+      await openPlayerFor(tester, xtreamRequest(xtream, '502'));
+      expect(find.byKey(_waitDialog), findsOneWidget);
+
+      await _untilStopping(tester, news);
+      await _pass(tester, const Duration(seconds: 1));
+      expect(news.streamOpen, isTrue);
+      expect(find.byType(PlayerScreen), findsNothing);
+
+      await _pass(tester, const Duration(seconds: 1));
+      await settleSplit(tester);
+      // Stopped, then its player went.
+      expect(news.calls.skip(news.calls.lastIndexOf('open')), [
+        'open',
+        'stop',
+        'dispose',
+      ]);
+      expect(find.byType(PlayerScreen), findsOneWidget);
+      expect(streams.opens, ['engine 501', 'engine 502']);
+      expect(streams.overlaps, isEmpty);
+      await _disposeSlow(tester, rig);
+    });
+  });
+
+  group('the player waiting for a stream to stop', () {
+    testWidgets('a channel of another source picked meanwhile plays at '
+        'once, and the one it replaced never opens', (tester) async {
+      final rig = PlayerRig();
+      final streams = _Streams(rig);
+      final (xtream, free) = await _newsOpening(tester, streams);
+      await _leave(tester);
+      final container = _app(tester);
+      await openPlayerFor(tester, xtreamRequest(xtream, '502'));
+      expect(find.byKey(_waitDialog), findsOneWidget);
+
+      await openPlayerFor(tester, freeRequest(free, 'f2'));
+      expect(find.byKey(_waitDialog), findsNothing);
+      expect(
+        tester.widget<PlayerScreen>(find.byType(PlayerScreen)).request.sourceId,
+        free,
+      );
+      expect(container.read(mainPlayerSourceProvider), free);
+
+      await _newsDone(tester);
+      expect(find.byType(PlayerScreen), findsOneWidget);
+      expect(
+        tester.widget<PlayerScreen>(find.byType(PlayerScreen)).request.item.key,
+        'f2',
+      );
+      expect(streams.opens, ['engine 501']);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('Cancel: nothing opens, and its place is free', (tester) async {
+      final rig = PlayerRig();
+      final streams = _Streams(rig);
+      final (xtream, _) = await _newsOpening(tester, streams);
+      await _leave(tester);
+      final container = _app(tester);
+      await openPlayerFor(tester, xtreamRequest(xtream, '502'));
+      // It counts while it waits (a separate window's Retry is refused).
+      expect(container.read(mainPlayerSourceProvider), xtream);
+
+      await tester.tap(find.byKey(const ValueKey('player-wait-stops-cancel')));
+      await settle(tester);
+      expect(find.byKey(_waitDialog), findsNothing);
+      expect(container.read(mainPlayerSourceProvider), isNull);
+
+      await _newsDone(tester);
+      expect(find.byType(PlayerScreen), findsNothing);
+      expect(streams.opens, ['engine 501']);
+      expect(container.read(connectionBudgetProvider).usedOn(xtream), 0);
       await disposeRig(tester, rig);
     });
   });

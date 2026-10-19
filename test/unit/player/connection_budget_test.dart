@@ -261,6 +261,38 @@ void main() {
       expect(connectionFits(container, xtream), isTrue);
     });
 
+    test('the player counts from the request on, held by whoever holds it '
+        'last; an earlier holder cannot release it', () {
+      final player = container.read(mainPlayerSourceProvider.notifier);
+      final request = Object();
+      final screen = Object();
+      player.hold(request, xtream);
+      expect(budget().usedOn(xtream, holder: _player), 1);
+      expect(budget().without(player: true).usedOn(xtream), 0);
+      expect(
+        connectionFits(
+          container,
+          xtream,
+          budget: budget().without(player: true),
+        ),
+        isTrue,
+      );
+
+      // The player screen takes over; the request is done.
+      player
+        ..hold(screen, xtream)
+        ..release(request);
+      expect(budget().usedOn(xtream, holder: _player), 1);
+      // The next request already holds it when the screen goes.
+      final next = Object();
+      player
+        ..hold(next, m3u)
+        ..release(screen);
+      expect(container.read(mainPlayerSourceProvider), m3u);
+      player.release(next);
+      expect(container.read(mainPlayerSourceProvider), isNull);
+    });
+
     test('split-screen tiles count too, until the screen clears them', () {
       final tiles = container.read(multiViewTilesProvider.notifier)
         ..set({0: xtream, 1: m3u});
@@ -342,10 +374,10 @@ void main() {
     ];
 
     test('a stop that never finishes is released after the safety '
-        'timeout, which is longer than a stop can wait for an open', () {
+        'timeout, which is longer than a stop can take', () {
       expect(
         ConnectionDrains.timeout,
-        greaterThan(ConnectionGuard.defaultStepTimeout),
+        greaterThan(ConnectionGuard.longestStop),
       );
       inFakeTime((async, container, log) {
         final drains = container.read(connectionDrainsProvider.notifier)
@@ -366,6 +398,48 @@ void main() {
           hasLength(1),
         );
         expect(async.pendingTimers, isEmpty);
+      });
+    });
+
+    test('a stop the guard still allows (an open that times out, then a '
+        'slow stop) counts until it has stopped', () {
+      inFakeTime((async, container, log) {
+        final guard = ConnectionGuard();
+        var open = true;
+        unawaited(
+          guard.switchTo(
+            stop: () async {},
+            open: () => Completer<void>().future,
+            maxConnections: 1,
+          ),
+        );
+        async.elapse(const Duration(seconds: 1));
+        final drains = container.read(connectionDrainsProvider.notifier)
+          ..add(
+            1,
+            guard.stop(() async {
+              await Future<void>.delayed(
+                ConnectionGuard.defaultStepTimeout -
+                    const Duration(milliseconds: 100),
+              );
+              open = false;
+            }),
+          );
+        bool? settled;
+        unawaited(drains.settled(1).then((v) => settled = v));
+
+        // The open's step ends 10 s in, then the stop's runs for 9.9 s.
+        async.elapse(const Duration(seconds: 18));
+        expect(open, isTrue);
+        expect(sources(container), [1]);
+        expect(settled, isNull);
+
+        async.elapse(const Duration(seconds: 2));
+        expect(open, isFalse);
+        expect(sources(container), isEmpty);
+        expect(settled, isTrue);
+        expect(log.lines.where((l) => l.contains('did not stop')), isEmpty);
+        guard.dispose();
       });
     });
 

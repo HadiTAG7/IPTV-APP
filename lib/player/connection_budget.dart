@@ -1,9 +1,10 @@
 // How many stream connections each source has in use, against its limit.
 //
 // An Xtream account allows `max_connections` streams at a time (often 1);
-// the fullscreen player, every split-screen tile ([multiViewTilesProvider])
-// and every detached window ([detachedWindowsProvider]) hold one each while
-// they play, and a stream given up still holds one until it has stopped
+// the fullscreen player (from the moment it is asked for), every
+// split-screen tile ([multiViewTilesProvider]) and every detached window
+// ([detachedWindowsProvider]) hold one each while they play, and a stream
+// given up still holds one until it has stopped
 // ([connectionDrainsProvider]). M3U sources and accounts that never said
 // have no known limit: those are never limited.
 import 'dart:async';
@@ -18,7 +19,8 @@ import 'session/connection_guard.dart';
 
 /// What holds a connection.
 enum ConnectionHolder {
-  /// The fullscreen player of the app's window.
+  /// The fullscreen player of the app's window (also while it is on its
+  /// way: [MainPlayerSource.hold]).
   player,
 
   /// A tile of the split screen (in the app's window).
@@ -107,11 +109,13 @@ class ConnectionBudget {
   }
 
   /// This budget without the connection of the detached window [viewerId]
-  /// or of the split-screen tile [tileId], and without the streams still
-  /// stopping when [stopping].
+  /// or of the split-screen tile [tileId], without the fullscreen player's
+  /// when [player], and without the streams still stopping when
+  /// [stopping].
   ConnectionBudget without({
     int? viewerId,
     int? tileId,
+    bool player = false,
     bool stopping = false,
   }) => ConnectionBudget(
     limits: limits,
@@ -119,6 +123,7 @@ class ConnectionBudget {
       for (final u in uses)
         if ((viewerId == null || u.viewerId != viewerId) &&
             (tileId == null || u.tileId != tileId) &&
+            !(player && u.holder == ConnectionHolder.player) &&
             !(stopping && u.holder == ConnectionHolder.stopping))
           u,
     ],
@@ -148,21 +153,44 @@ class ConnectionBudget {
   String toString() => 'ConnectionBudget($limits, $uses)';
 }
 
-/// The source the fullscreen player plays from while it is open; set by the
-/// player screen.
+/// The source the fullscreen player plays from while it is open, or is
+/// about to open on: held by the player screen, and by [openPlayer] from
+/// the request on (while it waits or asks) until the screen holds it.
 final mainPlayerSourceProvider = NotifierProvider<MainPlayerSource, int?>(
   MainPlayerSource.new,
   name: 'mainPlayerSourceProvider',
 );
 
 class MainPlayerSource extends Notifier<int?> {
+  /// Who holds it now ([hold]); null when [set].
+  Object? _holder;
+
   @override
   int? build() => null;
 
   /// The player opened on [sourceId], or closed (null). Ignored once the
   /// app is shutting down.
   void set(int? sourceId) {
-    if (ref.mounted) state = sourceId;
+    if (!ref.mounted) return;
+    _holder = null;
+    state = sourceId;
+  }
+
+  /// [holder] (a player screen, or [openPlayer] for the player it is about
+  /// to open) plays from [sourceId], instead of any earlier holder.
+  /// Ignored once the app is shutting down.
+  void hold(Object holder, int sourceId) {
+    if (!ref.mounted) return;
+    _holder = holder;
+    state = sourceId;
+  }
+
+  /// [holder] no longer plays: the player is closed, unless another holder
+  /// took over since (then this does nothing).
+  void release(Object holder) {
+    if (!ref.mounted || !identical(_holder, holder)) return;
+    _holder = null;
+    state = null;
   }
 }
 
@@ -213,11 +241,12 @@ final connectionDrainsProvider =
 /// player opened after it closed waits for them ([settled]).
 class ConnectionDrains extends Notifier<List<ConnectionDrain>> {
   /// The longest a stream counts as stopping: a little over the longest a
-  /// stop waits for an open still running
-  /// ([ConnectionGuard.defaultStepTimeout]), so a stop that never finishes
-  /// cannot hold its source forever.
+  /// stop can take ([ConnectionGuard.longestStop]: it waits for an open
+  /// still running, then stops, each step bounded), so a stop that never
+  /// finishes cannot hold its source forever while one the guard still
+  /// allows is never cut short.
   static final timeout =
-      ConnectionGuard.defaultStepTimeout + const Duration(seconds: 2);
+      ConnectionGuard.longestStop + const Duration(seconds: 2);
 
   final _timers = <int, Timer>{};
   final _waiters = <_DrainWaiter>{};
@@ -357,11 +386,17 @@ ConnectionBudget connectionBudgetOf({
 /// Sources whose unknown limit was already logged.
 final _unknownLimitLogged = Provider<Set<int>>((ref) => <int>{});
 
-/// Whether one more connection on [sourceId] fits the budget. An unknown
-/// limit fits; it is logged once per source and run.
-bool connectionFits(ProviderContainer container, int sourceId) {
-  final budget = container.read(connectionBudgetProvider);
-  if (budget.limitOf(sourceId) == null) {
+/// Whether one more connection on [sourceId] fits the [budget] (default
+/// [connectionBudgetProvider]'s). An unknown limit fits; it is logged once
+/// per source and run.
+bool connectionFits(
+  ProviderContainer container,
+  int sourceId, {
+  ConnectionBudget? budget,
+}) {
+  final checked =
+      budget ?? container.read<ConnectionBudget>(connectionBudgetProvider);
+  if (checked.limitOf(sourceId) == null) {
     if (container.read(_unknownLimitLogged).add(sourceId)) {
       container
           .read(ringLogProvider)
@@ -372,5 +407,5 @@ bool connectionFits(ProviderContainer container, int sourceId) {
     }
     return true;
   }
-  return budget.fits(sourceId);
+  return checked.fits(sourceId);
 }

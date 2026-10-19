@@ -158,6 +158,8 @@
   "detachPlayInWindow": "شغّل هذه القناة في النافذة بدلاً منها",
   "detachCloseWindow": "أغلق النافذة وشغّلها هنا",
   "detachPlayInWindowFailed": "تعذّر التشغيل في النافذة المنفصلة.",
+  "playerWaitStopsTitle": "بانتظار الاتصال",
+  "playerWaitStopsMessage": "البث السابق للاشتراك ما زال يُغلَق. سيُفتح هذا فور إغلاقه.",
   "viewerMute": "كتم الصوت",
   "viewerUnmute": "إلغاء كتم الصوت",
   "viewerVolume": "مستوى الصوت",

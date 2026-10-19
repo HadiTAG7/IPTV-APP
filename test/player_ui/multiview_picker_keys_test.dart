@@ -51,7 +51,7 @@ void main() {
     await settleSplit(tester);
 
     expect(find.byKey(pickerKey), findsNothing);
-    expect(engineFor(rig, '/ch1.').opened.last.url, freeUrl('f2'));
+    expect(rig.openedUrls.last, freeUrl('f2'));
     expect(inSlot(0, find.text('Free 2')), findsOneWidget);
     // The keys are the split screen's again.
     await press(tester, LogicalKeyboardKey.keyL);

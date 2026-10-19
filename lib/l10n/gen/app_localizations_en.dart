@@ -576,6 +576,13 @@ class AppLocalizationsEn extends AppLocalizations {
       'Couldn\'t play in the separate window.';
 
   @override
+  String get playerWaitStopsTitle => 'Waiting for the connection';
+
+  @override
+  String get playerWaitStopsMessage =>
+      'The subscription\'s previous stream is still closing. This opens as soon as it has closed.';
+
+  @override
   String get viewerMute => 'Mute';
 
   @override

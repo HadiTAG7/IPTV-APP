@@ -339,7 +339,14 @@ void main() {
     await tester.tap(inSlot(0, find.byKey(const ValueKey('multiview-change'))));
     await openedPicker(tester);
     await pickChannel(tester, 'Free 3', sourceId: free);
-    expect(engine.opened.last.url, freeUrl('f3'));
+    // Another source: the old stream goes with its player (stopped, then
+    // disposed), and a new one plays the channel.
+    expect(engine.calls.skip(engine.calls.lastIndexOf('open')), [
+      'open',
+      'stop',
+      'dispose',
+    ]);
+    expect(engineFor(rig, '/f3.').opened.single.url, freeUrl('f3'));
     expect(containerOf(tester).read(multiViewTilesProvider), {0: free});
     await disposeRig(tester, rig);
   });

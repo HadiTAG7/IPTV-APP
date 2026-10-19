@@ -231,7 +231,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     scheduleMicrotask(() {
       if (!identical(_fullscreenOwner, this)) return;
       _fullscreen.set(true);
-      _mainPlayer.set(widget.request.sourceId);
+      // Takes over from openPlayer, which held it until now.
+      _mainPlayer.hold(this, widget.request.sourceId);
     });
     _window = ref.read(playerWindowProvider);
     _windowHold = WindowFullscreenHold(_window);
@@ -311,7 +312,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final mainPlayer = _mainPlayer;
     void release() {
       fullscreen.set(false);
-      mainPlayer.set(null);
+      // Not when the next player is already on its way.
+      mainPlayer.release(this);
     }
 
     if (later) {

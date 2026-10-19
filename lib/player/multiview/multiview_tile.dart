@@ -71,8 +71,8 @@ enum MultiViewTileStatus {
 }
 
 /// One tile: the channel it plays, its source and its own
-/// [PlaybackController] (made on the first channel, disposed when the
-/// channel is removed).
+/// [PlaybackController] (made for the first stream it opens, and again for
+/// the next stream once it gave one up).
 ///
 /// * [play] loads the source (kept while the channel stays on it), reads
 ///   the channel's catalog row, resolves the live stream like the player
@@ -82,9 +82,11 @@ enum MultiViewTileStatus {
 ///   channel opening).
 /// * [holdsConnection] says whether the tile counts against its source's
 ///   connections: from [play] until it failed, is cleared or disposed.
-/// * A stream it gives up (emptied, another source, failed, stopped or
-///   disposed) still counts until it has stopped, since its stop waits for
-///   an open still running: [onStopping] hears of each.
+/// * A stream it gives up (emptied, another source, waiting, failed,
+///   stopped or disposed) goes with its controller, which is stopped and
+///   then disposed: nothing else uses that controller, so no later play can
+///   cancel its stop. The stream still counts until it has stopped, since
+///   its stop waits for an open still running: [onStopping] hears of each.
 /// * [configure] sets the sound (only the active tile is heard) and the
 ///   cache size (the Lite one when it is not heard) for this controller and
 ///   the later ones.
@@ -128,7 +130,7 @@ class MultiViewTile extends ChangeNotifier {
   bool _disposed = false;
 
   /// The source of the stream the controller has (or opens); null once the
-  /// tile gave it up ([_letGo]).
+  /// tile gave it up ([_giveUp]).
   int? _streamSource;
 
   /// [play] or [retry] waits before the stream opens.
@@ -208,9 +210,8 @@ class MultiViewTile extends ChangeNotifier {
     PlayerSource? source = _source;
     if (source == null || source.row.id != channel.sourceId) {
       // The tile now counts on the new source: the old one's stream goes
-      // at once (it counts until it has stopped).
-      final c = _controller;
-      if (c != null) unawaited(_stop(c));
+      // at once, with its controller (it counts until it has stopped).
+      unawaited(_giveUp());
       _source = null;
       source?.close();
       try {
@@ -288,30 +289,33 @@ class MultiViewTile extends ChangeNotifier {
   }
 
   /// Plays the channel again after a failure; with [when], once it
-  /// completes with true (as for [play]).
+  /// completes with true (as for [play]). Only a controller that failed by
+  /// itself plays it again; otherwise (and to wait) it goes as for [play].
   Future<void> retry({Future<bool>? when}) async {
     final channel = _channel;
     if (channel == null || _disposed) return;
     final controller = _controller;
-    if (_error != null || _source == null || controller == null) {
+    if (when != null ||
+        _error != null ||
+        _source == null ||
+        controller == null) {
       await play(channel, when: when);
       return;
     }
-    final seq = ++_seq;
+    _seq++;
     _playedKey = null;
     _waiting = false;
-    if (when != null && !await _wait(seq, when)) return;
     _streamSource = channel.sourceId;
     await controller.retry();
   }
 
   /// Waits for [when] before the stream of call [seq] opens: the tile shows
-  /// its channel opening, and the stream it had stops at once. False when
-  /// a newer call took over, or when [when] said no (the tile failed then).
+  /// its channel opening, and the stream it had stops at once (with its
+  /// controller). False when a newer call took over, or when [when] said no
+  /// (the tile failed then).
   Future<bool> _wait(int seq, Future<bool> when) async {
     _waiting = true;
-    final c = _controller;
-    if (c != null) unawaited(_stop(c));
+    unawaited(_giveUp());
     notifyListeners();
     final go = await when.catchError((Object _) => false);
     if (seq != _seq || _disposed) return false;
@@ -327,24 +331,39 @@ class MultiViewTile extends ChangeNotifier {
   /// connection now).
   void _fail(Object error) {
     _error = error;
-    final c = _controller;
-    if (c != null) unawaited(_stop(c));
+    unawaited(_giveUp());
     notifyListeners();
   }
 
-  /// Stops [c]'s stream, which counts until it has ([_letGo]).
-  Future<void> _stop(PlaybackController c) {
-    final stopped = c.stop();
-    _letGo(stopped);
-    return stopped;
-  }
-
-  /// The tile gives up its stream: it still counts against its source
-  /// until [stopped] completes ([onStopping]).
-  void _letGo(Future<void> stopped) {
+  /// The tile gives up its stream, which goes with its controller: the
+  /// controller is stopped, then disposed, and the tile never uses it again
+  /// (its next stream gets a new one). A stop that a later play or retry
+  /// on the same controller superseded would complete without stopping
+  /// anything. The stream counts against its source until it has stopped
+  /// ([onStopping]), then until [handedOver] completes, when given (a
+  /// separate window takes it over); told after this frame's work when
+  /// [later] (providers cannot change while the widget tree is being
+  /// finalized). Completes once it has stopped.
+  Future<void> _giveUp({Future<void>? handedOver, bool later = false}) {
+    final controller = _controller;
     final sourceId = _streamSource;
+    _controller = null;
     _streamSource = null;
-    if (sourceId != null) onStopping?.call(sourceId, stopped);
+    if (controller == null) return Future<void>.value();
+    controller.removeListener(_onController);
+    final stopped = _stopAndDispose(controller);
+    final onStopping = this.onStopping;
+    if (sourceId != null && onStopping != null) {
+      final drained = handedOver == null
+          ? stopped
+          : stopped.whenComplete(() => handedOver);
+      if (later) {
+        scheduleMicrotask(() => onStopping(sourceId, drained));
+      } else {
+        onStopping(sourceId, drained);
+      }
+    }
+    return stopped;
   }
 
   /// The controller changed: a channel that started playing goes to the
@@ -377,23 +396,16 @@ class MultiViewTile extends ChangeNotifier {
   /// [handedOver] completes, when given (a separate window takes it over).
   Future<void> clear({Future<void>? handedOver}) async {
     _seq++;
-    final controller = _controller;
     final source = _source;
-    _controller = null;
     _source = null;
     _channel = null;
     _error = null;
     _playedKey = null;
     _waiting = false;
     userMuted = false;
+    final stopped = _giveUp(handedOver: handedOver);
     if (!_disposed) notifyListeners();
     source?.close();
-    if (controller == null) return;
-    controller.removeListener(_onController);
-    final stopped = _stopAndDispose(controller);
-    _letGo(
-      handedOver == null ? stopped : stopped.whenComplete(() => handedOver),
-    );
     await stopped;
   }
 
@@ -405,13 +417,14 @@ class MultiViewTile extends ChangeNotifier {
     }
   }
 
-  /// Stops the stream (the connection closes) and leaves the tile as it
-  /// is on screen; [dispose] follows.
+  /// Stops the stream (the connection closes once this completes) and
+  /// leaves the channel on screen; [dispose] follows.
   Future<void> stop() async {
     _seq++;
     _waiting = false;
-    final c = _controller;
-    if (c != null) await _stop(c);
+    final stopped = _giveUp();
+    if (!_disposed) notifyListeners();
+    await stopped;
   }
 
   @override
@@ -419,23 +432,10 @@ class MultiViewTile extends ChangeNotifier {
     if (_disposed) return;
     _disposed = true;
     _seq++;
-    final controller = _controller;
-    _controller = null;
-    if (controller != null) {
-      controller.removeListener(_onController);
-      // Not stopped before (the screen went away without its Back): the
-      // stream goes with its controller once an open still running is
-      // done. Told after this frame's work: providers cannot change while
-      // the widget tree is being finalized.
-      final sourceId = _streamSource;
-      final onStopping = this.onStopping;
-      if (sourceId != null && onStopping != null) {
-        final stopped = controller.stop();
-        _streamSource = null;
-        scheduleMicrotask(() => onStopping(sourceId, stopped));
-      }
-      controller.dispose();
-    }
+    // Not stopped before (the screen went away without its Back): the
+    // stream stops once an open still running is done, then its controller
+    // goes.
+    unawaited(_giveUp(later: true));
     _source?.close();
     _source = null;
     super.dispose();

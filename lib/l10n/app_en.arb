@@ -304,6 +304,11 @@
   },
   "detachCloseWindow": "Close the window and play here",
   "detachPlayInWindowFailed": "Couldn't play in the separate window.",
+  "playerWaitStopsTitle": "Waiting for the connection",
+  "@playerWaitStopsTitle": {
+    "description": "Title of the dialog shown when something is opened while the subscription's connection is still used by a stream that is closing (a split-screen tile left while its channel was still opening). It closes by itself and the player opens once that stream has closed; Cancel opens nothing."
+  },
+  "playerWaitStopsMessage": "The subscription's previous stream is still closing. This opens as soon as it has closed.",
   "viewerMute": "Mute",
   "viewerUnmute": "Unmute",
   "viewerVolume": "Volume",

@@ -594,6 +594,13 @@ class AppLocalizationsAr extends AppLocalizations {
   String get detachPlayInWindowFailed => 'تعذّر التشغيل في النافذة المنفصلة.';
 
   @override
+  String get playerWaitStopsTitle => 'بانتظار الاتصال';
+
+  @override
+  String get playerWaitStopsMessage =>
+      'البث السابق للاشتراك ما زال يُغلَق. سيُفتح هذا فور إغلاقه.';
+
+  @override
   String get viewerMute => 'كتم الصوت';
 
   @override
