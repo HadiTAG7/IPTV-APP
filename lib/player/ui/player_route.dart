@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/home_shell.dart';
 import '../../l10n/gen/app_localizations.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/dialog_click_guard.dart';
 import '../connection_budget.dart';
 import '../detach/detached_windows.dart';
 import 'play_request.dart';
@@ -135,7 +136,10 @@ Future<bool> _waitForStops(
       .settled(sourceId);
   final go = await showDialog<bool>(
     context: context,
-    builder: (_) => _StopsWaitDialog(settled: settled, wait: wait),
+    // The second click of a double click on the channel would cancel it.
+    builder: (_) => DialogClickGuard(
+      child: _StopsWaitDialog(settled: settled, wait: wait),
+    ),
   );
   if (go != true) wait.cancelled = true;
   return !wait.cancelled;
@@ -197,28 +201,34 @@ class _StopsWaitDialogState extends State<_StopsWaitDialog> {
     return AlertDialog(
       key: const ValueKey('player-wait-stops'),
       title: Text(l10n.playerWaitStopsTitle),
-      content: SizedBox(
-        width: 360,
-        child: Row(
-          children: [
-            const SizedBox.square(
-              dimension: 28,
-              child: CircularProgressIndicator(strokeWidth: 3),
-            ),
-            const SizedBox(width: Spacing.lg),
-            Expanded(
-              child: Text(
-                l10n.playerWaitStopsMessage,
-                style: theme.textTheme.bodyMedium,
+      // Focus starts on the message, not on Cancel: OK pressed again on the
+      // remote or keyboard (as for the channel) leaves the wait alone.
+      // Back cancels; the arrows reach Cancel.
+      content: Focus(
+        key: const ValueKey('player-wait-stops-message'),
+        autofocus: true,
+        child: SizedBox(
+          width: 360,
+          child: Row(
+            children: [
+              const SizedBox.square(
+                dimension: 28,
+                child: CircularProgressIndicator(strokeWidth: 3),
               ),
-            ),
-          ],
+              const SizedBox(width: Spacing.lg),
+              Expanded(
+                child: Text(
+                  l10n.playerWaitStopsMessage,
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
         TextButton(
           key: const ValueKey('player-wait-stops-cancel'),
-          autofocus: true,
           onPressed: () => _close(false),
           child: Text(l10n.commonCancel),
         ),

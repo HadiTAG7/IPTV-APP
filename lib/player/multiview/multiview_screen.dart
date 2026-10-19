@@ -20,6 +20,7 @@ import '../../tv/focus_watchdog.dart';
 import '../../tv/key_repeat.dart';
 import '../../tv/tv_focusable.dart';
 import '../../widgets/bidi_text.dart';
+import '../../widgets/dialog_click_guard.dart';
 import '../connection_budget.dart';
 import '../detach/detached_windows.dart';
 import '../engine/player_engine.dart';
@@ -563,7 +564,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
         context: context,
         // The second click of a double click on the channel would close it
         // before it could be read.
-        builder: (context) => _DialogGuard(
+        builder: (context) => DialogClickGuard(
           onClick: (at) => clickAt = at,
           child: AlertDialog(
             key: const ValueKey('multiview-in-use'),
@@ -1315,57 +1316,6 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
       ),
     );
   }
-}
-
-/// A dialog that ignores clicks, on it and beside it (it covers the
-/// barrier), for [kDoubleTapTimeout] after it opens, like
-/// [ChannelPanel.openGuard]: the click that opened it may be the first of a
-/// double click. Keys work at once. [onClick] gets the global spot of a
-/// click on it or beside it while that click is handled (a click that
-/// closes it, with OK or the barrier, has closed it by then), and null
-/// after.
-class _DialogGuard extends StatefulWidget {
-  const _DialogGuard({required this.onClick, required this.child});
-
-  final ValueChanged<Offset?> onClick;
-  final Widget child;
-
-  @override
-  State<_DialogGuard> createState() => _DialogGuardState();
-}
-
-class _DialogGuardState extends State<_DialogGuard> {
-  bool _justOpened = true;
-  late final Timer _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer(kDoubleTapTimeout, () {
-      if (mounted) setState(() => _justOpened = false);
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer.cancel();
-    super.dispose();
-  }
-
-  void _onPointerUp(PointerUpEvent event) {
-    final onClick = widget.onClick;
-    onClick(event.position);
-    // After the pop (OK) or maybePop (the barrier) this click caused.
-    Timer.run(() => onClick(null));
-  }
-
-  @override
-  Widget build(BuildContext context) => Listener(
-    // Beside the dialog too: the barrier under it still takes the click.
-    behavior: HitTestBehavior.translucent,
-    onPointerUp: _onPointerUp,
-    child: AbsorbPointer(absorbing: _justOpened, child: widget.child),
-  );
 }
 
 /// The picker's row of sources: the channels shown come from the selected

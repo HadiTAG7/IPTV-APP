@@ -152,7 +152,7 @@ class PlaybackController extends ChangeNotifier {
   bool _disposed = false;
 
   /// Completes once the controller is disposed and its engine is gone (its
-  /// dispose done), and the stream with it.
+  /// dispose done), and the stream with it ([gone]).
   final _gone = Completer<void>();
   double _volume = 1;
   bool _muted = false;
@@ -341,6 +341,11 @@ class PlaybackController extends ChangeNotifier {
       await _engine?.subtitleTracks() ?? const [];
 
   Future<void> selectSubtitle(String? id) async => _engine?.selectSubtitle(id);
+
+  /// Completes once this controller is disposed and its engine is gone:
+  /// its stream is closed then, even when a stop of it was superseded (a
+  /// newer stop, or the dispose itself, takes over from an older one).
+  Future<void> get gone => _gone.future;
 
   /// Volume (0 to 1) and mute, kept for later engines too; untouched they
   /// stay at the engines' defaults (full, unmuted).

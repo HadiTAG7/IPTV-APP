@@ -7,6 +7,7 @@
 // once it has stopped, also when the stop itself is slow: the stream goes
 // with its own player, which nothing else uses. The player shows that it
 // waits. Synthetic data only.
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -511,6 +512,8 @@ void main() {
       // It counts while it waits (a separate window's Retry is refused).
       expect(container.read(mainPlayerSourceProvider), xtream);
 
+      // The dialog takes clicks once a double click's second one is past.
+      await tester.pump(kDoubleTapTimeout);
       await tester.tap(find.byKey(const ValueKey('player-wait-stops-cancel')));
       await settle(tester);
       expect(find.byKey(_waitDialog), findsNothing);

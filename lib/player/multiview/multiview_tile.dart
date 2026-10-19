@@ -411,6 +411,9 @@ class MultiViewTile extends ChangeNotifier {
     } finally {
       controller.dispose();
     }
+    // The stream is closed once the engine is gone: a stop superseded by
+    // another one (the controller's own, on a failure) stopped nothing.
+    await controller.gone;
   }
 
   /// Stops the stream (the connection closes once this completes) and
