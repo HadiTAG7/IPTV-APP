@@ -399,6 +399,59 @@
       }
     }
   },
+  "multiviewInUseManyAt": "Subscription “⁨{source}⁩” allows {limit} connections, and all of them are in use in {places}. Choose a channel from another source, or upgrade your subscription.",
+  "@multiviewInUseManyAt": {
+    "description": "Split screen: a channel can't play in a tile because all the connections its subscription allows are in use; places lists where (e.g. 'tile 1 and a separate window', built from multiviewPlaceTile, multiviewPlaceWindows, multiviewPlacesSeparator and multiviewPlacesAnd).",
+    "placeholders": {
+      "source": {
+        "type": "String"
+      },
+      "limit": {
+        "type": "int"
+      },
+      "places": {
+        "type": "String"
+      }
+    }
+  },
+  "multiviewPlaceTile": "tile {tile}",
+  "@multiviewPlaceTile": {
+    "description": "Split screen: a tile (numbered as on screen) in the list of places using a subscription's connections (multiviewInUseManyAt).",
+    "placeholders": {
+      "tile": {
+        "type": "int"
+      }
+    }
+  },
+  "multiviewPlaceWindows": "{count, plural, one{a separate window} other{{count} separate windows}}",
+  "@multiviewPlaceWindows": {
+    "description": "Split screen: the separate player windows in the list of places using a subscription's connections (multiviewInUseManyAt).",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "multiviewPlacesSeparator": ", ",
+  "@multiviewPlacesSeparator": {
+    "description": "Split screen: joins the places using a subscription's connections, except the last two (multiviewPlacesAnd). Keep its spaces."
+  },
+  "multiviewPlacesAnd": "{first} and {last}",
+  "@multiviewPlacesAnd": {
+    "description": "Split screen: joins the last place using a subscription's connections to the ones before it.",
+    "placeholders": {
+      "first": {
+        "type": "String"
+      },
+      "last": {
+        "type": "String"
+      }
+    }
+  },
+  "multiviewShowAll": "Show all tiles",
+  "@multiviewShowAll": {
+    "description": "Split screen: button on a maximized tile that shows all the tiles again."
+  },
   "playerLive": "LIVE",
   "playerBuffering": "Buffering…",
   "playerReconnecting": "Reconnecting… ({n}/{max})",

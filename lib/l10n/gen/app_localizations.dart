@@ -1172,6 +1172,42 @@ abstract class AppLocalizations {
   /// **'Subscription “⁨{source}⁩” allows {limit} connections, and all of them are in use. Choose a channel from another source, or upgrade your subscription.'**
   String multiviewInUseMany(String source, int limit);
 
+  /// Split screen: a channel can't play in a tile because all the connections its subscription allows are in use; places lists where (e.g. 'tile 1 and a separate window', built from multiviewPlaceTile, multiviewPlaceWindows, multiviewPlacesSeparator and multiviewPlacesAnd).
+  ///
+  /// In en, this message translates to:
+  /// **'Subscription “⁨{source}⁩” allows {limit} connections, and all of them are in use in {places}. Choose a channel from another source, or upgrade your subscription.'**
+  String multiviewInUseManyAt(String source, int limit, String places);
+
+  /// Split screen: a tile (numbered as on screen) in the list of places using a subscription's connections (multiviewInUseManyAt).
+  ///
+  /// In en, this message translates to:
+  /// **'tile {tile}'**
+  String multiviewPlaceTile(int tile);
+
+  /// Split screen: the separate player windows in the list of places using a subscription's connections (multiviewInUseManyAt).
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, one{a separate window} other{{count} separate windows}}'**
+  String multiviewPlaceWindows(int count);
+
+  /// Split screen: joins the places using a subscription's connections, except the last two (multiviewPlacesAnd). Keep its spaces.
+  ///
+  /// In en, this message translates to:
+  /// **', '**
+  String get multiviewPlacesSeparator;
+
+  /// Split screen: joins the last place using a subscription's connections to the ones before it.
+  ///
+  /// In en, this message translates to:
+  /// **'{first} and {last}'**
+  String multiviewPlacesAnd(String first, String last);
+
+  /// Split screen: button on a maximized tile that shows all the tiles again.
+  ///
+  /// In en, this message translates to:
+  /// **'Show all tiles'**
+  String get multiviewShowAll;
+
   /// No description provided for @playerLive.
   ///
   /// In en, this message translates to:

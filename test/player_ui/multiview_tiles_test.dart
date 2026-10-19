@@ -143,7 +143,16 @@ void main() {
     expect(engineFor(rig, '/502.').opened, hasLength(1));
     await press(tester, LogicalKeyboardKey.keyL);
     await addChannel(tester, 2, 'Panel News', sourceId: xtream);
-    expect(find.text(l10n.multiviewInUseMany('Panel', 2)), findsOneWidget);
+    // The message says where the connections are.
+    final places = l10n.multiviewPlacesAnd(
+      l10n.multiviewPlaceTile(1),
+      l10n.multiviewPlaceTile(2),
+    );
+    expect(places, 'tile 1 and tile 2');
+    expect(
+      find.text(l10n.multiviewInUseManyAt('Panel', 2, places)),
+      findsOneWidget,
+    );
     expect(containerOf(tester).read(multiViewTilesProvider), {
       0: xtream,
       1: xtream,

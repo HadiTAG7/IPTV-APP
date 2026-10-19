@@ -1,5 +1,6 @@
 // A split-screen tile whose stream fails: it frees its connection, and
 // Retry asks the connection budget again. Synthetic data only.
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -49,6 +50,8 @@ void main() {
     await settle(tester);
     expect(find.text(l10n.multiviewInUseTile('Panel', 2)), findsOneWidget);
     expect(tile.opened, hasLength(opens));
+    // The message takes clicks once a double click's second one is past.
+    await tester.pump(kDoubleTapTimeout);
     await tester.tap(find.byKey(const ValueKey('multiview-in-use-ok')));
     await settle(tester);
     expect(isActive(0), isTrue);

@@ -53,7 +53,8 @@ typedef PanelChannelCallback = void Function(LiveEntry entry, bool favorite);
 ///
 /// The split screen's channel picker uses it with its own [title] and a
 /// [header] under it (the source switcher): Up from the top of the
-/// categories reaches the header, Down from the header goes back in.
+/// categories or the channels reaches the header, Down from the header
+/// goes back in. Without a header Up stops at the top.
 class ChannelPanel extends ConsumerStatefulWidget {
   const ChannelPanel({
     super.key,
@@ -180,7 +181,7 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
     super.dispose();
   }
 
-  /// Up from the top of the categories: into the [ChannelPanel.header].
+  /// Up from the top of either column: into the [ChannelPanel.header].
   void _focusHeader() {
     if (!focusRememberedOrFirst(_headerScope)) _focusSelectedCategory();
   }
@@ -397,6 +398,7 @@ class ChannelPanelState extends ConsumerState<ChannelPanel> {
             key: _channelsPane,
             debugLabel: 'panel-channels',
             onExitStart: _focusSelectedCategory,
+            onExitUp: widget.header == null ? null : _focusHeader,
             child: ChannelList(
               key: _list,
               sourceId: _id,

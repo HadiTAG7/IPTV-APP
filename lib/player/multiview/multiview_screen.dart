@@ -2,6 +2,7 @@
 // in tiles of the app's window, each through its own PlaybackController.
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -86,20 +87,23 @@ Future<void> openMultiView(
 ///   tile becomes the active one once its channel is picked.
 /// * Before a tile opens a stream, its source must have a connection free
 ///   ([connectionBudgetProvider]: tiles and separate windows count);
-///   otherwise a message says which tile (or a separate window) uses it.
+///   otherwise a message says which tiles (or separate windows) use it.
 ///   Unknown limits (M3U) are never limited. Tiles hold their connection
 ///   ([multiViewTilesProvider]) from opening until they fail, are emptied
 ///   or the screen closes.
 /// * Mouse: a click makes a tile active, a double click maximizes it (the
 ///   others keep playing, hidden) and restores it. Hovering a tile shows
-///   Change channel, Separate window and Remove; moving the mouse shows
-///   the bar (Back, layout, fullscreen).
+///   Change channel, Separate window (not on a failed tile) and Remove, and
+///   on a maximized one Show all tiles; moving the mouse shows the bar
+///   (Back, layout, fullscreen). The second click of a double click on
+///   something that goes away never reaches the tile under it.
 /// * Keys: arrows move the active tile (mirrored in Arabic), Enter
 ///   maximizes and restores (adds a channel to an empty tile, retries a
 ///   failed one), C changes the channel, M mutes, Delete removes the
 ///   channel, D detaches it into a separate window ([DetachedWindows]), L
 ///   switches the layout, F and F11 toggle the window's fullscreen, Escape
-///   leaves fullscreen, then the split screen.
+///   shows all the tiles again, leaves fullscreen, then the split screen.
+///   Tab never takes the keyboard away.
 /// * Like the player it owns the window's fullscreen
 ///   ([WindowFullscreenHold]), the app lifecycle (live stops in the
 ///   background and reopens on return, for every tile),
@@ -151,6 +155,14 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
   /// Windows reports one when the window moves under a still cursor.
   bool _hoverMuted = false;
   Timer? _hoverMuteTimer;
+
+  /// Where the click being handled was ([_onPointerUp]); null otherwise.
+  Offset? _clickAt;
+
+  /// The spot of a click that made what was under it go away: it takes no
+  /// clicks for a moment ([_guardClick]).
+  Offset? _guardAt;
+  Timer? _guardTimer;
 
   late final WindowFullscreenHold _window;
   late final AppLifecycleListener _lifecycle;
@@ -236,6 +248,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     _lifecycle.dispose();
     _barTimer?.cancel();
     _hoverMuteTimer?.cancel();
+    _guardTimer?.cancel();
     unawaited(_onlineSub?.cancel());
     _watchdog?.unregister(_rootNode);
     // Disposing a tile disposes its controller (its engine stops and the
@@ -339,6 +352,14 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     _setActive(slot);
   }
 
+  /// A maximized tile's Show all tiles, Back and Escape: every tile shows
+  /// again (the maximized one stays active).
+  void _showGrid() {
+    if (_maximized == null) return;
+    _guardClick();
+    setState(() => _maximized = null);
+  }
+
   /// Enter on the active tile: adds a channel to an empty one, retries a
   /// failed one, else maximizes or restores it.
   void _select() {
@@ -420,7 +441,33 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
         return l10n.multiviewInUseWindow(source);
       }
     }
+    final places = _placesUsing(l10n, budget, sourceId);
+    if (places != null) return l10n.multiviewInUseManyAt(source, limit, places);
     return l10n.multiviewInUseMany(source, limit);
+  }
+
+  /// Where [budget]'s connections of [sourceId] are used: "tile 1, tile 2
+  /// and a separate window"; null when nothing here or in a separate window
+  /// uses one.
+  String? _placesUsing(
+    AppLocalizations l10n,
+    ConnectionBudget budget,
+    int sourceId,
+  ) {
+    final slots = [
+      for (final id in budget.tilesOn(sourceId))
+        _slots.indexWhere((t) => t.id == id),
+    ].where((slot) => slot >= 0).toList()..sort();
+    final windows = budget.viewersOn(sourceId).length;
+    final places = [
+      for (final slot in slots) l10n.multiviewPlaceTile(slot + 1),
+      if (windows > 0) l10n.multiviewPlaceWindows(windows),
+    ];
+    if (places.length < 2) return places.firstOrNull;
+    return l10n.multiviewPlacesAnd(
+      places.sublist(0, places.length - 1).join(l10n.multiviewPlacesSeparator),
+      places.last,
+    );
   }
 
   Future<void> _showInUse(String message) async {
@@ -428,18 +475,22 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     await _dialog<void>(
       () => showDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
-          key: const ValueKey('multiview-in-use'),
-          title: Text(l10n.multiviewNoConnectionTitle),
-          content: Text(message),
-          actions: [
-            FilledButton(
-              key: const ValueKey('multiview-in-use-ok'),
-              autofocus: true,
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(l10n.commonOk),
-            ),
-          ],
+        // The second click of a double click on the channel would close it
+        // before it could be read.
+        builder: (context) => _OpenGuard(
+          child: AlertDialog(
+            key: const ValueKey('multiview-in-use'),
+            title: Text(l10n.multiviewNoConnectionTitle),
+            content: Text(message),
+            actions: [
+              FilledButton(
+                key: const ValueKey('multiview-in-use-ok'),
+                autofocus: true,
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(l10n.commonOk),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -448,8 +499,11 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
   /// Empties [tile]: its stream stops and its connection is free.
   void _remove(MultiViewTile tile) {
     if (_closing || tile.isEmpty) return;
+    _guardClick();
     if (identical(_maximized, tile)) _maximized = null;
     unawaited(tile.clear());
+    // Its next channel follows the sound as it is now (no longer muted).
+    _configureTiles();
     _rebuild();
   }
 
@@ -459,6 +513,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
   Future<void> _detach(MultiViewTile tile) async {
     final channel = tile.channel;
     if (!_desktop || _closing || channel == null) return;
+    _guardClick();
     final l10n = AppLocalizations.of(context);
     final messenger = ScaffoldMessenger.maybeOf(context);
     final log = ref.read(ringLogProvider);
@@ -470,12 +525,14 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
 
     final source = tile.source;
     final stream = tile.controller?.request;
-    // Nothing resolved yet (or a new channel is still on its way).
+    // Nothing to hand over, and no window failed: a failed tile offers
+    // Retry, and a channel still being resolved (or a new one on its way)
+    // shows its spinner for a moment.
     if (source == null ||
         stream == null ||
         tile.status == MultiViewTileStatus.failed ||
         !tile.playsChannel) {
-      failed();
+      log.info('Split screen: tile ${tile.id} has no stream to detach');
       return;
     }
     final request = DetachRequest(
@@ -498,6 +555,8 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     log.info('Split screen: detaching tile ${tile.id}');
     if (identical(_maximized, tile)) setState(() => _maximized = null);
     await tile.clear();
+    // Its next channel follows the sound as it is now (no longer muted).
+    if (mounted) _configureTiles();
     try {
       await windows.detach(request);
     } on ViewerLaunchException catch (e) {
@@ -513,13 +572,17 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     }
   }
 
-  /// 2 <-> 4 tiles. Going back to 2 keeps the active tile and the next one
-  /// with a channel (the others are emptied); an empty active tile makes
-  /// way for the next two with a channel.
+  /// 2 <-> 4 tiles, all of them shown (a maximized tile too). Going back to
+  /// 2 keeps the active tile and the next one with a channel (the others
+  /// are emptied); an empty active tile makes way for the next two with a
+  /// channel.
   void _toggleLayout() {
     if (_closing) return;
     if (_layout == MultiViewLayout.two) {
-      setState(() => _layout = MultiViewLayout.four);
+      setState(() {
+        _layout = MultiViewLayout.four;
+        _maximized = null;
+      });
       return;
     }
     final count = MultiViewLayout.two.count;
@@ -549,7 +612,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
         ..addAll([...kept, ...dropped]);
       _layout = MultiViewLayout.two;
       _active = _slots.indexOf(active);
-      if (!kept.contains(_maximized)) _maximized = null;
+      _maximized = null;
     });
     _configureTiles();
   }
@@ -585,6 +648,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
 
   void _closePicker() {
     if (_pickerTile == null) return;
+    _guardClick();
     setState(() => _pickerTile = null);
     _focusAfterBuild(_rootNode);
   }
@@ -605,6 +669,8 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     final row = entry.row;
     final tile = _pickerTile;
     if (row == null || tile == null || _closing) return;
+    // The picker goes away under a click (not after the await below).
+    _guardClick();
     final channel = MultiViewChannel.of(
       source.sourceId,
       row,
@@ -623,6 +689,9 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     if (_dialogs > 0) return;
     if (!await _tune(tile, channel) || !mounted) return;
     _setActive(_slots.indexOf(tile));
+    // Also when it already was the active tile: its new stream is heard
+    // unless it is muted now.
+    _configureTiles();
     if (identical(_pickerTile, tile)) _closePicker();
   }
 
@@ -761,6 +830,36 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     setState(() => _hoveredTile = id);
   }
 
+  /// A click gives the keyboard back to the split screen, should focus
+  /// have gone elsewhere (the picker keeps its own).
+  void _onPointerDown(PointerDownEvent _) {
+    if (_closing || _pickerTile != null || _rootNode.hasPrimaryFocus) return;
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) return;
+    _rootNode.requestFocus();
+  }
+
+  /// Kept for the click's handlers, which run in this same event
+  /// ([_guardClick]).
+  void _onPointerUp(PointerUpEvent event) {
+    _clickAt = event.localPosition;
+    scheduleMicrotask(() => _clickAt = null);
+  }
+
+  /// A click made what was under it go away (a channel picked, the picker
+  /// closed, a tile's Remove or Separate window, the grid shown again): the
+  /// spot takes no clicks for [kDoubleTapTimeout], or the second click of a
+  /// double click would make the tile under it the active (heard) one, or
+  /// press what is there now. Keys leave no spot.
+  void _guardClick() {
+    final at = _clickAt;
+    if (at == null || !mounted) return;
+    _guardTimer?.cancel();
+    setState(() => _guardAt = at);
+    _guardTimer = Timer(kDoubleTapTimeout, () {
+      if (mounted) setState(() => _guardAt = null);
+    });
+  }
+
   void _rebuild() {
     if (mounted) setState(() {});
   }
@@ -813,12 +912,13 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
       // The picker's own keys; Escape closes it through Back.
       return KeyEventResult.ignored;
     }
-    // Escape leaves window fullscreen before it means Back.
-    if (key == LogicalKeyboardKey.escape && _window.isOn) {
-      if (down) {
-        _setWindowFullscreen(false);
-        _rebuild();
-      }
+    // Nothing here takes focus: Tab (and Shift+Tab) would take it off the
+    // split screen, and none of its keys would work any more.
+    if (key == LogicalKeyboardKey.tab) return KeyEventResult.handled;
+    // Escape shows the grid and leaves window fullscreen before it closes
+    // the split screen.
+    if (key == LogicalKeyboardKey.escape) {
+      if (down) _handleBack();
       return KeyEventResult.handled;
     }
     if (direction != null) {
@@ -846,13 +946,30 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     return KeyEventResult.handled;
   }
 
+  /// Back (Escape), innermost first: closes the picker, shows every tile
+  /// again, leaves window fullscreen, then leaves the split screen.
   void _handleBack() {
     if (_closing) return;
     if (_pickerTile != null) {
       _closePicker();
-      return;
+    } else if (_maximized != null) {
+      _showGrid();
+    } else if (_window.isOn) {
+      _setWindowFullscreen(false);
+      _rebuild();
+    } else {
+      _exit();
     }
-    _exit();
+  }
+
+  /// The bar's Back button: every tile again from a maximized one, else
+  /// out of the split screen (in fullscreen too, like the player's).
+  void _onBarBack() {
+    if (_maximized != null) {
+      _showGrid();
+    } else {
+      _exit();
+    }
   }
 
   /// Leaves the split screen: every stream stops and every connection is
@@ -886,6 +1003,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     final aspect = ref.watch(settingsProvider.select((s) => s.defaultAspect));
     final pickerTile = _pickerTile;
     final pickerSource = _pickerSource;
+    final guardAt = _guardAt;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -893,8 +1011,8 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
       },
       child: Scaffold(
         backgroundColor: Colors.black,
-        // Escape (desktop Back) goes through the PopScope; in window
-        // fullscreen [_onKey] takes it first.
+        // [_onKey] takes Escape (desktop Back); in the picker it goes
+        // through the PopScope.
         body: Focus(
           focusNode: _rootNode,
           autofocus: true,
@@ -906,16 +1024,30 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
                 ? MouseCursor.defer
                 : SystemMouseCursors.none,
             onHover: (_) => _onMouseMoved(),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                _grid(aspect),
-                if (_barVisible && pickerTile == null && !_closing) _bar(l10n),
-                if (pickerTile != null && pickerSource != null)
-                  Positioned.fill(
-                    child: _picker(l10n, pickerTile, pickerSource, sources),
-                  ),
-              ],
+            child: Listener(
+              onPointerDown: _onPointerDown,
+              onPointerUp: _onPointerUp,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  _grid(aspect),
+                  if (_barVisible && pickerTile == null && !_closing)
+                    _bar(l10n),
+                  if (pickerTile != null && pickerSource != null)
+                    Positioned.fill(
+                      child: _picker(l10n, pickerTile, pickerSource, sources),
+                    ),
+                  // Where a double click can land its second click.
+                  if (guardAt != null)
+                    Positioned.fromRect(
+                      rect: Rect.fromCircle(
+                        center: guardAt,
+                        radius: kDoubleTapSlop,
+                      ),
+                      child: const AbsorbPointer(child: SizedBox.expand()),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -966,6 +1098,8 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
             tile: tile,
             number: slot + 1,
             active: slot == _active && maximized == null,
+            // Shown alone, it still shows whether it is heard.
+            heard: slot == _active,
             hovered: _hoveredTile == tile.id && _barVisible && !_closing,
             aspect: aspect,
             onTap: () => _setActive(slot),
@@ -979,6 +1113,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
               unawaited(_retry(tile));
             },
             onDetach: _desktop ? () => unawaited(_detach(tile)) : null,
+            onShowAll: alone ? _showGrid : null,
           ),
         ),
       ),
@@ -986,7 +1121,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
   }
 
   /// Back, the layout and fullscreen, at the top centre while the mouse
-  /// moves.
+  /// moves. On a maximized tile Back shows every tile again first.
   Widget _bar(AppLocalizations l10n) {
     final two = _layout == MultiViewLayout.two;
     final fullscreen = _window.isOn;
@@ -1012,7 +1147,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
                 icon: Icons.arrow_back,
                 label: l10n.commonBack,
                 size: 40,
-                onPressed: _exit,
+                onPressed: _onBarBack,
               ),
               const SizedBox(width: Spacing.md),
               Text(
@@ -1047,6 +1182,42 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
       ),
     );
   }
+}
+
+/// A dialog that ignores clicks, on it and beside it (it covers the
+/// barrier), for [kDoubleTapTimeout] after it opens, like
+/// [ChannelPanel.openGuard]: the click that opened it may be the first of a
+/// double click. Keys work at once.
+class _OpenGuard extends StatefulWidget {
+  const _OpenGuard({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_OpenGuard> createState() => _OpenGuardState();
+}
+
+class _OpenGuardState extends State<_OpenGuard> {
+  bool _justOpened = true;
+  late final Timer _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(kDoubleTapTimeout, () {
+      if (mounted) setState(() => _justOpened = false);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      AbsorbPointer(absorbing: _justOpened, child: widget.child);
 }
 
 /// The picker's row of sources: the channels shown come from the selected

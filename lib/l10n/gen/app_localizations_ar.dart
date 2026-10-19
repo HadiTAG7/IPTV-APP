@@ -667,6 +667,41 @@ class AppLocalizationsAr extends AppLocalizations {
   }
 
   @override
+  String multiviewInUseManyAt(String source, int limit, String places) {
+    return 'عدد الاتصالات المسموح بها في اشتراك «⁨$source⁩» هو $limit، وكلها مستخدمة الآن في $places. اختر قناة من مصدر آخر، أو قم بترقية اشتراكك.';
+  }
+
+  @override
+  String multiviewPlaceTile(int tile) {
+    return 'الخانة $tile';
+  }
+
+  @override
+  String multiviewPlaceWindows(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count نافذة منفصلة',
+      many: '$count نافذة منفصلة',
+      few: '$count نوافذ منفصلة',
+      two: 'نافذتين منفصلتين',
+      one: 'نافذة منفصلة',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get multiviewPlacesSeparator => ' و';
+
+  @override
+  String multiviewPlacesAnd(String first, String last) {
+    return '$first و$last';
+  }
+
+  @override
+  String get multiviewShowAll => 'عرض كل الخانات';
+
+  @override
   String get playerLive => 'مباشر';
 
   @override

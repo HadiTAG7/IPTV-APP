@@ -49,17 +49,20 @@ class MultiViewButton extends StatelessWidget {
 /// One tile of the split screen on screen: the video, its number, the
 /// channel's name, the opening and reconnect states, the failure with
 /// Retry, the big "Add channel" button when empty, and on hover the
-/// Change channel, Separate window and Remove buttons.
+/// Change channel, Separate window (not when failed) and Remove buttons,
+/// and Show all tiles on a maximized tile.
 ///
 /// [active] draws the gold border of the tile that is heard and that the
-/// keys act on. Clicks report [onTap] and [onDoubleTap]; pointer
-/// enter/exit report [onHover]. Rebuilt by the screen when [tile] changes.
+/// keys act on; [heard] puts the speaker (or the muted one) by its name.
+/// Clicks report [onTap] and [onDoubleTap]; pointer enter/exit report
+/// [onHover]. Rebuilt by the screen when [tile] changes.
 class MultiViewTileView extends StatelessWidget {
   const MultiViewTileView({
     super.key,
     required this.tile,
     required this.number,
     required this.active,
+    required this.heard,
     required this.hovered,
     required this.aspect,
     required this.onTap,
@@ -70,6 +73,7 @@ class MultiViewTileView extends StatelessWidget {
     required this.onRemove,
     required this.onRetry,
     this.onDetach,
+    this.onShowAll,
   });
 
   final MultiViewTile tile;
@@ -77,6 +81,10 @@ class MultiViewTileView extends StatelessWidget {
   /// 1-based, as the messages name tiles.
   final int number;
   final bool active;
+
+  /// Whether the sound is this tile's (the active one, also while it is
+  /// shown alone without the border).
+  final bool heard;
   final bool hovered;
   final AspectMode aspect;
   final VoidCallback onTap;
@@ -90,6 +98,9 @@ class MultiViewTileView extends StatelessWidget {
   /// Null where there are no separate windows.
   final VoidCallback? onDetach;
 
+  /// Shows every tile again; set while this one is maximized.
+  final VoidCallback? onShowAll;
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -97,7 +108,10 @@ class MultiViewTileView extends StatelessWidget {
     final status = tile.status;
     final channel = tile.channel;
     final failed = status == MultiViewTileStatus.failed;
-    final detach = onDetach;
+    // A failed tile has no stream to hand over (Retry first).
+    final detach = failed ? null : onDetach;
+    final showAll = onShowAll;
+    final buttons = detach == null ? 2 : 3;
     // The buttons sit above the click area, so their clicks never wait for
     // the tile's double click.
     return MouseRegion(
@@ -137,7 +151,9 @@ class MultiViewTileView extends StatelessWidget {
                   if (channel != null)
                     PositionedDirectional(
                       start: Spacing.sm,
-                      end: hovered ? 3 * 36 + 4 * Spacing.sm : Spacing.sm,
+                      end: hovered
+                          ? buttons * 36 + (buttons + 1) * Spacing.sm
+                          : Spacing.sm,
                       bottom: Spacing.sm,
                       child: Align(
                         alignment: AlignmentDirectional.bottomStart,
@@ -179,6 +195,19 @@ class MultiViewTileView extends StatelessWidget {
                       onPressed: onRemove,
                     ),
                   ],
+                ),
+              ),
+            // The way back to the grid (also Back, Escape, Enter and a
+            // double click).
+            if (hovered && showAll != null)
+              PositionedDirectional(
+                end: Spacing.sm,
+                top: Spacing.sm,
+                child: MultiViewButton(
+                  key: const ValueKey('multiview-show-all'),
+                  icon: Icons.close_fullscreen,
+                  label: l10n.multiviewShowAll,
+                  onPressed: showAll,
                 ),
               ),
             IgnorePointer(
@@ -256,7 +285,7 @@ class MultiViewTileView extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (active) ...[
+          if (heard) ...[
             Icon(
               tile.userMuted ? Icons.volume_off : Icons.volume_up,
               key: ValueKey(

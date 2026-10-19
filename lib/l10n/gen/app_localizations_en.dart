@@ -649,6 +649,38 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String multiviewInUseManyAt(String source, int limit, String places) {
+    return 'Subscription “⁨$source⁩” allows $limit connections, and all of them are in use in $places. Choose a channel from another source, or upgrade your subscription.';
+  }
+
+  @override
+  String multiviewPlaceTile(int tile) {
+    return 'tile $tile';
+  }
+
+  @override
+  String multiviewPlaceWindows(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count separate windows',
+      one: 'a separate window',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get multiviewPlacesSeparator => ', ';
+
+  @override
+  String multiviewPlacesAnd(String first, String last) {
+    return '$first and $last';
+  }
+
+  @override
+  String get multiviewShowAll => 'Show all tiles';
+
+  @override
   String get playerLive => 'LIVE';
 
   @override
