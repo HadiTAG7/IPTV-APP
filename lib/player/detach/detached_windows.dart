@@ -703,13 +703,18 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
   /// Retry in [viewer]'s failed window: its channel plays again only when
   /// its source has a connection free without this window (the main
   /// player or another window may have taken it since it failed); else the
-  /// window hears what uses it and opens nothing.
-  void _onRetry(_Viewer viewer) {
+  /// window hears what uses it and opens nothing. A source full only
+  /// because of streams still stopping ([ConnectionDrains]) is asked again
+  /// once they have stopped ([waited]).
+  void _onRetry(_Viewer viewer, {bool waited = false}) {
     final id = viewer.id;
     final channel = viewer.channel;
     final status = state.where((v) => v.id == id).firstOrNull?.status;
     // Not failed: a new channel is already on its way to the window.
-    if (channel == null || viewer.closing || status != ViewerStatus.failed) {
+    if (channel == null ||
+        viewer.closing ||
+        viewer.dropped ||
+        status != ViewerStatus.failed) {
       return;
     }
     final sourceId = viewer.request.sourceId;
@@ -720,12 +725,27 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
       viewers: state,
       player: ref.read(mainPlayerSourceProvider),
       tiles: ref.read(multiViewTilesProvider),
+      stopping: [
+        for (final d in ref.read(connectionDrainsProvider)) d.sourceId,
+      ],
     ).without(viewerId: id);
+    if (!waited && others.waitsForStops(sourceId)) {
+      viewer.log.info('Detached window $id: retry waits for a stream to stop');
+      unawaited(
+        ref.read(connectionDrainsProvider.notifier).settled(sourceId).then((_) {
+          if (ref.mounted) _onRetry(viewer, waited: true);
+        }),
+      );
+      return;
+    }
     if (!others.fits(sourceId)) {
-      // The player and the split screen's tiles are in the main window.
+      // The player and the split screen's tiles are in the main window, and
+      // so are the streams still stopping (a tile's, or one on its way to a
+      // window).
       final inMain =
           others.usedOn(sourceId, holder: ConnectionHolder.player) +
-          others.usedOn(sourceId, holder: ConnectionHolder.tile);
+          others.usedOn(sourceId, holder: ConnectionHolder.tile) +
+          others.usedOn(sourceId, holder: ConnectionHolder.stopping);
       final by = inMain > 0
           ? ConnectionInUseBy.mainWindow
           : ConnectionInUseBy.otherWindow;

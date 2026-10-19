@@ -3,14 +3,18 @@
 // An Xtream account allows `max_connections` streams at a time (often 1);
 // the fullscreen player, every split-screen tile ([multiViewTilesProvider])
 // and every detached window ([detachedWindowsProvider]) hold one each while
-// they play. M3U sources and accounts that never said have no known limit:
-// those are never limited.
+// they play, and a stream given up still holds one until it has stopped
+// ([connectionDrainsProvider]). M3U sources and accounts that never said
+// have no known limit: those are never limited.
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app/providers.dart';
 import '../sources/source_repository.dart' show SourceView;
 import 'detach/detached_windows.dart';
+import 'session/connection_guard.dart';
 
 /// What holds a connection.
 enum ConnectionHolder {
@@ -22,6 +26,9 @@ enum ConnectionHolder {
 
   /// A detached window ([DetachedWindows]).
   viewer,
+
+  /// A stream given up that has not stopped yet ([ConnectionDrains]).
+  stopping,
 }
 
 /// One connection in use.
@@ -100,16 +107,28 @@ class ConnectionBudget {
   }
 
   /// This budget without the connection of the detached window [viewerId]
-  /// or of the split-screen tile [tileId].
-  ConnectionBudget without({int? viewerId, int? tileId}) => ConnectionBudget(
+  /// or of the split-screen tile [tileId], and without the streams still
+  /// stopping when [stopping].
+  ConnectionBudget without({
+    int? viewerId,
+    int? tileId,
+    bool stopping = false,
+  }) => ConnectionBudget(
     limits: limits,
     uses: [
       for (final u in uses)
         if ((viewerId == null || u.viewerId != viewerId) &&
-            (tileId == null || u.tileId != tileId))
+            (tileId == null || u.tileId != tileId) &&
+            !(stopping && u.holder == ConnectionHolder.stopping))
           u,
     ],
   );
+
+  /// Whether [sourceId] is full only because of streams still stopping
+  /// ([ConnectionHolder.stopping]): one more fits once they have stopped
+  /// ([ConnectionDrains.settled]).
+  bool waitsForStops(int sourceId) =>
+      !fits(sourceId) && without(stopping: true).fits(sourceId);
 
   /// Ids of the detached windows playing from [sourceId], oldest first.
   List<int> viewersOn(int sourceId) => [
@@ -166,6 +185,126 @@ class MultiViewTiles extends Notifier<Map<int, int>> {
   }
 }
 
+/// A stream given up that has not stopped yet ([ConnectionDrains]).
+@immutable
+class ConnectionDrain {
+  const ConnectionDrain(this.id, this.sourceId);
+
+  final int id;
+  final int sourceId;
+
+  @override
+  String toString() => 'ConnectionDrain($id, source $sourceId)';
+}
+
+/// The streams given up that are still stopping ([ConnectionDrains]).
+final connectionDrainsProvider =
+    NotifierProvider<ConnectionDrains, List<ConnectionDrain>>(
+      ConnectionDrains.new,
+      name: 'connectionDrainsProvider',
+    );
+
+/// Streams given up that have not stopped yet: a split-screen tile's old
+/// stream, whose stop waits for an open still running (up to the guard's
+/// step timeout on a slow server), or a channel on its way to a separate
+/// window. Each still holds its source's connection
+/// ([ConnectionHolder.stopping]) until it has stopped, at most [timeout].
+/// They are the app's, not the split screen's: they outlive it, and a
+/// player opened after it closed waits for them ([settled]).
+class ConnectionDrains extends Notifier<List<ConnectionDrain>> {
+  /// The longest a stream counts as stopping: a little over the longest a
+  /// stop waits for an open still running
+  /// ([ConnectionGuard.defaultStepTimeout]), so a stop that never finishes
+  /// cannot hold its source forever.
+  static final timeout =
+      ConnectionGuard.defaultStepTimeout + const Duration(seconds: 2);
+
+  final _timers = <int, Timer>{};
+  final _waiters = <_DrainWaiter>{};
+  int _nextId = 1;
+
+  @override
+  List<ConnectionDrain> build() {
+    ref.onDispose(() {
+      for (final timer in _timers.values) {
+        timer.cancel();
+      }
+      _timers.clear();
+      for (final waiter in [..._waiters]) {
+        _settle(waiter, false);
+      }
+    });
+    return const [];
+  }
+
+  /// A stream of [sourceId] was given up: it counts until [stopped]
+  /// completes (either way), at most [timeout]. Ignored once the app is
+  /// shutting down.
+  void add(int sourceId, Future<void> stopped) {
+    if (!ref.mounted) {
+      stopped.ignore();
+      return;
+    }
+    final id = _nextId++;
+    state = [...state, ConnectionDrain(id, sourceId)];
+    _timers[id] = Timer(timeout, () {
+      _timers.remove(id);
+      if (!ref.mounted) return;
+      ref
+          .read(ringLogProvider)
+          .warn('Connections: a stream of source $sourceId did not stop');
+      _remove(id);
+    });
+    unawaited(
+      stopped.then<void>(
+        (_) => _remove(id),
+        onError: (Object _) => _remove(id),
+      ),
+    );
+  }
+
+  void _remove(int id) {
+    _timers.remove(id)?.cancel();
+    if (!ref.mounted || !state.any((d) => d.id == id)) return;
+    state = [
+      for (final d in state)
+        if (d.id != id) d,
+    ];
+    for (final waiter in [..._waiters]) {
+      if (!state.any((d) => d.sourceId == waiter.sourceId)) {
+        _settle(waiter, true);
+      }
+    }
+  }
+
+  /// Completes with true once no stream of [sourceId] is stopping (at once
+  /// when none is), or with false after [wait] (default [timeout]) or when
+  /// the app is shutting down.
+  Future<bool> settled(int sourceId, {Duration? wait}) {
+    if (!ref.mounted) return Future.value(false);
+    if (!state.any((d) => d.sourceId == sourceId)) return Future.value(true);
+    final waiter = _DrainWaiter(sourceId);
+    waiter.timer = Timer(wait ?? timeout, () => _settle(waiter, false));
+    _waiters.add(waiter);
+    return waiter.done.future;
+  }
+
+  void _settle(_DrainWaiter waiter, bool settled) {
+    if (!_waiters.remove(waiter)) return;
+    waiter.timer?.cancel();
+    waiter.done.complete(settled);
+  }
+}
+
+/// A caller of [ConnectionDrains.settled].
+class _DrainWaiter {
+  _DrainWaiter(this.sourceId);
+
+  final int sourceId;
+  final done = Completer<bool>();
+  Timer? timer;
+}
+
 /// The current [ConnectionBudget] ([connectionBudgetOf]).
 final connectionBudgetProvider = Provider<ConnectionBudget>(
   (ref) => connectionBudgetOf(
@@ -173,19 +312,22 @@ final connectionBudgetProvider = Provider<ConnectionBudget>(
     viewers: ref.watch(detachedWindowsProvider),
     player: ref.watch(mainPlayerSourceProvider),
     tiles: ref.watch(multiViewTilesProvider),
+    stopping: [for (final d in ref.watch(connectionDrainsProvider)) d.sourceId],
   ),
   name: 'connectionBudgetProvider',
 );
 
 /// The budget of the saved [sources]' limits (a detached window remembers
 /// its source's limit too), the fullscreen [player]'s source, the
-/// split-screen [tiles] (tile id -> source id) and the detached [viewers]
-/// that hold a connection.
+/// split-screen [tiles] (tile id -> source id), the detached [viewers]
+/// that hold a connection and the sources of the streams still [stopping]
+/// ([ConnectionDrains]).
 ConnectionBudget connectionBudgetOf({
   required List<SourceView> sources,
   required List<DetachedViewer> viewers,
   int? player,
   Map<int, int> tiles = const {},
+  List<int> stopping = const [],
 }) => ConnectionBudget(
   limits: {
     for (final v in viewers) v.sourceId: v.maxConnections,
@@ -207,6 +349,8 @@ ConnectionBudget connectionBudgetOf({
           holder: ConnectionHolder.viewer,
           viewerId: v.id,
         ),
+    for (final source in stopping)
+      ConnectionUse(sourceId: source, holder: ConnectionHolder.stopping),
   ],
 );
 

@@ -881,9 +881,11 @@ void main() {
     }
 
     testWidgets('its connection stays counted until the window has it: the '
-        'same subscription in another tile is refused', (tester) async {
+        'same subscription in another tile waits for it, then is refused', (
+      tester,
+    ) async {
       final rig = PlayerRig();
-      final windows = _ListingWindows(rig);
+      final windows = ListingDetachedWindows(rig);
       final xtream = await slowNewsInTile1(tester, rig, windows);
       final l10n = await AppLocalizations.delegate.load(en);
       final container = containerOf(tester);
@@ -894,15 +896,25 @@ void main() {
       await tester.tap(inSlot(1, find.byKey(const ValueKey('multiview-add'))));
       await openedPicker(tester);
       await pickChannel(tester, 'Panel Sport', sourceId: xtream);
-      expect(find.text(l10n.multiviewInUseWindow('Panel')), findsOneWidget);
-      await press(tester, LogicalKeyboardKey.enter);
-      await press(tester, LogicalKeyboardKey.escape);
+      // Only a stream still stopping is in the way: the tile waits for it,
+      // showing the channel opening.
+      expect(find.byKey(_inUse), findsNothing);
+      expect(
+        inSlot(1, find.byKey(const ValueKey('multiview-buffering'))),
+        findsOneWidget,
+      );
 
       // The stop is done and the window listed: it holds the connection,
-      // once.
+      // once, and the tile is refused.
       await tester.pump(const Duration(seconds: 7));
       await settleSplit(tester);
       expect(windows.detached.single.channelKey, '501');
+      expect(find.text(l10n.multiviewInUseWindow('Panel')), findsOneWidget);
+      await press(tester, LogicalKeyboardKey.enter);
+      expect(
+        inSlot(1, find.byKey(const ValueKey('multiview-failure'))),
+        findsOneWidget,
+      );
       final budget = container.read(connectionBudgetProvider);
       expect(budget.usedOn(xtream), 1);
       expect(budget.viewersOn(xtream), hasLength(1));
@@ -930,27 +942,4 @@ void main() {
       await disposeRig(tester, rig);
     });
   });
-}
-
-/// Separate windows listed as soon as they are asked for, as
-/// [DetachedWindows.detach] does once its server is up.
-class _ListingWindows extends RecordingDetachedWindows {
-  _ListingWindows(super.rig);
-
-  @override
-  Future<int> detach(DetachRequest request) async {
-    final id = await super.detach(request);
-    state = [
-      ...state,
-      DetachedViewer(
-        id: id,
-        sourceId: request.sourceId,
-        channelKey: request.channelKey,
-        title: request.title,
-        maxConnections: request.maxConnections,
-        status: ViewerStatus.playing,
-      ),
-    ];
-    return id;
-  }
 }

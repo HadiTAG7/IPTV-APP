@@ -4,6 +4,8 @@
 // connection free without that window, and otherwise tells the window what
 // uses it. The window reports every (re)opening, so the app counts it.
 // Synthetic data only (127.0.0.1 URLs, made-up credentials).
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -227,6 +229,27 @@ void main() {
       p.send(const RetryMessage());
       await until(() => p.received.length == 3);
       expect(p.received.last, isA<PlayMessage>());
+      await app.windows.close(id);
+    });
+
+    test('Retry while a stream given up still stops waits for it, then '
+        'plays', () async {
+      final app = _App();
+      final (id, p) = await app.failedWindow();
+      final stopped = Completer<void>();
+      app.container
+          .read(connectionDrainsProvider.notifier)
+          .add(7, stopped.future);
+
+      p.send(const RetryMessage());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(p.received, hasLength(1));
+      expect(app.window(id).status, ViewerStatus.failed);
+
+      stopped.complete();
+      await until(() => p.received.length == 2);
+      expect(p.received.last, isA<PlayMessage>());
+      expect(app.window(id).status, ViewerStatus.opening);
       await app.windows.close(id);
     });
 

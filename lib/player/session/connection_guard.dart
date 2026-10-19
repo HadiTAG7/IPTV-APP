@@ -27,8 +27,11 @@ class ConnectionGuard {
     this.singleConnectionGap = const Duration(milliseconds: 150),
     this.heldWindow = const Duration(seconds: 3),
     this.heldRetryDelays = const [Duration(seconds: 1), Duration(seconds: 2)],
-    this.stepTimeout = const Duration(seconds: 10),
+    this.stepTimeout = defaultStepTimeout,
   });
+
+  /// The [stepTimeout] of the app's guards.
+  static const defaultStepTimeout = Duration(seconds: 10);
 
   /// Pause between closing and opening when the panel allows 1 connection.
   final Duration singleConnectionGap;

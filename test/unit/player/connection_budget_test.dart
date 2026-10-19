@@ -1,7 +1,10 @@
-// The per-source connection budget (fullscreen player + detached windows).
-// Synthetic data only.
+// The per-source connection budget (fullscreen player, split-screen tiles,
+// detached windows and streams still stopping). Synthetic data only.
+import 'dart:async';
+
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/app/providers.dart';
@@ -9,6 +12,7 @@ import 'package:iptv_player/core/db/app_db.dart';
 import 'package:iptv_player/core/log/ring_log.dart';
 import 'package:iptv_player/player/connection_budget.dart';
 import 'package:iptv_player/player/detach/detached_windows.dart';
+import 'package:iptv_player/player/session/connection_guard.dart';
 import 'package:iptv_player/sources/models.dart';
 
 /// Detached windows set by the test.
@@ -40,6 +44,7 @@ DetachedViewer _window(
 const _viewer = ConnectionHolder.viewer;
 const _player = ConnectionHolder.player;
 const _tile = ConnectionHolder.tile;
+const _stopping = ConnectionHolder.stopping;
 
 void main() {
   group('ConnectionBudget', () {
@@ -118,6 +123,44 @@ void main() {
       );
       expect(window.without(tileId: 2).fits(1), isFalse);
       expect(window.without(viewerId: 2).fits(1), isTrue);
+    });
+
+    test('a stream still stopping counts, but is no tile nor window; the '
+        'source waits only for it', () {
+      const budget = ConnectionBudget(
+        limits: {1: 1},
+        uses: [ConnectionUse(sourceId: 1, holder: _stopping)],
+      );
+      expect(budget.fits(1), isFalse);
+      expect(budget.usedOn(1), 1);
+      expect(budget.tilesOn(1), isEmpty);
+      expect(budget.viewersOn(1), isEmpty);
+      expect(budget.waitsForStops(1), isTrue);
+      expect(budget.without(stopping: true).fits(1), isTrue);
+      // A tile or a window id never drops it.
+      expect(budget.without(tileId: 0, viewerId: 0).fits(1), isFalse);
+
+      // Full without it too: waiting would not help.
+      const window = ConnectionBudget(
+        limits: {1: 1},
+        uses: [
+          ConnectionUse(sourceId: 1, holder: _stopping),
+          ConnectionUse(sourceId: 1, holder: _viewer, viewerId: 2),
+        ],
+      );
+      expect(window.waitsForStops(1), isFalse);
+      // Room for both: nothing to wait for.
+      const two = ConnectionBudget(
+        limits: {1: 2},
+        uses: [ConnectionUse(sourceId: 1, holder: _stopping)],
+      );
+      expect(two.fits(1), isTrue);
+      expect(two.waitsForStops(1), isFalse);
+      // An unknown limit never waits.
+      const m3u = ConnectionBudget(
+        uses: [ConnectionUse(sourceId: 1, holder: _stopping)],
+      );
+      expect(m3u.waitsForStops(1), isFalse);
     });
 
     test('sources count separately', () {
@@ -230,6 +273,34 @@ void main() {
       expect(connectionFits(container, xtream), isTrue);
     });
 
+    test('a stream given up counts until it has stopped, also with the '
+        'tiles gone; settled waits for it', () async {
+      final drains = container.read(connectionDrainsProvider.notifier);
+      final stopped = Completer<void>();
+      container.read(multiViewTilesProvider.notifier).set({0: xtream});
+      drains.add(xtream, stopped.future);
+      container.read(multiViewTilesProvider.notifier).set(const {});
+
+      expect(connectionFits(container, xtream), isFalse);
+      expect(budget().usedOn(xtream, holder: _stopping), 1);
+      expect(budget().tilesOn(xtream), isEmpty);
+      expect(budget().waitsForStops(xtream), isTrue);
+      expect(connectionFits(container, m3u), isTrue);
+      var settled = false;
+      unawaited(drains.settled(xtream).then((v) => settled = v));
+      // Another source has nothing to wait for.
+      expect(await drains.settled(m3u), isTrue);
+      await Future<void>.delayed(Duration.zero);
+      expect(settled, isFalse);
+
+      // A stop that fails has stopped as well.
+      stopped.completeError(StateError('engine gone'));
+      await Future<void>.delayed(Duration.zero);
+      expect(settled, isTrue);
+      expect(container.read(connectionDrainsProvider), isEmpty);
+      expect(connectionFits(container, xtream), isTrue);
+    });
+
     test('an unknown limit fits any number of windows, logged once', () {
       windows.set([for (var i = 1; i <= 3; i++) _window(i, m3u)]);
       expect(connectionFits(container, m3u), isTrue);
@@ -244,6 +315,108 @@ void main() {
       windows.set([_window(1, 77, maxConnections: 1)]);
       expect(budget().limitOf(77), 1);
       expect(connectionFits(container, 77), isFalse);
+    });
+  });
+
+  group('ConnectionDrains', () {
+    /// Runs [body] on a fresh container in fake time; no timer may be left
+    /// once the container is gone.
+    void inFakeTime(
+      void Function(FakeAsync async, ProviderContainer container, RingLog log)
+      body,
+    ) {
+      fakeAsync((async) {
+        final log = RingLog();
+        final container = ProviderContainer(
+          overrides: [ringLogProvider.overrideWithValue(log)],
+        );
+        body(async, container, log);
+        container.dispose();
+        async.flushMicrotasks();
+        expect(async.pendingTimers, isEmpty);
+      });
+    }
+
+    List<int> sources(ProviderContainer container) => [
+      for (final d in container.read(connectionDrainsProvider)) d.sourceId,
+    ];
+
+    test('a stop that never finishes is released after the safety '
+        'timeout, which is longer than a stop can wait for an open', () {
+      expect(
+        ConnectionDrains.timeout,
+        greaterThan(ConnectionGuard.defaultStepTimeout),
+      );
+      inFakeTime((async, container, log) {
+        final drains = container.read(connectionDrainsProvider.notifier)
+          ..add(1, Completer<void>().future);
+        bool? settled;
+        async.elapse(const Duration(seconds: 1));
+        unawaited(drains.settled(1).then((v) => settled = v));
+
+        async.elapse(ConnectionDrains.timeout - const Duration(seconds: 2));
+        expect(sources(container), [1]);
+        expect(settled, isNull);
+
+        async.elapse(const Duration(seconds: 1));
+        expect(sources(container), isEmpty);
+        expect(settled, isTrue);
+        expect(
+          log.lines.where((l) => l.contains('did not stop')),
+          hasLength(1),
+        );
+        expect(async.pendingTimers, isEmpty);
+      });
+    });
+
+    test('a stop done in time leaves no timer; each source settles on its '
+        'own', () {
+      inFakeTime((async, container, log) {
+        final a = Completer<void>();
+        final b = Completer<void>();
+        final drains = container.read(connectionDrainsProvider.notifier)
+          ..add(1, a.future)
+          ..add(1, b.future)
+          ..add(2, Completer<void>().future);
+        final settled = <bool>[];
+        unawaited(drains.settled(1).then(settled.add));
+        a.complete();
+        async.flushMicrotasks();
+        expect(sources(container), [1, 2]);
+        expect(settled, isEmpty);
+
+        b.complete();
+        async.flushMicrotasks();
+        expect(sources(container), [2]);
+        expect(settled, [true]);
+        // Only source 2's safety timer is left.
+        expect(async.pendingTimers, hasLength(1));
+        expect(log.lines.where((l) => l.contains('did not stop')), isEmpty);
+      });
+    });
+
+    test('settled gives up after its wait; the app going away ends every '
+        'wait and timer', () {
+      inFakeTime((async, container, log) {
+        final drains = container.read(connectionDrainsProvider.notifier)
+          ..add(1, Completer<void>().future);
+        final settled = <bool>[];
+        unawaited(
+          drains.settled(1, wait: const Duration(seconds: 1)).then(settled.add),
+        );
+        async.elapse(const Duration(seconds: 1));
+        expect(settled, [false]);
+        expect(sources(container), [1]);
+
+        unawaited(drains.settled(1).then(settled.add));
+        container.dispose();
+        async.flushMicrotasks();
+        expect(settled, [false, false]);
+        expect(async.pendingTimers, isEmpty);
+        // Later stops are ignored.
+        drains.add(1, Completer<void>().future);
+        expect(async.pendingTimers, isEmpty);
+      });
     });
   });
 }

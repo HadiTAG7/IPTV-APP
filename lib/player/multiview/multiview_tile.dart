@@ -78,9 +78,13 @@ enum MultiViewTileStatus {
 ///   the channel's catalog row, resolves the live stream like the player
 ///   ([PlayerSource.resolveLive]) and plays it with the source's
 ///   connection limit. A newer [play], [clear] or [dispose] drops one
-///   still on its way.
+///   still on its way. Given a `when`, it waits for it first (showing the
+///   channel opening).
 /// * [holdsConnection] says whether the tile counts against its source's
 ///   connections: from [play] until it failed, is cleared or disposed.
+/// * A stream it gives up (emptied, another source, failed, stopped or
+///   disposed) still counts until it has stopped, since its stop waits for
+///   an open still running: [onStopping] hears of each.
 /// * [configure] sets the sound (only the active tile is heard) and the
 ///   cache size (the Lite one when it is not heard) for this controller and
 ///   the later ones.
@@ -94,6 +98,7 @@ class MultiViewTile extends ChangeNotifier {
     required this.loadSource,
     required this.db,
     this.onChannelPlayed,
+    this.onStopping,
     RingLog? log,
   }) : _log = log ?? RingLog.instance;
 
@@ -108,6 +113,10 @@ class MultiViewTile extends ChangeNotifier {
 
   /// The channel started playing (the Recent list).
   final ChannelPlayedCallback? onChannelPlayed;
+
+  /// The tile gave up its stream of [sourceId], which has stopped (its
+  /// connection is closed) once [stopped] completes.
+  final void Function(int sourceId, Future<void> stopped)? onStopping;
   final RingLog _log;
 
   MultiViewChannel? _channel;
@@ -117,6 +126,13 @@ class MultiViewTile extends ChangeNotifier {
   int _seq = 0;
   String? _playedKey;
   bool _disposed = false;
+
+  /// The source of the stream the controller has (or opens); null once the
+  /// tile gave it up ([_letGo]).
+  int? _streamSource;
+
+  /// [play] or [retry] waits before the stream opens.
+  bool _waiting = false;
 
   bool _audible = false;
   bool _lite = false;
@@ -138,6 +154,7 @@ class MultiViewTile extends ChangeNotifier {
   MultiViewTileStatus get status {
     if (_channel == null) return MultiViewTileStatus.empty;
     if (_error != null) return MultiViewTileStatus.failed;
+    if (_waiting) return MultiViewTileStatus.opening;
     return switch (_controller?.phase) {
       PlaybackPhase.failed => MultiViewTileStatus.failed,
       PlaybackPhase.playing => MultiViewTileStatus.playing,
@@ -149,6 +166,9 @@ class MultiViewTile extends ChangeNotifier {
   /// channel's source.
   bool get holdsConnection =>
       _channel != null && status != MultiViewTileStatus.failed;
+
+  /// Whether the channel waits before its stream opens ([play]'s `when`).
+  bool get waiting => _waiting;
 
   /// Whether the tile is heard ([configure]).
   bool get audible => _audible;
@@ -171,20 +191,26 @@ class MultiViewTile extends ChangeNotifier {
   }
 
   /// Plays [channel] instead of what the tile played (one stream at a
-  /// time: the old one is closed before the new one opens).
-  Future<void> play(MultiViewChannel channel) async {
+  /// time: the old one is closed before the new one opens). With [when],
+  /// the stream opens only once it completes with true (the split screen
+  /// waits there for streams of the channel's source still stopping):
+  /// meanwhile the tile shows the channel opening and holds its connection,
+  /// and the stream it had stops at once. False fails the tile.
+  Future<void> play(MultiViewChannel channel, {Future<bool>? when}) async {
     if (_disposed) return;
     final seq = ++_seq;
     _channel = channel;
     _error = null;
     _playedKey = null;
+    _waiting = false;
+    if (when != null && !await _wait(seq, when)) return;
     notifyListeners();
     PlayerSource? source = _source;
     if (source == null || source.row.id != channel.sourceId) {
       // The tile now counts on the new source: the old one's stream goes
-      // at once.
+      // at once (it counts until it has stopped).
       final c = _controller;
-      if (c != null) unawaited(c.stop());
+      if (c != null) unawaited(_stop(c));
       _source = null;
       source?.close();
       try {
@@ -235,6 +261,7 @@ class MultiViewTile extends ChangeNotifier {
       'Split screen: tile $id live '
       '"${hideUrlPaths(source.redactText(current.name ?? ''))}"',
     );
+    _streamSource = current.sourceId;
     await controller.play(
       stream,
       itemKey: _itemKey(current),
@@ -260,18 +287,40 @@ class MultiViewTile extends ChangeNotifier {
     return c;
   }
 
-  /// Plays the channel again after a failure.
-  Future<void> retry() async {
+  /// Plays the channel again after a failure; with [when], once it
+  /// completes with true (as for [play]).
+  Future<void> retry({Future<bool>? when}) async {
     final channel = _channel;
     if (channel == null || _disposed) return;
     final controller = _controller;
     if (_error != null || _source == null || controller == null) {
-      await play(channel);
+      await play(channel, when: when);
       return;
     }
-    _seq++;
+    final seq = ++_seq;
     _playedKey = null;
+    _waiting = false;
+    if (when != null && !await _wait(seq, when)) return;
+    _streamSource = channel.sourceId;
     await controller.retry();
+  }
+
+  /// Waits for [when] before the stream of call [seq] opens: the tile shows
+  /// its channel opening, and the stream it had stops at once. False when
+  /// a newer call took over, or when [when] said no (the tile failed then).
+  Future<bool> _wait(int seq, Future<bool> when) async {
+    _waiting = true;
+    final c = _controller;
+    if (c != null) unawaited(_stop(c));
+    notifyListeners();
+    final go = await when.catchError((Object _) => false);
+    if (seq != _seq || _disposed) return false;
+    _waiting = false;
+    if (!go) {
+      _fail(const _NoConnection());
+      return false;
+    }
+    return true;
   }
 
   /// The channel cannot play: nothing plays in the tile (it holds no
@@ -279,8 +328,23 @@ class MultiViewTile extends ChangeNotifier {
   void _fail(Object error) {
     _error = error;
     final c = _controller;
-    if (c != null) unawaited(c.stop());
+    if (c != null) unawaited(_stop(c));
     notifyListeners();
+  }
+
+  /// Stops [c]'s stream, which counts until it has ([_letGo]).
+  Future<void> _stop(PlaybackController c) {
+    final stopped = c.stop();
+    _letGo(stopped);
+    return stopped;
+  }
+
+  /// The tile gives up its stream: it still counts against its source
+  /// until [stopped] completes ([onStopping]).
+  void _letGo(Future<void> stopped) {
+    final sourceId = _streamSource;
+    _streamSource = null;
+    if (sourceId != null) onStopping?.call(sourceId, stopped);
   }
 
   /// The controller changed: a channel that started playing goes to the
@@ -308,8 +372,10 @@ class MultiViewTile extends ChangeNotifier {
   }
 
   /// Removes the channel: its stream is stopped (the connection closed)
-  /// when this completes, and the controller and source are released.
-  Future<void> clear() async {
+  /// when this completes, and the controller and source are released. The
+  /// stream counts until then ([onStopping]), and after that until
+  /// [handedOver] completes, when given (a separate window takes it over).
+  Future<void> clear({Future<void>? handedOver}) async {
     _seq++;
     final controller = _controller;
     final source = _source;
@@ -318,11 +384,20 @@ class MultiViewTile extends ChangeNotifier {
     _channel = null;
     _error = null;
     _playedKey = null;
+    _waiting = false;
     userMuted = false;
     if (!_disposed) notifyListeners();
     source?.close();
     if (controller == null) return;
     controller.removeListener(_onController);
+    final stopped = _stopAndDispose(controller);
+    _letGo(
+      handedOver == null ? stopped : stopped.whenComplete(() => handedOver),
+    );
+    await stopped;
+  }
+
+  static Future<void> _stopAndDispose(PlaybackController controller) async {
     try {
       await controller.stop();
     } finally {
@@ -334,7 +409,9 @@ class MultiViewTile extends ChangeNotifier {
   /// is on screen; [dispose] follows.
   Future<void> stop() async {
     _seq++;
-    await _controller?.stop();
+    _waiting = false;
+    final c = _controller;
+    if (c != null) await _stop(c);
   }
 
   @override
@@ -345,12 +422,30 @@ class MultiViewTile extends ChangeNotifier {
     final controller = _controller;
     _controller = null;
     if (controller != null) {
-      controller
-        ..removeListener(_onController)
-        ..dispose();
+      controller.removeListener(_onController);
+      // Not stopped before (the screen went away without its Back): the
+      // stream goes with its controller once an open still running is
+      // done. Told after this frame's work: providers cannot change while
+      // the widget tree is being finalized.
+      final sourceId = _streamSource;
+      final onStopping = this.onStopping;
+      if (sourceId != null && onStopping != null) {
+        final stopped = controller.stop();
+        _streamSource = null;
+        scheduleMicrotask(() => onStopping(sourceId, stopped));
+      }
+      controller.dispose();
     }
     _source?.close();
     _source = null;
     super.dispose();
   }
+}
+
+/// Why a tile that waited for its source's connection does not play.
+class _NoConnection implements Exception {
+  const _NoConnection();
+
+  @override
+  String toString() => 'No connection free';
 }

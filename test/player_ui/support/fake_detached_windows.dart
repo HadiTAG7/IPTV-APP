@@ -49,3 +49,26 @@ class RecordingDetachedWindows extends DetachedWindows {
     ];
   }
 }
+
+/// [RecordingDetachedWindows] whose windows are listed as soon as they are
+/// asked for, as [DetachedWindows.detach] does once its server is up.
+class ListingDetachedWindows extends RecordingDetachedWindows {
+  ListingDetachedWindows(super.rig, {super.initial});
+
+  @override
+  Future<int> detach(DetachRequest request) async {
+    final id = await super.detach(request);
+    state = [
+      ...state,
+      DetachedViewer(
+        id: id,
+        sourceId: request.sourceId,
+        channelKey: request.channelKey,
+        title: request.title,
+        maxConnections: request.maxConnections,
+        status: ViewerStatus.playing,
+      ),
+    ];
+    return id;
+  }
+}

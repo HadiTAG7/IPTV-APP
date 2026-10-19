@@ -30,13 +30,26 @@ const kPlayerFadeOut = Duration(milliseconds: 120);
 /// Anything (a channel, a movie, an episode) whose source has no connection
 /// left because detached windows use them ([connectionBudgetProvider])
 /// asks first: close the (newest) window and play here, play a live
-/// channel in that window instead, or cancel. While that question or the
-/// window's closing is pending, other calls are ignored: they would stack
-/// a second player.
+/// channel in that window instead, or cancel. A source full only because
+/// of streams still stopping ([ConnectionDrains]: a split-screen tile's, or
+/// one on its way to a separate window) opens once they have stopped (at
+/// most [ConnectionDrains.timeout]), after asking about a window listed
+/// meanwhile. While that wait, the question or the window's closing is
+/// pending, other calls are ignored: they would stack a second player.
 Future<void> openPlayer(BuildContext context, PlayRequest request) async {
   final container = ProviderScope.containerOf(context, listen: false);
   final gate = container.read(_windowQuestionProvider);
   if (gate.pending) return;
+  final sourceId = request.sourceId;
+  if (container.read(connectionBudgetProvider).waitsForStops(sourceId)) {
+    gate.pending = true;
+    try {
+      await container.read(connectionDrainsProvider.notifier).settled(sourceId);
+    } finally {
+      gate.pending = false;
+    }
+    if (!context.mounted) return;
+  }
   final window = _windowInTheWay(container, request);
   if (window != null) {
     gate.pending = true;
@@ -51,8 +64,9 @@ Future<void> openPlayer(BuildContext context, PlayRequest request) async {
   return _pushPlayer(context, request);
 }
 
-/// Whether [openPlayer] is asking about a detached window or waiting for
-/// one to close (one per provider container).
+/// Whether [openPlayer] is waiting for streams still stopping, asking about
+/// a detached window or waiting for one to close (one per provider
+/// container).
 class _WindowQuestion {
   bool pending = false;
 }

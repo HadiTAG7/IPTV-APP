@@ -132,7 +132,7 @@ class MultiViewTileView extends StatelessWidget {
                   if (controller != null && !failed)
                     controller.buildView(aspect: aspect),
                   if (status == MultiViewTileStatus.opening)
-                    _buffering(controller),
+                    _buffering(tile.waiting ? null : controller),
                   if (controller != null && !failed)
                     Align(
                       alignment: Alignment.topCenter,
@@ -228,8 +228,8 @@ class MultiViewTileView extends StatelessWidget {
     );
   }
 
-  /// The spinner while the source loads or the stream opens (and while
-  /// the engine rebuffers).
+  /// The spinner while the tile waits for a connection, the source loads
+  /// or the stream opens (and while the engine rebuffers).
   Widget _buffering(PlaybackController? controller) {
     const spinner = Center(
       key: ValueKey('multiview-buffering'),
