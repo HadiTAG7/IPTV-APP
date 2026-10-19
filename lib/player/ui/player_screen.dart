@@ -91,6 +91,10 @@ enum PlayerAction {
 ///   hands the channel over to the first tile of a [MultiViewScreen] the
 ///   same way. Tab never takes the keyboard away from the player, and a
 ///   click gives it back should it have gone elsewhere.
+/// * Closing (Back, D, S) frees the player's place in the connection
+///   budget at once, but its stream counts against its source until it
+///   has stopped ([ConnectionDrains]), and after D or S until the window
+///   or the tile has it.
 /// * Phones and desktop: the OSD's top bar has a Back button.
 class PlayerScreen extends ConsumerStatefulWidget {
   const PlayerScreen({super.key, required this.request});
@@ -184,6 +188,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// way.
   late final MainPlayerSource _mainPlayer;
 
+  /// The app's streams still stopping: the one this player gives up counts
+  /// there until it has stopped ([_beginExit]).
+  late final ConnectionDrains _drains;
+
   /// The desktop window ([playerWindowProvider]); null on Android.
   WindowFullscreen? _window;
 
@@ -226,6 +234,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _onlineSub = ref.read(playerOnlineProvider)?.listen(_controller.setOnline);
     _fullscreen = ref.read(fullscreenPlaybackProvider.notifier);
     _mainPlayer = ref.read(mainPlayerSourceProvider.notifier);
+    _drains = ref.read(connectionDrainsProvider.notifier);
     _fullscreenOwner = this;
     // Not while the route is being built.
     scheduleMicrotask(() {
@@ -1032,10 +1041,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   /// Everything of [_exit] but closing the route. Returns when the stream
-  /// is stopped (its connection closed), or null when already exiting.
-  /// [keepWindow] leaves the window fullscreen for the screen it is handed
-  /// over to (the split screen).
-  Future<void>? _beginExit({bool keepWindow = false}) {
+  /// is stopped (its connection closed: its stop has run, which can wait
+  /// for an open still running, or the controller went with the route), or
+  /// null when already exiting. The player's place in the connection
+  /// budget goes at once, but its stream counts against its source until
+  /// then ([ConnectionDrains]), and after that until [handedOver]
+  /// completes, when given (a separate window or the split screen takes it
+  /// over). [keepWindow] leaves the window fullscreen for the screen it is
+  /// handed over to (the split screen).
+  Future<void>? _beginExit({
+    bool keepWindow = false,
+    Future<void>? handedOver,
+  }) {
     if (_exiting) return null;
     // Nothing on screen takes a click any more (the route may only close
     // once the stream has stopped).
@@ -1053,9 +1070,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     unawaited(_onlineSub?.cancel());
     _onlineSub = null;
     _releaseOrientation();
+    final stopped = _controller.stop();
+    // Before the place goes: the source is never free while it stops.
+    _drains.add(
+      _session.sourceId,
+      handedOver == null ? stopped : stopped.whenComplete(() => handedOver),
+    );
     _releaseFullscreen();
     if (!keepWindow) _setWindowFullscreen(false);
-    return _controller.stop();
+    return stopped;
   }
 
   /// Whether the channel can go to a window of its own or to the split
@@ -1065,6 +1088,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// Opens the split screen with this channel in its first tile: the
   /// player stops its stream and closes first, and only then does the tile
   /// open the channel (a one-connection account never has two open). The
+  /// stream counts against its source until the tile holds it, so nothing
+  /// else (a separate window's Retry) takes the connection in between. The
   /// window stays as it is (fullscreen or not).
   Future<void> _splitScreen() async {
     if (!_canDetach) return;
@@ -1081,27 +1106,51 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final navigator = Navigator.of(context);
     final route = ModalRoute.of(context);
     final fullscreen = _windowFullscreen;
-    final stopped = _beginExit(keepWindow: true);
-    if (stopped == null) return;
-    await stopped;
-    // Gone meanwhile (the app is closing): its dispose gives the window
-    // back.
-    if (route == null || !route.isActive || !navigator.mounted) return;
-    // This player's route, whatever may have opened above it meanwhile.
-    if (route.isCurrent) {
-      navigator.pop();
-    } else {
-      navigator.removeRoute(route);
+    final handedOver = Completer<void>();
+    void handOver() {
+      if (!handedOver.isCompleted) handedOver.complete();
     }
-    unawaited(openMultiView(navigator, first: first, fullscreen: fullscreen));
+
+    // Counted while its stream stops (which can wait for an opening one to
+    // finish), then until the first tile holds it.
+    final stopped = _beginExit(keepWindow: true, handedOver: handedOver.future);
+    if (stopped == null) return;
+    var opened = false;
+    try {
+      await stopped;
+      // Gone meanwhile (the app is closing): its dispose gives the window
+      // back.
+      if (route == null || !route.isActive || !navigator.mounted) return;
+      // This player's route, whatever may have opened above it meanwhile.
+      if (route.isCurrent) {
+        navigator.pop();
+      } else {
+        navigator.removeRoute(route);
+      }
+      // The split screen completes it (at the latest once it is closed).
+      unawaited(
+        openMultiView(
+          navigator,
+          first: first,
+          fullscreen: fullscreen,
+          handedOver: handedOver,
+        ).whenComplete(handOver),
+      );
+      opened = true;
+    } finally {
+      // Nothing took it over.
+      if (!opened) handOver();
+    }
   }
 
   /// Plays the channel in a detached window ([DetachedWindows.detach]):
   /// the player stops its stream and closes first, and only then does the
   /// window open the same stream, so a one-connection account never has
-  /// two open. A snack bar tells when the window could not be opened (a
-  /// stream a window cannot play keeps playing here), but not when it was
-  /// closed on purpose while it started.
+  /// two open. The stream counts against its source until the window is
+  /// listed (or failed to open), so nothing else (another window's Retry)
+  /// takes the connection in between. A snack bar tells when the window
+  /// could not be opened (a stream a window cannot play keeps playing
+  /// here), but not when it was closed on purpose while it started.
   Future<void> _detach() async {
     if (!_canDetach) return;
     final l10n = AppLocalizations.of(context);
@@ -1144,29 +1193,46 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     log.info('Player: detaching the channel');
     final navigator = Navigator.of(context);
     final route = ModalRoute.of(context);
-    final stopped = _beginExit();
+    // The app's providers: the window opens after this screen is gone.
+    final container = ProviderScope.containerOf(context, listen: false);
+    final handedOver = Completer<void>();
+    // Counted while its stream stops (which can wait for an opening one to
+    // finish), then until the window is listed.
+    final stopped = _beginExit(handedOver: handedOver.future);
     if (stopped == null) return;
-    await stopped;
-    // This player's route, whatever may have opened above it meanwhile.
-    if (mounted && route != null && route.isActive) {
-      if (route.isCurrent) {
-        navigator.pop();
-      } else {
-        navigator.removeRoute(route);
-      }
-    }
+    ProviderSubscription<List<DetachedViewer>>? listing;
     try {
-      await windows.detach(request);
-    } on ViewerLaunchException catch (e) {
-      if (e.closedOnPurpose) {
-        log.info('Player: the separate window was closed while it started');
+      await stopped;
+      // This player's route, whatever may have opened above it meanwhile.
+      if (mounted && route != null && route.isActive) {
+        if (route.isCurrent) {
+          navigator.pop();
+        } else {
+          navigator.removeRoute(route);
+        }
+      }
+      try {
+        listing = listenForWindow(container, request, handedOver);
+      } on StateError {
+        // The app is going away (its providers are disposed).
         return;
       }
-      log.warn('Player: the separate window failed: $e');
-      failed();
-    } on Object catch (e) {
-      log.warn('Player: the separate window failed: $e');
-      failed();
+      try {
+        await windows.detach(request);
+      } on ViewerLaunchException catch (e) {
+        if (e.closedOnPurpose) {
+          log.info('Player: the separate window was closed while it started');
+          return;
+        }
+        log.warn('Player: the separate window failed: $e');
+        failed();
+      } on Object catch (e) {
+        log.warn('Player: the separate window failed: $e');
+        failed();
+      }
+    } finally {
+      listing?.close();
+      if (!handedOver.isCompleted) handedOver.complete();
     }
   }
 

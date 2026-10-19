@@ -150,6 +150,10 @@ class PlaybackController extends ChangeNotifier {
   bool _online = true;
   bool _wakelock = false;
   bool _disposed = false;
+
+  /// Completes when the controller is disposed: its engine goes, and the
+  /// stream with it.
+  final _gone = Completer<void>();
   double _volume = 1;
   bool _muted = false;
 
@@ -241,13 +245,16 @@ class PlaybackController extends ChangeNotifier {
   }
 
   /// Stops playback, saves progress and closes the connection. The engine
-  /// instance is kept for the next [play].
+  /// instance is kept for the next [play]. Completes once the stream is
+  /// stopped: its stop has run (after an open still running), or the
+  /// controller was disposed meanwhile (the engine went, and the stream
+  /// with it).
   Future<void> stop() async {
     if (_disposed) return;
     _endSession();
     _session = null;
     _setPhase(PlaybackPhase.idle);
-    await _guard.stop(() async => _engine?.stop());
+    await Future.any([_guard.stop(() async => _engine?.stop()), _gone.future]);
     if (_disposed) return;
     _state.value = PlaybackState.idle;
     _setWakelock(false);
@@ -754,6 +761,7 @@ class PlaybackController extends ChangeNotifier {
     if (_disposed) return;
     _endSession();
     _disposed = true;
+    _gone.complete();
     _session = null;
     _watchdog.dispose();
     _guard.dispose();

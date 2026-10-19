@@ -173,6 +173,45 @@ void main() {
       });
     });
 
+    test('a stop waits for an open still running, and completes once the '
+        'stream has stopped or the controller is disposed', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        rig.engines.onCreate = (e) => e.openDelay = const Duration(seconds: 9);
+        final c = rig.controller;
+        rig.play(liveTs, maxConnections: 1);
+        async.elapse(sec);
+        final engine = rig.engine;
+        expect(engine.streamOpen, isTrue);
+
+        var stopped = false;
+        unawaited(c.stop().then((_) => stopped = true));
+        async.elapse(const Duration(seconds: 5));
+        expect(stopped, isFalse, reason: 'the open still runs');
+
+        // The player's route is gone: the engine goes, and the stream.
+        c.dispose();
+        async.flushMicrotasks();
+        expect(stopped, isTrue);
+        expect(engine.streamOpen, isFalse);
+        async.elapse(const Duration(seconds: 10));
+
+        // Not disposed: once the open is done, the stop runs.
+        final rig2 = Rig(async);
+        rig2.engines.onCreate = (e) => e.openDelay = const Duration(seconds: 9);
+        rig2.play(liveTs, maxConnections: 1);
+        async.elapse(sec);
+        var stopped2 = false;
+        unawaited(rig2.controller.stop().then((_) => stopped2 = true));
+        async.elapse(const Duration(seconds: 7));
+        expect(stopped2, isFalse);
+        async.elapse(const Duration(seconds: 2));
+        expect(stopped2, isTrue);
+        expect(rig2.engine.streamOpen, isFalse);
+        rig2.controller.dispose();
+      });
+    });
+
     test('VOD on Android picks mpv; Amlogic picks exo', () {
       fakeAsync((async) {
         final rig = Rig(async)..playsOn(EngineKind.mpv);

@@ -233,12 +233,13 @@ final connectionDrainsProvider =
     );
 
 /// Streams given up that have not stopped yet: a split-screen tile's old
-/// stream, whose stop waits for an open still running (up to the guard's
-/// step timeout on a slow server), or a channel on its way to a separate
-/// window. Each still holds its source's connection
-/// ([ConnectionHolder.stopping]) until it has stopped, at most [timeout].
-/// They are the app's, not the split screen's: they outlive it, and a
-/// player opened after it closed waits for them ([settled]).
+/// stream or the fullscreen player's last one, whose stop waits for an
+/// open still running (up to the guard's step timeout on a slow server),
+/// or a channel on its way to a separate window or to the split screen.
+/// Each still holds its source's connection ([ConnectionHolder.stopping])
+/// until it has stopped (and has been taken over), at most [timeout].
+/// They are the app's, not a screen's: they outlive it, and a player
+/// opened after it closed waits for them ([settled]).
 class ConnectionDrains extends Notifier<List<ConnectionDrain>> {
   /// The longest a stream counts as stopping: a little over the longest a
   /// stop can take ([ConnectionGuard.longestStop]: it waits for an open

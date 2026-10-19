@@ -284,6 +284,36 @@ final detachedWindowsProvider =
       name: 'detachedWindowsProvider',
     );
 
+/// Completes [listed] once [container] lists a window for [request] that
+/// is not listed now ([DetachedWindows.detach] lists it once its server is
+/// up; from then on it counts against its source). A stream handed over to
+/// a separate window counts until then ([ConnectionDrains]). Close the
+/// subscription once the detach is over. Throws a [StateError] once the
+/// app's providers are disposed.
+ProviderSubscription<List<DetachedViewer>> listenForWindow(
+  ProviderContainer container,
+  DetachRequest request,
+  Completer<void> listed,
+) {
+  final before = {
+    for (final w in container.read(detachedWindowsProvider)) w.id,
+  };
+  return container.listen<List<DetachedViewer>>(detachedWindowsProvider, (
+    _,
+    windows,
+  ) {
+    if (listed.isCompleted) return;
+    if (windows.any(
+      (w) =>
+          !before.contains(w.id) &&
+          w.sourceId == request.sourceId &&
+          w.channelKey == request.channelKey,
+    )) {
+      listed.complete();
+    }
+  });
+}
+
 /// The app's side of one viewer.
 class _Viewer {
   _Viewer({
@@ -740,8 +770,8 @@ class DetachedWindows extends Notifier<List<DetachedViewer>> {
     }
     if (!others.fits(sourceId)) {
       // The player and the split screen's tiles are in the main window, and
-      // so are the streams still stopping (a tile's, or one on its way to a
-      // window).
+      // so are the streams still stopping (a tile's or the player's, or one
+      // on its way to a window or to the split screen).
       final inMain =
           others.usedOn(sourceId, holder: ConnectionHolder.player) +
           others.usedOn(sourceId, holder: ConnectionHolder.tile) +

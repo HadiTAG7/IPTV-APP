@@ -54,19 +54,24 @@ enum MultiViewLayout {
 
 /// Opens the split screen on [navigator] with [first] in its first tile
 /// (the player hands its channel over), the window fullscreen when
-/// [fullscreen]. Completes when it is closed.
+/// [fullscreen]. [handedOver] is completed once that tile holds the
+/// connection ([MultiViewScreen.handedOver]). Completes when it is closed.
 Future<void> openMultiView(
   NavigatorState navigator, {
   MultiViewChannel? first,
   bool fullscreen = false,
+  Completer<void>? handedOver,
 }) => navigator.push<void>(
   PageRouteBuilder<void>(
     settings: const RouteSettings(name: kMultiViewRouteName),
     fullscreenDialog: true,
     transitionDuration: kPlayerFadeIn,
     reverseTransitionDuration: kPlayerFadeOut,
-    pageBuilder: (_, _, _) =>
-        MultiViewScreen(first: first, fullscreen: fullscreen),
+    pageBuilder: (_, _, _) => MultiViewScreen(
+      first: first,
+      fullscreen: fullscreen,
+      handedOver: handedOver,
+    ),
     transitionsBuilder: (_, animation, _, child) => FadeTransition(
       opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
       child: child,
@@ -117,10 +122,21 @@ Future<void> openMultiView(
 ///   [fullscreenPlaybackProvider] and the keyboard. Closing it stops every
 ///   stream and frees every connection (each once its stream has stopped).
 class MultiViewScreen extends ConsumerStatefulWidget {
-  const MultiViewScreen({super.key, this.first, this.fullscreen = false});
+  const MultiViewScreen({
+    super.key,
+    this.first,
+    this.fullscreen = false,
+    this.handedOver,
+  });
 
   /// The first tile's channel; null opens the picker on it.
   final MultiViewChannel? first;
+
+  /// Completed once [first]'s tile holds its connection (or was refused
+  /// it, or the screen closed first): the player handing the channel over
+  /// counts its stream until then ([ConnectionDrains]), so nothing takes
+  /// the connection in between.
+  final Completer<void>? handedOver;
 
   /// Makes the window fullscreen while the screen is open.
   final bool fullscreen;
@@ -241,13 +257,25 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     }
     // The budget is a provider: not while the route is being built.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _closing) return;
-      if (first == null) {
-        _openPicker(_slots.first);
-      } else {
-        unawaited(_tune(_slots.first, first));
+      if (mounted && !_closing) {
+        if (first == null) {
+          _openPicker(_slots.first);
+        } else {
+          // Its tile holds the connection at once (waiting for the
+          // player's stream, still counted, to be handed over), or is
+          // refused it.
+          unawaited(_tune(_slots.first, first));
+        }
       }
+      _handOver();
     });
+  }
+
+  /// The player's stream handed over is no longer counted for it
+  /// ([MultiViewScreen.handedOver]).
+  void _handOver() {
+    final handedOver = widget.handedOver;
+    if (handedOver != null && !handedOver.isCompleted) handedOver.complete();
   }
 
   @override
@@ -278,6 +306,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
     }
     _rootNode.dispose();
     _release(later: true);
+    _handOver();
     _window.set(false);
     super.dispose();
   }
@@ -635,21 +664,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
       // Its next channel follows the sound as it is now (no longer muted).
       if (mounted) _configureTiles();
       try {
-        final before = {
-          for (final w in container.read(detachedWindowsProvider)) w.id,
-        };
-        listing = container.listen<List<DetachedViewer>>(
-          detachedWindowsProvider,
-          (_, listedNow) {
-            final listed = listedNow.any(
-              (w) =>
-                  !before.contains(w.id) &&
-                  w.sourceId == request.sourceId &&
-                  w.channelKey == request.channelKey,
-            );
-            if (listed && !handedOver.isCompleted) handedOver.complete();
-          },
-        );
+        listing = listenForWindow(container, request, handedOver);
       } on StateError {
         // The app is going away (its providers are disposed).
         return;

@@ -39,13 +39,13 @@ const kPlayerFadeOut = Duration(milliseconds: 120);
 /// left because detached windows use them ([connectionBudgetProvider])
 /// asks first: close the (newest) window and play here, play a live
 /// channel in that window instead, or cancel. A source full only because
-/// of streams still stopping ([ConnectionDrains]: a split-screen tile's, or
-/// one on its way to a separate window) opens once they have stopped (at
-/// most [ConnectionDrains.timeout]), after asking about a window listed
-/// meanwhile. A dialog shows that wait, and Cancel (or Back) drops it; a
-/// newer call drops it too and goes on with its own request. While the
-/// question or the window's closing is pending, other calls are ignored:
-/// they would stack a second player.
+/// of streams still stopping ([ConnectionDrains]: a split-screen tile's,
+/// the last player's, or one on its way to a separate window) opens once
+/// they have stopped (at most [ConnectionDrains.timeout]), after asking
+/// about a window listed meanwhile. A dialog shows that wait, and Cancel
+/// (or Back) drops it; a newer call drops it too and goes on with its own
+/// request. While the question or the window's closing is pending, other
+/// calls are ignored: they would stack a second player.
 Future<void> openPlayer(BuildContext context, PlayRequest request) async {
   final container = ProviderScope.containerOf(context, listen: false);
   final pending = container.read(_pendingOpenProvider);
