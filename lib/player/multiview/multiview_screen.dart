@@ -101,9 +101,11 @@ Future<void> openMultiView(
 ///   maximizes and restores (adds a channel to an empty tile, retries a
 ///   failed one), C changes the channel, M mutes, Delete removes the
 ///   channel, D detaches it into a separate window ([DetachedWindows]), L
-///   switches the layout, F and F11 toggle the window's fullscreen, Escape
-///   shows all the tiles again, leaves fullscreen, then the split screen.
-///   Tab never takes the keyboard away.
+///   switches the layout (from a maximized tile of 4 it shows all the tiles
+///   first), F and F11 toggle the window's fullscreen, Escape shows all the
+///   tiles again, leaves fullscreen, then the split screen. Tab never takes
+///   the keyboard away; while a message is over the split screen no key
+///   acts on the tiles.
 /// * Like the player it owns the window's fullscreen
 ///   ([WindowFullscreenHold]), the app lifecycle (live stops in the
 ///   background and reopens on return, for every tile),
@@ -158,6 +160,9 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
 
   /// Where the click being handled was ([_onPointerUp]); null otherwise.
   Offset? _clickAt;
+
+  /// The area whose coordinates [_clickAt] and [_guardAt] are in.
+  final _clicks = GlobalKey(debugLabel: 'multiview-clicks');
 
   /// The spot of a click that made what was under it go away: it takes no
   /// clicks for a moment ([_guardClick]).
@@ -472,12 +477,14 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
 
   Future<void> _showInUse(String message) async {
     final l10n = AppLocalizations.of(context);
+    Offset? clickAt;
     await _dialog<void>(
       () => showDialog<void>(
         context: context,
         // The second click of a double click on the channel would close it
         // before it could be read.
-        builder: (context) => _OpenGuard(
+        builder: (context) => _DialogGuard(
+          onClick: (at) => clickAt = at,
           child: AlertDialog(
             key: const ValueKey('multiview-in-use'),
             title: Text(l10n.multiviewNoConnectionTitle),
@@ -494,6 +501,10 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
         ),
       ),
     );
+    // Closed with a click (OK, or beside it): the second click of a double
+    // click would reach the tile or the picker under it.
+    final at = clickAt;
+    if (at != null) _guardClick(at: at);
   }
 
   /// Empties [tile]: its stream stops and its connection is free.
@@ -575,7 +586,8 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
   /// 2 <-> 4 tiles, all of them shown (a maximized tile too). Going back to
   /// 2 keeps the active tile and the next one with a channel (the others
   /// are emptied); an empty active tile makes way for the next two with a
-  /// channel.
+  /// channel. From a maximized tile in 4 it only shows the grid: no channel
+  /// stops before it was seen, the next press goes to 2.
   void _toggleLayout() {
     if (_closing) return;
     if (_layout == MultiViewLayout.two) {
@@ -583,6 +595,10 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
         _layout = MultiViewLayout.four;
         _maximized = null;
       });
+      return;
+    }
+    if (_maximized != null) {
+      _showGrid();
       return;
     }
     final count = MultiViewLayout.two.count;
@@ -612,7 +628,6 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
         ..addAll([...kept, ...dropped]);
       _layout = MultiViewLayout.two;
       _active = _slots.indexOf(active);
-      _maximized = null;
     });
     _configureTiles();
   }
@@ -846,15 +861,20 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
   }
 
   /// A click made what was under it go away (a channel picked, the picker
-  /// closed, a tile's Remove or Separate window, the grid shown again): the
-  /// spot takes no clicks for [kDoubleTapTimeout], or the second click of a
+  /// closed, a tile's Remove or Separate window, the grid shown again, the
+  /// "no free connection" message closed [at] its global spot): the spot
+  /// takes no clicks for [kDoubleTapTimeout], or the second click of a
   /// double click would make the tile under it the active (heard) one, or
   /// press what is there now. Keys leave no spot.
-  void _guardClick() {
-    final at = _clickAt;
-    if (at == null || !mounted) return;
+  void _guardClick({Offset? at}) {
+    if (!mounted) return;
+    final box = _clicks.currentContext?.findRenderObject();
+    final spot = at == null
+        ? _clickAt
+        : (box is RenderBox && box.hasSize ? box.globalToLocal(at) : null);
+    if (spot == null) return;
     _guardTimer?.cancel();
-    setState(() => _guardAt = at);
+    setState(() => _guardAt = spot);
     _guardTimer = Timer(kDoubleTapTimeout, () {
       if (mounted) setState(() => _guardAt = null);
     });
@@ -891,6 +911,12 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (_closing) return KeyEventResult.handled;
+    // A message over the split screen gets the keys once its first frame
+    // took the focus; none of them acts on the tiles under it before
+    // (Escape would stop them all and pop the message, not the screen).
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) {
+      return KeyEventResult.handled;
+    }
     if (event is KeyUpEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
     final down = event is KeyDownEvent;
@@ -1025,6 +1051,7 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
                 : SystemMouseCursors.none,
             onHover: (_) => _onMouseMoved(),
             child: Listener(
+              key: _clicks,
               onPointerDown: _onPointerDown,
               onPointerUp: _onPointerUp,
               child: Stack(
@@ -1187,17 +1214,21 @@ class _MultiViewScreenState extends ConsumerState<MultiViewScreen> {
 /// A dialog that ignores clicks, on it and beside it (it covers the
 /// barrier), for [kDoubleTapTimeout] after it opens, like
 /// [ChannelPanel.openGuard]: the click that opened it may be the first of a
-/// double click. Keys work at once.
-class _OpenGuard extends StatefulWidget {
-  const _OpenGuard({required this.child});
+/// double click. Keys work at once. [onClick] gets the global spot of a
+/// click on it or beside it while that click is handled (a click that
+/// closes it, with OK or the barrier, has closed it by then), and null
+/// after.
+class _DialogGuard extends StatefulWidget {
+  const _DialogGuard({required this.onClick, required this.child});
 
+  final ValueChanged<Offset?> onClick;
   final Widget child;
 
   @override
-  State<_OpenGuard> createState() => _OpenGuardState();
+  State<_DialogGuard> createState() => _DialogGuardState();
 }
 
-class _OpenGuardState extends State<_OpenGuard> {
+class _DialogGuardState extends State<_DialogGuard> {
   bool _justOpened = true;
   late final Timer _timer;
 
@@ -1215,9 +1246,20 @@ class _OpenGuardState extends State<_OpenGuard> {
     super.dispose();
   }
 
+  void _onPointerUp(PointerUpEvent event) {
+    final onClick = widget.onClick;
+    onClick(event.position);
+    // After the pop (OK) or maybePop (the barrier) this click caused.
+    Timer.run(() => onClick(null));
+  }
+
   @override
-  Widget build(BuildContext context) =>
-      AbsorbPointer(absorbing: _justOpened, child: widget.child);
+  Widget build(BuildContext context) => Listener(
+    // Beside the dialog too: the barrier under it still takes the click.
+    behavior: HitTestBehavior.translucent,
+    onPointerUp: _onPointerUp,
+    child: AbsorbPointer(absorbing: _justOpened, child: widget.child),
+  );
 }
 
 /// The picker's row of sources: the channels shown come from the selected

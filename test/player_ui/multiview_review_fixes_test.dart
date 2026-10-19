@@ -1,9 +1,10 @@
 // The split screen's review fixes: the sound of a tile emptied while
-// muted, the keyboard that never leaves the split screen, double clicks on
-// things that go away, a maximized tile (its sound icon, the way back to
-// the grid), the picker's source row, Separate window on a failed tile and
-// the refusal of a subscription with more than one connection. Synthetic
-// data only.
+// muted, the keyboard that never leaves the split screen (nor acts on it
+// under a message), double clicks on things that go away (the "no free
+// connection" message too), a maximized tile (its sound icon, the way back
+// to the grid, the layout), the picker's source row, Separate window on a
+// failed tile and the refusal of a subscription with more than one
+// connection. Synthetic data only.
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,10 +14,12 @@ import 'package:iptv_player/player/detach/detached_windows.dart';
 import 'package:iptv_player/player/multiview/multiview_screen.dart';
 import 'package:iptv_player/sources/models.dart';
 
+import '../support/fake_engine.dart';
 import 'support/multiview_harness.dart';
 import 'support/player_harness.dart';
 
 const _inUse = ValueKey('multiview-in-use');
+const _ok = ValueKey('multiview-in-use-ok');
 const _showAll = ValueKey('multiview-show-all');
 
 /// Two clicks at [at], 80 ms apart, then waits past the double-click
@@ -27,6 +30,40 @@ Future<void> _doubleClickAt(WidgetTester tester, Offset at) async {
   await tester.tapAt(at);
   await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 50));
   await settleSplit(tester);
+}
+
+/// Tile 1 (Xtream 501, one connection) failed and tile 2 plays Xtream 502
+/// (active): Retry on tile 1 is refused.
+Future<PlayerRig> _failedTileAndSport(WidgetTester tester) async {
+  final rig = PlayerRig();
+  var failing = false;
+  rig.engines.onCreate = (e) => e.onOpen = (e, r) {
+    if (failing && r.url.contains('/501.')) {
+      e.emitError('HTTP error 500 Internal Server Error', httpStatus: 500);
+    } else {
+      e.emitFirstFrame();
+    }
+  };
+  final xtream = await seedXtream(rig);
+  await pumpSplitApp(tester, rig);
+  await openPlayerFor(tester, xtreamRequest(xtream, '501'));
+  failing = true;
+  await press(tester, LogicalKeyboardKey.keyS);
+  await settleSplit(tester);
+  await addChannel(tester, 1, 'Panel Sport');
+  expect(isActive(1), isTrue);
+  return rig;
+}
+
+/// Clicks Retry on the failed tile 1: the refusal opens, tile 1 is active
+/// and tile 2 ([sport]) silent. Waits until the message takes clicks.
+Future<void> _refusedRetry(WidgetTester tester, FakeEngine sport) async {
+  await tester.tap(inSlot(0, find.byKey(const ValueKey('multiview-retry'))));
+  await settle(tester);
+  expect(find.byKey(_inUse), findsOneWidget);
+  expect(isActive(0), isTrue);
+  expect(sport.muted, isTrue);
+  await tester.pump(kDoubleTapTimeout);
 }
 
 void main() {
@@ -149,6 +186,41 @@ void main() {
       expect(slot(3), findsOneWidget);
       await disposeRig(tester, rig);
     });
+
+    testWidgets('keys before a message over it took the focus act on '
+        'nothing: no tile stops and the split screen still works', (
+      tester,
+    ) async {
+      final rig = await _failedTileAndSport(tester);
+      final sport = engineFor(rig, '/502.');
+      // Out of window fullscreen: Escape on the grid would leave.
+      await press(tester, LogicalKeyboardKey.escape);
+      expect(rig.window.last, 'exit');
+      await press(tester, LogicalKeyboardKey.arrowLeft);
+      expect(isActive(0), isTrue);
+
+      // Enter retries tile 1, refused: the message opens. Escape and Enter
+      // come before its first frame took the focus.
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      expect(focusLabel, 'multiview');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await settleSplit(tester);
+      expect(find.byType(MultiViewScreen), findsOneWidget);
+      expect(find.byKey(_inUse), findsOneWidget);
+      expect(sport.count('stop'), 0);
+
+      // The message has the keys now: Escape closes it, and only it.
+      await press(tester, LogicalKeyboardKey.escape);
+      await settleSplit(tester);
+      expect(find.byKey(_inUse), findsNothing);
+      expect(find.byType(MultiViewScreen), findsOneWidget);
+      expect(focusLabel, 'multiview');
+      await press(tester, LogicalKeyboardKey.keyL);
+      expect(slot(3), findsOneWidget);
+      expect(sport.count('stop'), 0);
+      await disposeRig(tester, rig);
+    });
   });
 
   group('the second click of a double click on something that goes away', () {
@@ -263,6 +335,94 @@ void main() {
       await settle(tester);
       expect(find.byKey(_inUse), findsNothing);
       expect(find.byKey(pickerKey), findsOneWidget);
+      await disposeRig(tester, rig);
+    });
+
+    forLocales((locale) {
+      testWidgets('OK of the "no free connection" message over the picker: '
+          'the picker stays open (${locale.languageCode})', (tester) async {
+        final rig = PlayerRig()..autoPlay();
+        final xtream = await seedXtream(rig);
+        final free = await seedFree(rig);
+        await pumpSplitApp(tester, rig, locale: locale);
+        await openSplit(tester, xtreamRequest(xtream, '501'));
+        await tester.tap(
+          inSlot(1, find.byKey(const ValueKey('multiview-add'))),
+        );
+        await openedPicker(tester);
+        await tester.tap(find.byKey(ValueKey('multiview-source-$xtream')));
+        await openedPicker(tester);
+        await tester.tap(
+          find.descendant(
+            of: find.byKey(pickerKey),
+            matching: find.text('Panel Sport'),
+          ),
+        );
+        await settle(tester);
+        expect(find.byKey(_inUse), findsOneWidget);
+        await tester.pump(kDoubleTapTimeout);
+        // OK is beside the picker, over its outside area (which closes it).
+        final ok = tester.getCenter(find.byKey(_ok));
+        expect(tester.getRect(find.byKey(pickerKey)).contains(ok), isFalse);
+
+        await _doubleClickAt(tester, ok);
+        expect(find.byKey(_inUse), findsNothing);
+        // Open for another channel, as the message says.
+        await pickChannel(tester, 'Free 2', sourceId: free);
+        expect(find.byKey(pickerKey), findsNothing);
+        expect(isActive(1), isTrue);
+        expect(engineFor(rig, freeUrl('f2')).muted, isFalse);
+        await disposeRig(tester, rig);
+      });
+    });
+
+    testWidgets('OK of the refused Retry message, or beside it: the failed '
+        'tile stays active and the other one silent', (tester) async {
+      final rig = await _failedTileAndSport(tester);
+      final sport = engineFor(rig, '/502.');
+      await _refusedRetry(tester, sport);
+      // OK is over tile 2.
+      final ok = tester.getCenter(find.byKey(_ok));
+      expect(tester.getRect(slot(1)).contains(ok), isTrue);
+
+      await _doubleClickAt(tester, ok);
+      expect(find.byKey(_inUse), findsNothing);
+      expect(isActive(0), isTrue);
+      expect(isActive(1), isFalse);
+      expect(sport.muted, isTrue);
+
+      await _refusedRetry(tester, sport);
+      await _doubleClickAt(tester, const Offset(1200, 650));
+      expect(find.byKey(_inUse), findsNothing);
+      expect(isActive(0), isTrue);
+      expect(sport.muted, isTrue);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('the message closed with Enter after a click on it leaves no '
+        'guard: a click right after it works', (tester) async {
+      final rig = await _failedTileAndSport(tester);
+      final sport = engineFor(rig, '/502.');
+      await _refusedRetry(tester, sport);
+      // A click on the message (not on OK), over tile 2, leaves it open.
+      final box = tester.getRect(
+        find
+            .descendant(of: find.byKey(_inUse), matching: find.byType(Material))
+            .first,
+      );
+      final at = Offset(box.right - 8, box.center.dy);
+      expect(tester.getRect(slot(1)).contains(at), isTrue);
+      await tester.tapAt(at);
+      await settle(tester);
+      expect(find.byKey(_inUse), findsOneWidget);
+
+      await press(tester, LogicalKeyboardKey.enter);
+      expect(find.byKey(_inUse), findsNothing);
+      await tester.tapAt(at);
+      await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 50));
+      await settle(tester);
+      expect(isActive(1), isTrue);
+      expect(sport.muted, isFalse);
       await disposeRig(tester, rig);
     });
   });
@@ -394,6 +554,53 @@ void main() {
       await press(tester, LogicalKeyboardKey.keyL);
       expect(slot(0), findsOneWidget);
       expect(slot(3), findsOneWidget);
+      await disposeRig(tester, rig);
+    });
+
+    testWidgets('4 tiles: L or the layout button on a maximized one shows '
+        'the grid first; no hidden channel stops before it was seen', (
+      tester,
+    ) async {
+      final rig = PlayerRig()..autoPlay();
+      final id = await seedLive(rig);
+      await pumpSplitApp(tester, rig);
+      await openSplit(tester, liveRequest(id));
+      await press(tester, LogicalKeyboardKey.keyL);
+      await addChannel(tester, 1, 'Channel 2');
+      await addChannel(tester, 2, 'Channel 3');
+      await addChannel(tester, 3, 'Channel 4');
+      final engines = [for (var i = 1; i <= 4; i++) engineFor(rig, '/ch$i.')];
+      void allShownAndPlaying() {
+        for (var i = 0; i < 4; i++) {
+          expect(slot(i), findsOneWidget);
+          expect(engines[i].disposed, isFalse);
+        }
+        expect(isActive(3), isTrue);
+      }
+
+      await doubleTap(tester, slot(3));
+      expect(slot(0), findsNothing);
+      await press(tester, LogicalKeyboardKey.keyL);
+      allShownAndPlaying();
+
+      // The layout button, double clicked: the grid, and nothing stops.
+      await doubleTap(tester, slot(3));
+      expect(slot(0), findsNothing);
+      await mouseAt(tester, const Offset(640, 400));
+      await _doubleClickAt(
+        tester,
+        tester.getCenter(find.byKey(const ValueKey('multiview-layout'))),
+      );
+      allShownAndPlaying();
+
+      // Every tile seen: now L goes to 2 (tile 4, active, and tile 1).
+      await press(tester, LogicalKeyboardKey.keyL);
+      expect(slot(2), findsNothing);
+      expect(engines[1].disposed, isTrue);
+      expect(engines[2].disposed, isTrue);
+      expect(engines[0].disposed, isFalse);
+      expect(engines[3].disposed, isFalse);
+      expect(isActive(1), isTrue);
       await disposeRig(tester, rig);
     });
   });
