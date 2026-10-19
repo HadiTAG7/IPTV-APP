@@ -151,8 +151,8 @@ class PlaybackController extends ChangeNotifier {
   bool _wakelock = false;
   bool _disposed = false;
 
-  /// Completes when the controller is disposed: its engine goes, and the
-  /// stream with it.
+  /// Completes once the controller is disposed and its engine is gone (its
+  /// dispose done), and the stream with it.
   final _gone = Completer<void>();
   double _volume = 1;
   bool _muted = false;
@@ -255,7 +255,9 @@ class PlaybackController extends ChangeNotifier {
     _session = null;
     _setPhase(PlaybackPhase.idle);
     await Future.any([_guard.stop(() async => _engine?.stop()), _gone.future]);
-    if (_disposed) return;
+    // Disposed meanwhile: the guard's stop found no engine to stop, and the
+    // stream goes with the engine's dispose.
+    if (_disposed) return _gone.future;
     _state.value = PlaybackState.idle;
     _setWakelock(false);
   }
@@ -761,7 +763,6 @@ class PlaybackController extends ChangeNotifier {
     if (_disposed) return;
     _endSession();
     _disposed = true;
-    _gone.complete();
     _session = null;
     _watchdog.dispose();
     _guard.dispose();
@@ -769,7 +770,11 @@ class PlaybackController extends ChangeNotifier {
     _engine = null;
     if (engine != null) {
       _detach(engine);
-      unawaited(engine.dispose());
+      // The stream is gone once the engine is: its dispose stops it, after
+      // an open still running (mpv runs both under one lock).
+      unawaited(engine.dispose().whenComplete(_gone.complete));
+    } else {
+      _gone.complete();
     }
     _setWakelock(false);
     unawaited(_events.close());

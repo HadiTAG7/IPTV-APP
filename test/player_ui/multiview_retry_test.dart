@@ -44,12 +44,14 @@ void main() {
     expect(container.read(multiViewTilesProvider), {1: xtream});
 
     failing = false;
-    final tile = engineFor(rig, '/501.');
-    final opens = tile.opened.length;
+    // Retry plays on a new controller (the failed one went with its
+    // stream): count the channel's opens on every engine.
+    int newsOpens() => rig.openedUrls.where((u) => u.contains('/501.')).length;
+    final opens = newsOpens();
     await tester.tap(inSlot(0, find.byKey(const ValueKey('multiview-retry'))));
     await settle(tester);
     expect(find.text(l10n.multiviewInUseTile('Panel', 2)), findsOneWidget);
-    expect(tile.opened, hasLength(opens));
+    expect(newsOpens(), opens);
     // The message takes clicks once a double click's second one is past.
     await tester.pump(kDoubleTapTimeout);
     await tester.tap(find.byKey(const ValueKey('multiview-in-use-ok')));
@@ -62,7 +64,7 @@ void main() {
     await press(tester, LogicalKeyboardKey.arrowLeft);
     await press(tester, LogicalKeyboardKey.enter);
     await settleSplit(tester);
-    expect(tile.opened, hasLength(opens + 1));
+    expect(newsOpens(), opens + 1);
     expect(
       inSlot(0, find.byKey(const ValueKey('multiview-failure'))),
       findsNothing,

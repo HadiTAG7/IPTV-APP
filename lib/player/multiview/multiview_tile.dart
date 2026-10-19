@@ -148,7 +148,8 @@ class MultiViewTile extends ChangeNotifier {
   /// The source of the channel (once loaded).
   PlayerSource? get source => _source;
 
-  /// The source could not be loaded or the channel resolved.
+  /// The source could not be loaded, the channel resolved, or its stream
+  /// failed.
   Object? get error => _error;
 
   bool get isEmpty => _channel == null;
@@ -289,24 +290,12 @@ class MultiViewTile extends ChangeNotifier {
   }
 
   /// Plays the channel again after a failure; with [when], once it
-  /// completes with true (as for [play]). Only a controller that failed by
-  /// itself plays it again; otherwise (and to wait) it goes as for [play].
+  /// completes with true (as for [play]). A failed tile has no controller
+  /// left ([_fail]): a new one plays it.
   Future<void> retry({Future<bool>? when}) async {
     final channel = _channel;
     if (channel == null || _disposed) return;
-    final controller = _controller;
-    if (when != null ||
-        _error != null ||
-        _source == null ||
-        controller == null) {
-      await play(channel, when: when);
-      return;
-    }
-    _seq++;
-    _playedKey = null;
-    _waiting = false;
-    _streamSource = channel.sourceId;
-    await controller.retry();
+    await play(channel, when: when);
   }
 
   /// Waits for [when] before the stream of call [seq] opens: the tile shows
@@ -372,6 +361,13 @@ class MultiViewTile extends ChangeNotifier {
     if (_disposed) return;
     final c = _controller;
     final channel = _channel;
+    if (c != null && c.phase == PlaybackPhase.failed) {
+      // The stream failed by itself (it would not open, or the watchdog
+      // gave up): it goes with its controller like any failure, so its
+      // stop still running counts ([onStopping]).
+      _fail(const _StreamFailed());
+      return;
+    }
     if (c != null &&
         channel != null &&
         c.phase == PlaybackPhase.playing &&
@@ -448,4 +444,13 @@ class _NoConnection implements Exception {
 
   @override
   String toString() => 'No connection free';
+}
+
+/// Why a tile whose controller failed does not play (the controller logged
+/// the reason).
+class _StreamFailed implements Exception {
+  const _StreamFailed();
+
+  @override
+  String toString() => 'Stream failed';
 }
