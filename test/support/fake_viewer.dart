@@ -66,7 +66,12 @@ class FakeViewerProcess implements ViewerProcess {
 /// Starts [FakeViewerProcess]es; [autoConnect] makes each connect at once.
 class FakeViewerLauncher implements ViewerLauncher {
   final processes = <FakeViewerProcess>[];
+
+  /// The command line of each launch.
   final lines = <List<String>>[];
+
+  /// What each launch added to the environment.
+  final environments = <Map<String, String>>[];
 
   /// Thrown by the next launches (with the arguments, like Process.start).
   bool fail = false;
@@ -75,10 +80,16 @@ class FakeViewerLauncher implements ViewerLauncher {
   FakeViewerProcess get last => processes.last;
 
   @override
-  Future<ViewerProcess> launch(List<String> args) async {
+  Future<ViewerProcess> launch(
+    List<String> args, {
+    Map<String, String> environment = const {},
+  }) async {
     lines.add(args);
+    environments.add(environment);
     if (fail) throw ProcessException('iptv_player.exe', args, 'denied', 5);
-    final p = FakeViewerProcess(ViewerLaunchArgs.parse(args));
+    final p = FakeViewerProcess(
+      ViewerLaunchArgs.parse(args, environment: environment),
+    );
     processes.add(p);
     if (autoConnect) unawaited(p.connect());
     return p;

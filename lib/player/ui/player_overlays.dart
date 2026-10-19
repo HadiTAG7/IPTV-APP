@@ -476,6 +476,8 @@ class PlayerFailureCard extends StatelessWidget {
     this.onCopyReport,
     this.details,
     this.onTryOtherFormat,
+    this.onExitFullscreen,
+    this.onClose,
   });
 
   final String message;
@@ -487,6 +489,12 @@ class PlayerFailureCard extends StatelessWidget {
   /// Copies the playback report; null hides the button.
   final VoidCallback? onCopyReport;
 
+  /// Leaves fullscreen (a detached window); null hides the button.
+  final VoidCallback? onExitFullscreen;
+
+  /// Closes the player (a detached window); null hides the button.
+  final VoidCallback? onClose;
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -494,6 +502,8 @@ class PlayerFailureCard extends StatelessWidget {
     final details = this.details;
     final other = onTryOtherFormat;
     final copy = onCopyReport;
+    final exitFullscreen = onExitFullscreen;
+    final close = onClose;
     return PlayerPanel(
       key: const ValueKey('player-failure'),
       padding: const EdgeInsets.all(Spacing.xl),
@@ -547,6 +557,20 @@ class PlayerFailureCard extends StatelessWidget {
                   icon: Icons.copy_all_outlined,
                   label: l10n.playerCopyReport,
                   onSelect: copy,
+                ),
+              if (exitFullscreen != null)
+                PlayerCardButton(
+                  key: const ValueKey('player-exit-fullscreen'),
+                  icon: Icons.fullscreen_exit,
+                  label: l10n.playerExitFullscreen,
+                  onSelect: exitFullscreen,
+                ),
+              if (close != null)
+                PlayerCardButton(
+                  key: const ValueKey('player-close'),
+                  icon: Icons.close,
+                  label: l10n.commonClose,
+                  onSelect: close,
                 ),
             ],
           ),

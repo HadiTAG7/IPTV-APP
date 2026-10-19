@@ -23,6 +23,7 @@ import 'viewer_screen.dart';
 
 /// Runs the viewer: connects to the app, says hello with the token and
 /// shows [ViewerScreen]. Ends the process when the app cannot be reached.
+/// The token is used for the hello only and kept nowhere else.
 Future<void> runViewer(ViewerLaunchArgs args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final log = RingLog.instance;

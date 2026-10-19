@@ -1018,9 +1018,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// is stopped (its connection closed), or null when already exiting.
   Future<void>? _beginExit() {
     if (_exiting) return null;
+    // Nothing on screen takes a click any more (the route may only close
+    // once the stream has stopped).
     setState(() {
       _exiting = true;
       _panelVisible = false;
+      _osdVisible = false;
+      _statsVisible = false;
     });
     _session.close();
     _osdTimer?.cancel();
@@ -1041,7 +1045,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// Plays the channel in a detached window ([DetachedWindows.detach]):
   /// the player stops its stream and closes first, and only then does the
   /// window open the same stream, so a one-connection account never has
-  /// two open. A snack bar tells when the window could not be opened.
+  /// two open. A snack bar tells when the window could not be opened (a
+  /// stream a window cannot play keeps playing here), but not when it was
+  /// closed on purpose while it started.
   Future<void> _detach() async {
     if (!_canDetach) return;
     final l10n = AppLocalizations.of(context);
@@ -1077,13 +1083,33 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           : 'en',
     );
     final windows = ref.read(detachedWindowsProvider.notifier);
+    if (!windows.canPlay(request)) {
+      failed();
+      return;
+    }
     log.info('Player: detaching the channel');
+    final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
     final stopped = _beginExit();
     if (stopped == null) return;
     await stopped;
-    if (mounted) Navigator.of(context).pop();
+    // This player's route, whatever may have opened above it meanwhile.
+    if (mounted && route != null && route.isActive) {
+      if (route.isCurrent) {
+        navigator.pop();
+      } else {
+        navigator.removeRoute(route);
+      }
+    }
     try {
       await windows.detach(request);
+    } on ViewerLaunchException catch (e) {
+      if (e.closedOnPurpose) {
+        log.info('Player: the separate window was closed while it started');
+        return;
+      }
+      log.warn('Player: the separate window failed: $e');
+      failed();
     } on Object catch (e) {
       log.warn('Player: the separate window failed: $e');
       failed();
@@ -1122,6 +1148,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Future<void> _perform(PlayerAction action) async {
+    // Leaving (Detach waits for the stream to stop): nothing more opens.
+    if (_exiting) return;
     switch (action) {
       case PlayerAction.channels:
         _openPanel();

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -8,7 +10,8 @@ import 'window_fullscreen.dart';
 /// window ("compact", picture in picture) and go fullscreen.
 ///
 /// [WindowControls.native] talks to the Windows runner's window channel
-/// (`windows/runner/flutter_window.cpp`); elsewhere (Linux) those calls are
+/// (`windows/runner/flutter_window.cpp`); elsewhere (Linux) only fullscreen
+/// works ([supportsCompactAndPin] is false) and the other calls are
 /// unanswered and do nothing. All of them are idempotent and never throw.
 @immutable
 class WindowControls {
@@ -18,6 +21,8 @@ class WindowControls {
     required this.enterCompact,
     required this.exitCompact,
     required this.fullscreen,
+    this.supportsCompactAndPin = true,
+    this.compactEnded = const Stream<void>.empty(),
   });
 
   /// The runner's window channel for [platform] (Windows: compact, always
@@ -40,14 +45,25 @@ class WindowControls {
       }
     }
 
+    final windows = platform == TargetPlatform.windows;
+    final compactEnded = StreamController<void>.broadcast();
+    if (windows) {
+      // The runner leaves compact by itself when the small window is
+      // maximized from its title bar.
+      windowsWindowChannel.setMethodCallHandler((call) async {
+        if (call.method == 'compactEnded') compactEnded.add(null);
+      });
+    }
     return WindowControls(
       setAlwaysOnTop: (on) => invoke('setAlwaysOnTop', on),
       setTitle: (title) => invoke('setTitle', _clip(title)),
       enterCompact: () => invoke('enterCompact'),
       exitCompact: () => invoke('exitCompact'),
-      fullscreen: platform == TargetPlatform.windows
+      fullscreen: windows
           ? WindowFullscreen.windows(onError: onError)
           : const WindowFullscreen(),
+      supportsCompactAndPin: windows,
+      compactEnded: compactEnded.stream,
     );
   }
 
@@ -65,8 +81,16 @@ class WindowControls {
   /// Back to the size and place the window had before [enterCompact].
   final Future<void> Function() exitCompact;
 
-  /// True fullscreen; the runner leaves compact first.
+  /// True fullscreen. The runner leaves compact first, back to the normal
+  /// size on the monitor the small window is on now.
   final WindowFullscreen fullscreen;
+
+  /// Whether [setAlwaysOnTop], [enterCompact] and [exitCompact] do
+  /// anything (the Windows runner); elsewhere they are not offered.
+  final bool supportsCompactAndPin;
+
+  /// The window left compact by itself (maximized from its title bar).
+  final Stream<void> compactEnded;
 
   /// Longest title sent to the runner.
   static const maxTitleLength = 200;

@@ -38,7 +38,15 @@ class FlutterWindow : public Win32Window {
   void SetAlwaysOnTop(bool always_on_top);
   void SetTitle(const std::string& title);
   void EnterCompact();
-  void ExitCompact();
+  // Back to the size and place the window had before EnterCompact. With
+  // |onto| (the monitor the small window is on now, when it was moved to
+  // another one), the window comes back at that size on |onto| instead.
+  void ExitCompact(HMONITOR onto = nullptr);
+  // Leaves compact without restoring anything (the window was maximized
+  // while small) and tells Dart.
+  void EndCompactByMaximize();
+  // Tells Dart the window left compact by itself ("compactEnded").
+  void NotifyCompactEnded();
   // Applies the topmost state: on while compact or asked to stay on top.
   void ApplyTopmost();
 
@@ -63,9 +71,14 @@ class FlutterWindow : public Win32Window {
 
   // SetAlwaysOnTop's choice; compact windows are on top regardless.
   bool always_on_top_ = false;
-  // The window is compact; its placement before, restored by ExitCompact.
+  // The window is compact; its placement and normal (or snapped) rect
+  // before, restored by ExitCompact.
   bool compact_ = false;
   WINDOWPLACEMENT placement_before_compact_ = {};
+  RECT rect_before_compact_ = {};
+  // The monitor the window was on before compact, and its work area then.
+  HMONITOR monitor_before_compact_ = nullptr;
+  RECT work_area_before_compact_ = {};
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
