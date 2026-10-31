@@ -29,6 +29,7 @@ class DelayedVault extends MemoryVault {
 
 class Cloud {
   SyncData data = {};
+  final deleted = <String>{};
   int version = 0;
   bool offline = false;
   int reads = 0;
@@ -68,6 +69,7 @@ class FakeApi extends FirebaseAccountApi {
     return RemoteState(
       decodeSyncData(jsonDecode(jsonEncode(cloud.data))),
       version,
+      deletedKeys: Set.of(cloud.deleted),
     );
   }
 
@@ -83,6 +85,13 @@ class FakeApi extends FirebaseAccountApi {
     await hook?.call();
     if (remote.version != version) throw const AccountException('CONFLICT');
     if (changes.isNotEmpty) {
+      for (final entry in changes.entries) {
+        if (entry.value == null) {
+          cloud.deleted.add(entry.key);
+        } else {
+          cloud.deleted.remove(entry.key);
+        }
+      }
       cloud.data = mergeSyncData(cloud.data, changes);
       cloud.version++;
     }
@@ -315,6 +324,48 @@ void main() {
       expect(settings.lite, LiteSetting.off);
     },
   );
+
+  test('a configured second device adopts cloud order and cannot revive deleted favourites', () async {
+    final id = await seed(phone);
+    final firstList = await phone.channelListsDao.createList(
+      id,
+      'Sports',
+      channels: ['two', 'one'],
+    );
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'removed', true);
+    await login(a);
+    await phone.favoritesDao.setFavorite(
+      id,
+      ContentKind.live,
+      'removed',
+      false,
+    );
+    await a.sync();
+    final tid = await seed(tv);
+    final old = (await tv.sourcesDao.configFor(tid))!;
+    await tv.sourcesDao.updateConfig(tid, old.copyWith(password: 'outdated'));
+    await tv.channelListsDao.createList(
+      tid,
+      'Sports',
+      channels: ['one', 'two', 'local-only'],
+    );
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'removed', true);
+    await login(b);
+    await a.sync();
+    expect((await tv.sourcesDao.configFor(tid))!.password, 'private-password');
+    final list = (await tv.channelListsDao.lists(tid)).single;
+    expect(await tv.channelListsDao.channelKeys(list.id), [
+      'two',
+      'one',
+      'local-only',
+    ]);
+    expect(await phone.channelListsDao.channelKeys(firstList), [
+      'two',
+      'one',
+      'local-only',
+    ]);
+    expect(await tv.favoritesDao.favoriteKeys(tid, ContentKind.live), isEmpty);
+  });
 
   test('older offline progress cannot rewind newer watch position', () {
     final newer = <String, Object?>{

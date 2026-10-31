@@ -44,9 +44,10 @@ class AccountSession {
 }
 
 class RemoteState {
-  const RemoteState(this.data, this.version);
+  const RemoteState(this.data, this.version, {this.deletedKeys = const {}});
   final SyncData data;
   final String? version;
+  final Set<String> deletedKeys;
 }
 
 class FirebaseAccountApi {
@@ -184,6 +185,7 @@ class FirebaseAccountApi {
     for (var attempt = 0; attempt < 4; attempt++) {
       final before = await revision(session);
       final records = <String, Map<String, Object?>>{};
+      final deleted = <String>{};
       String? page;
       do {
         final result = await _request(
@@ -199,12 +201,16 @@ class FirebaseAccountApi {
             records[key] = Map<String, Object?>.from(
               jsonDecode(fields['json']['stringValue'] as String) as Map,
             );
+          } else {
+            deleted.add(key);
           }
         }
         page = result['nextPageToken'] as String?;
       } while (page != null && page.isNotEmpty);
       final after = await revision(session);
-      if (before == after) return RemoteState(records, after);
+      if (before == after) {
+        return RemoteState(records, after, deletedKeys: deleted);
+      }
     }
     throw const AccountException('CONFLICT');
   }

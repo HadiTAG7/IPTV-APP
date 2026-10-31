@@ -162,6 +162,17 @@ void main() {
         final current = await api.read(owner);
         expect(current.data.values.any((r) => r['type'] == 'favorite'), true);
         expect(syncChanges(current.data, current.data), isEmpty);
+        await api.write(owner, current, {
+          'qa-probe': null,
+          for (var i = 0; i < 600; i++)
+            'qa-bulk-$i': {'type': 'probe', 'value': i},
+        });
+        final paged = await api.read(owner);
+        expect(
+          paged.data.keys.where((k) => k.startsWith('qa-bulk-')).length,
+          600,
+        );
+        expect(paged.deletedKeys, contains('qa-probe'));
       } finally {
         a.dispose();
         b.dispose();

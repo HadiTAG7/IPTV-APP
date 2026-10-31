@@ -55,6 +55,8 @@ Sync uses stable cloud identities, per-record changes, deletion tombstones and r
 
 Deploy backend configuration with `firebase deploy --only auth,firestore --project hadi-iptv-sync-20261031`. Client configuration can be overridden with `--dart-define=FIREBASE_PROJECT_ID=... --dart-define=FIREBASE_API_KEY=...`. Run `flutter test test/account --exclude-tags network` for local account tests. The opt-in live test creates and removes synthetic Auth users only: `IPTV_FIREBASE_LIVE=1 flutter test test/account/firebase_live_test.dart`; remove their Firestore test paths afterward using the IDs saved in the system temporary `iptv-firebase-qa-users.json` file. Never run tests using a real customer's credentials.
 
+When a configured second device first joins an existing account, existing cloud records and deletion tombstones take precedence over that device's old copies. Local-only additions merge in, and the newer viewing checkpoint is retained. Start account setup on the device with your preferred current arrangement.
+
 ## Build
 
 Toolchain: Flutter **3.47.7** stable (Dart 3.13.5), JDK 17+, Android SDK 36, build-tools 36.0.0, NDK 28.2.13676358. On Linux, `bash tool/setup_container.sh` installs all of it idempotently (it installs `openjdk-17-jdk-headless` only when no Java 17+ is on `PATH`).
