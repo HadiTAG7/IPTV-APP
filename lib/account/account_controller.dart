@@ -264,17 +264,9 @@ class AccountController with WidgetsBindingObserver {
       for (var attempt = 0; attempt < 4; attempt++) {
         final remote = await api.read(session);
         final sent = await local.export();
-        final pending = syncChanges(baseline, sent);
-        if (baseline.isEmpty) {
-          // Account state wins when an already-configured second device joins.
-          // Local-only additions merge; old order, credentials and deleted
-          // favourites cannot replace choices already saved to the account.
-          pending.removeWhere(
-            (key, value) =>
-                remote.deletedKeys.contains(key) ||
-                (remote.data.containsKey(key) && value?['type'] != 'progress'),
-          );
-        }
+        final pending = baseline.isEmpty
+            ? initialSyncChanges(remote.data, remote.deletedKeys, sent)
+            : syncChanges(baseline, sent);
         final merged = mergeSyncData(remote.data, pending);
         // Source/list deletion wins over orphaned children from offline devices.
         merged.removeWhere(

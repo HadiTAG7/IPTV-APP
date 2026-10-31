@@ -347,7 +347,7 @@ void main() {
     await tv.channelListsDao.createList(
       tid,
       'Sports',
-      channels: ['one', 'two', 'local-only'],
+      channels: ['local-only', 'one', 'two'],
     );
     await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'removed', true);
     await login(b);
