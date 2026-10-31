@@ -15,6 +15,7 @@ import 'settings_harness.dart';
 
 const _rowOrder = [
   'settings-sources',
+  'settings-account',
   'settings-language',
   'settings-deviceMode',
   'settings-lite',
@@ -166,6 +167,8 @@ void main() {
       // The first row has focus; arrows walk the list.
       expect(focusedIn(const ValueKey('settings-sources')), isTrue);
       await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(focusedIn(const ValueKey('settings-account')), isTrue);
+      await press(tester, LogicalKeyboardKey.arrowDown);
       expect(focusedIn(const ValueKey('settings-language')), isTrue);
       await press(tester, LogicalKeyboardKey.arrowDown);
       expect(focusedIn(const ValueKey('settings-deviceMode')), isTrue);
@@ -193,6 +196,8 @@ void main() {
           matching: find.byType(Scrollable),
         ),
       );
+      await tester.ensureVisible(_row('settings-aspect'));
+      await settle(tester);
       await tester.tap(_row('settings-aspect'));
       await settle(tester);
       await tester.tap(find.byKey(choiceKey(AspectMode.stretch)));

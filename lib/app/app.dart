@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../account/account_controller.dart';
 import '../epg/epg_providers.dart';
 import '../l10n/gen/app_localizations.dart';
 import '../theme/app_theme.dart';
@@ -34,6 +35,7 @@ class IptvApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref
+      ..listen(accountViewProvider, (_, _) {})
       ..listen(epgAutoRefreshProvider, (_, _) {})
       ..listen(imageCacheBudgetProvider, (_, _) {});
     final locale = ref.watch(settingsProvider.select((s) => s.locale));

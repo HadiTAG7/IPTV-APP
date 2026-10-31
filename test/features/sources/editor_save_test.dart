@@ -264,7 +264,9 @@ void main() {
     expect(secondCopy, isNot(firstCopy));
     expect(File(firstCopy).existsSync(), isFalse);
     expect(File(secondCopy).readAsStringSync(), second.readAsStringSync());
-    expect(imports.listSync().map((f) => f.path), [secondCopy]);
+    expect(imports.listSync().map((f) => f.resolveSymbolicLinksSync()), [
+      File(secondCopy).resolveSymbolicLinksSync(),
+    ]);
 
     // The source becomes an Xtream login: its playlist copy goes too.
     await openEdit(tester);

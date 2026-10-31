@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../account/account_controller.dart';
+import '../../account/account_screen.dart';
 import '../../app/form_factor.dart';
 import '../../app/home_shell.dart';
 import '../../app/providers.dart';
@@ -250,6 +252,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         title: l10n.navSources,
         value: source?.name,
         onSelect: () => _open(HomeTab.sources),
+      ),
+      SettingsTile(
+        key: const ValueKey('settings-account'),
+        large: large,
+        icon: Icons.account_circle_outlined,
+        title: l10n.accountTitle,
+        value: ref.watch(accountViewProvider).value?.email,
+        onSelect: () => unawaited(openAccountScreen(context)),
       ),
       SettingsTile(
         key: const ValueKey('settings-language'),

@@ -2576,6 +2576,156 @@ abstract class AppLocalizations {
   /// **'{minutes, plural, =0{Ending now} =1{1 min left} other{{minutes} min left}}'**
   String guideMinutesLeft(int minutes);
 
+  /// No description provided for @accountTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Account & sync'**
+  String get accountTitle;
+
+  /// No description provided for @accountIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favourites and viewing progress sync automatically. Your existing data is merged when you sign in.'**
+  String get accountIntro;
+
+  /// No description provided for @accountEmail.
+  ///
+  /// In en, this message translates to:
+  /// **'Email'**
+  String get accountEmail;
+
+  /// No description provided for @accountPassword.
+  ///
+  /// In en, this message translates to:
+  /// **'Password'**
+  String get accountPassword;
+
+  /// No description provided for @accountConfirmPassword.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirm password'**
+  String get accountConfirmPassword;
+
+  /// No description provided for @accountSignIn.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in'**
+  String get accountSignIn;
+
+  /// No description provided for @accountCreate.
+  ///
+  /// In en, this message translates to:
+  /// **'Create account'**
+  String get accountCreate;
+
+  /// No description provided for @accountNeedAccount.
+  ///
+  /// In en, this message translates to:
+  /// **'New here? Create an account'**
+  String get accountNeedAccount;
+
+  /// No description provided for @accountHaveAccount.
+  ///
+  /// In en, this message translates to:
+  /// **'Already have an account? Sign in'**
+  String get accountHaveAccount;
+
+  /// No description provided for @accountReset.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset password'**
+  String get accountReset;
+
+  /// No description provided for @accountResetSent.
+  ///
+  /// In en, this message translates to:
+  /// **'If an account exists for this email, you will receive a password reset link.'**
+  String get accountResetSent;
+
+  /// No description provided for @accountSyncNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Sync now'**
+  String get accountSyncNow;
+
+  /// No description provided for @accountSyncing.
+  ///
+  /// In en, this message translates to:
+  /// **'Syncing…'**
+  String get accountSyncing;
+
+  /// No description provided for @accountSynced.
+  ///
+  /// In en, this message translates to:
+  /// **'Your account is up to date'**
+  String get accountSynced;
+
+  /// No description provided for @accountWaiting.
+  ///
+  /// In en, this message translates to:
+  /// **'Ready to sync'**
+  String get accountWaiting;
+
+  /// No description provided for @accountSignOut.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign out'**
+  String get accountSignOut;
+
+  /// No description provided for @accountLocalData.
+  ///
+  /// In en, this message translates to:
+  /// **'Signing out pauses sync. Downloaded data stays on this device and remains linked to this account. Device performance settings stay independent.'**
+  String get accountLocalData;
+
+  /// No description provided for @accountInvalidForm.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a valid email and a password of at least 8 characters. Password confirmation must match.'**
+  String get accountInvalidForm;
+
+  /// No description provided for @accountAuthFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Unable to sign in. Check your email and password and try again.'**
+  String get accountAuthFailed;
+
+  /// No description provided for @accountExists.
+  ///
+  /// In en, this message translates to:
+  /// **'This email already has an account. Sign in instead.'**
+  String get accountExists;
+
+  /// No description provided for @accountOtherOwner.
+  ///
+  /// In en, this message translates to:
+  /// **'This device\'s data belongs to another account. Sign in with the original account to keep your data private.'**
+  String get accountOtherOwner;
+
+  /// No description provided for @accountSyncFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Sync could not finish. Your changes are saved on this device; retry when connected.'**
+  String get accountSyncFailed;
+
+  /// No description provided for @accountStorageFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Secure sign-in storage is unavailable. Your existing data is safe. Try signing in again.'**
+  String get accountStorageFailed;
+
+  /// No description provided for @accountFileError.
+  ///
+  /// In en, this message translates to:
+  /// **'A playlist file is missing or exceeds 32 MB. Restore it or use a playlist URL, then retry sync.'**
+  String get accountFileError;
+
+  /// No description provided for @accountNotConfigured.
+  ///
+  /// In en, this message translates to:
+  /// **'Account sync has not been configured for this build.'**
+  String get accountNotConfigured;
+
   /// Button in the programme info of the guide: plays the programme's channel live.
   ///
   /// In en, this message translates to:

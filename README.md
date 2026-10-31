@@ -43,6 +43,18 @@ Fixed TV download URL (Downloader app or a TV browser):
 
 Requires Android 7.0 (API 24) or newer. Fire TV devices running Vega OS cannot install APKs. Each release includes `SHA256SUMS.txt`. Install steps (Arabic): [docs/INSTALL_AR.md](docs/INSTALL_AR.md).
 
+## الحساب والمزامنة · Account sync
+
+من «الحساب والمزامنة» في الإعدادات أو شاشة البداية، أنشئ حسابًا بالبريد وكلمة المرور ثم سجّل بالحساب نفسه على أجهزتك. ابدأ بالجهاز الذي عليه ترتيبك الحالي. تُدمج الاشتراكات وبيانات دخولها والقوائم وترتيب القنوات والمفضلة وسجل المتابعة، مع بقاء إعدادات أداء كل جهاز مستقلة. بعد تسجيل الدخول على جهاز جديد تُحمّل اشتراكاتك ويُحدّث فهرس القنوات تلقائيًا.
+
+تُرسل التغييرات بعد نحو ثانيتين، وتتحقق الأجهزة المفتوحة من التحديثات كل 30 ثانية، وعند العودة للتطبيق أو الضغط على «المزامنة الآن». عند انقطاع الاتصال تبقى التغييرات محلية حتى تنجح المحاولة التالية. تسجيل الخروج يوقف المزامنة ويُبقي بيانات الجهاز؛ يُمنع رفعها لحساب مختلف. ملفات M3U حتى 32 ميجابايت تُنقل مضغوطة ومقسمة، دون رفع مسارات الملفات المحلية.
+
+The account backend is the dedicated Firebase project `hadi-iptv-sync-20261031` (email/password Auth and Firestore). Android, TV and Windows use the same authenticated REST client; no experimental Windows Firebase SDK is required. Refresh tokens are stored with platform secure storage, and account passwords are never persisted. Firestore rules restrict every account path to its authenticated owner. The client configuration contains a public API key only; no service-account credential belongs in the app.
+
+Sync uses stable cloud identities, per-record changes, deletion tombstones and revision preconditions. Concurrent changes to different records merge; the latest successfully uploaded change wins for the same record, except an older playback checkpoint cannot replace a newer timestamp. Local edits made during a request remain pending. The source catalogue and EPG cache are downloaded separately by each device, keeping sync small. Channel playback preferences and device layout/decoder/performance choices stay local; interface/audio/subtitle language preferences sync.
+
+Deploy backend configuration with `firebase deploy --only auth,firestore --project hadi-iptv-sync-20261031`. Client configuration can be overridden with `--dart-define=FIREBASE_PROJECT_ID=... --dart-define=FIREBASE_API_KEY=...`. Run `flutter test test/account --exclude-tags network` for local account tests. The opt-in live test creates and removes synthetic Auth users only: `IPTV_FIREBASE_LIVE=1 flutter test test/account/firebase_live_test.dart`; remove their Firestore test paths afterward using the IDs saved in the system temporary `iptv-firebase-qa-users.json` file. Never run tests using a real customer's credentials.
+
 ## Build
 
 Toolchain: Flutter **3.47.7** stable (Dart 3.13.5), JDK 17+, Android SDK 36, build-tools 36.0.0, NDK 28.2.13676358. On Linux, `bash tool/setup_container.sh` installs all of it idempotently (it installs `openjdk-17-jdk-headless` only when no Java 17+ is on `PATH`).
@@ -68,7 +80,7 @@ flutter build windows --release
 
 **Impeller escape hatch.** `-P impellerOff=true` merges `android/app/src/impellerOff/AndroidManifest.xml` (`io.flutter.embedding.android.EnableImpeller=false`) into a release build, for boxes whose GPU drivers misrender under Impeller. Normal builds never carry the flag. CI builds it as `iptv-player-universal-compat.apk` when a manual run ticks `impeller_off`, or on every run (releases included) when the repository variable `IMPELLER_COMPAT_APK` is `true`.
 
-**CI.** [`.github/workflows/build.yml`](.github/workflows/build.yml) is the only workflow that produces installables (versionCode = its run number, so never rename it). It runs tests, builds and checks the APKs on every push and PR, builds the Windows zip on tags and manual runs, and publishes a GitHub Release for `v*` tags. Release signing comes from the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`; without them, branch builds are debug-signed (artifact suffix `-debug-signed`, do not install) and tag builds fail. Tag builds also require `.github/release-cert.sha256`, the release certificate's SHA-256 fingerprint (from `keytool -list -v -keystore release.jks`; colons allowed), and fail if the APKs are signed by any other certificate, so a replaced keystore can never ship an update that installed copies reject.
+**CI.** [`.github/workflows/build.yml`](.github/workflows/build.yml) is the only workflow that produces installables (versionCode = its run number, so never rename it). It runs tests, builds and checks the APKs on every push and PR, builds the Windows zip on PRs, tags and manual runs, and publishes a GitHub Release for `v*` tags. Release signing comes from the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`; without them, branch builds are debug-signed (artifact suffix `-debug-signed`, do not install) and tag builds fail. Tag builds also require `.github/release-cert.sha256`, the release certificate's SHA-256 fingerprint (from `keytool -list -v -keystore release.jks`; colons allowed), and fail if the APKs are signed by any other certificate, so a replaced keystore can never ship an update that installed copies reject.
 
 ## Project structure
 
