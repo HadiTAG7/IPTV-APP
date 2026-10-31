@@ -1521,5 +1521,89 @@ class AppLocalizationsAr extends AppLocalizations {
   }
 
   @override
+  String get accountTitle => 'الحساب والمزامنة';
+
+  @override
+  String get accountIntro =>
+      'استخدم الحساب نفسه على الجوال والتلفزيون وويندوز. تتزامن الاشتراكات وبيانات دخولها والقوائم وترتيب القنوات والمفضلة ومتابعة المشاهدة تلقائيًا. تُدمج بياناتك الحالية عند تسجيل الدخول.';
+
+  @override
+  String get accountEmail => 'البريد الإلكتروني';
+
+  @override
+  String get accountPassword => 'كلمة المرور';
+
+  @override
+  String get accountConfirmPassword => 'تأكيد كلمة المرور';
+
+  @override
+  String get accountSignIn => 'تسجيل الدخول';
+
+  @override
+  String get accountCreate => 'إنشاء حساب';
+
+  @override
+  String get accountNeedAccount => 'مستخدم جديد؟ أنشئ حسابًا';
+
+  @override
+  String get accountHaveAccount => 'لديك حساب؟ سجّل الدخول';
+
+  @override
+  String get accountReset => 'استعادة كلمة المرور';
+
+  @override
+  String get accountResetSent =>
+      'إذا كان هناك حساب بهذا البريد، سيصلك رابط استعادة كلمة المرور.';
+
+  @override
+  String get accountSyncNow => 'المزامنة الآن';
+
+  @override
+  String get accountSyncing => 'جارٍ المزامنة…';
+
+  @override
+  String get accountSynced => 'بيانات حسابك محدثة';
+
+  @override
+  String get accountWaiting => 'جاهز للمزامنة';
+
+  @override
+  String get accountSignOut => 'تسجيل الخروج';
+
+  @override
+  String get accountLocalData =>
+      'تتوقف المزامنة عند تسجيل الخروج. تبقى البيانات المحمّلة على هذا الجهاز ومرتبطة بالحساب نفسه. تبقى إعدادات أداء كل جهاز مستقلة.';
+
+  @override
+  String get accountInvalidForm =>
+      'أدخل بريدًا صحيحًا وكلمة مرور من 8 أحرف على الأقل، مع تطابق تأكيد كلمة المرور.';
+
+  @override
+  String get accountAuthFailed =>
+      'تعذّر تسجيل الدخول. تحقق من البريد وكلمة المرور وحاول مجددًا.';
+
+  @override
+  String get accountExists => 'يوجد حساب بهذا البريد. استخدم تسجيل الدخول.';
+
+  @override
+  String get accountOtherOwner =>
+      'بيانات هذا الجهاز مرتبطة بحساب آخر. سجّل بالحساب الأصلي للحفاظ على خصوصية بياناتك.';
+
+  @override
+  String get accountSyncFailed =>
+      'تعذّر إكمال المزامنة. تغييراتك محفوظة على هذا الجهاز؛ أعد المحاولة عند الاتصال.';
+
+  @override
+  String get accountStorageFailed =>
+      'تعذّر الوصول إلى الحفظ الآمن لتسجيل الدخول. بياناتك الحالية محفوظة؛ حاول تسجيل الدخول مجددًا.';
+
+  @override
+  String get accountFileError =>
+      'أحد ملفات القنوات مفقود أو حجمه يتجاوز 32 ميجابايت. أعد الملف أو استخدم رابط القائمة ثم أعد المزامنة.';
+
+  @override
+  String get accountNotConfigured => 'لم تُجهّز مزامنة الحساب لهذه النسخة بعد.';
+
+  @override
   String get guideWatchChannel => 'مشاهدة القناة';
 }

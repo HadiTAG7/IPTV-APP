@@ -1490,5 +1490,91 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get accountTitle => 'Account & sync';
+
+  @override
+  String get accountIntro =>
+      'Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favourites and viewing progress sync automatically. Your existing data is merged when you sign in.';
+
+  @override
+  String get accountEmail => 'Email';
+
+  @override
+  String get accountPassword => 'Password';
+
+  @override
+  String get accountConfirmPassword => 'Confirm password';
+
+  @override
+  String get accountSignIn => 'Sign in';
+
+  @override
+  String get accountCreate => 'Create account';
+
+  @override
+  String get accountNeedAccount => 'New here? Create an account';
+
+  @override
+  String get accountHaveAccount => 'Already have an account? Sign in';
+
+  @override
+  String get accountReset => 'Reset password';
+
+  @override
+  String get accountResetSent =>
+      'If an account exists for this email, you will receive a password reset link.';
+
+  @override
+  String get accountSyncNow => 'Sync now';
+
+  @override
+  String get accountSyncing => 'Syncing…';
+
+  @override
+  String get accountSynced => 'Your account is up to date';
+
+  @override
+  String get accountWaiting => 'Ready to sync';
+
+  @override
+  String get accountSignOut => 'Sign out';
+
+  @override
+  String get accountLocalData =>
+      'Signing out pauses sync. Downloaded data stays on this device and remains linked to this account. Device performance settings stay independent.';
+
+  @override
+  String get accountInvalidForm =>
+      'Enter a valid email and a password of at least 8 characters. Password confirmation must match.';
+
+  @override
+  String get accountAuthFailed =>
+      'Unable to sign in. Check your email and password and try again.';
+
+  @override
+  String get accountExists =>
+      'This email already has an account. Sign in instead.';
+
+  @override
+  String get accountOtherOwner =>
+      'This device\'s data belongs to another account. Sign in with the original account to keep your data private.';
+
+  @override
+  String get accountSyncFailed =>
+      'Sync could not finish. Your changes are saved on this device; retry when connected.';
+
+  @override
+  String get accountStorageFailed =>
+      'Secure sign-in storage is unavailable. Your existing data is safe. Try signing in again.';
+
+  @override
+  String get accountFileError =>
+      'A playlist file is missing or exceeds 32 MB. Restore it or use a playlist URL, then retry sync.';
+
+  @override
+  String get accountNotConfigured =>
+      'Account sync has not been configured for this build.';
+
+  @override
   String get guideWatchChannel => 'Watch channel';
 }

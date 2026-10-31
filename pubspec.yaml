@@ -35,6 +35,8 @@ dependencies:
   pretty_qr_code: ^3.6.0
   package_info_plus: ^10.2.2
   connectivity_plus: ^7.3.2
+  crypto: 3.0.7
+  flutter_secure_storage: 11.2.0
 
 dev_dependencies:
   flutter_test:

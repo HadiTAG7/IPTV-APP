@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../account/account_screen.dart';
 import '../../app/form_factor.dart';
 import '../../app/home_shell.dart';
 import '../../app/providers.dart';
@@ -104,6 +105,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                     textAlign: TextAlign.center,
                   ),
                   SizedBox(height: large ? Spacing.lg : Spacing.xl),
+                  TvButton(
+                    key: const ValueKey('onboarding-account'),
+                    icon: Icons.account_circle_outlined,
+                    label: l10n.accountTitle,
+                    onSelect: () => unawaited(openAccountScreen(context)),
+                  ),
+                  const SizedBox(height: Spacing.sm),
                   Text(
                     l10n.onboardingChooseLanguage,
                     style: theme.textTheme.titleSmall,
