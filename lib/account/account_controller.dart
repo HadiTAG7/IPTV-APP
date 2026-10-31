@@ -104,6 +104,7 @@ class AccountController with WidgetsBindingObserver {
   bool _applying = false;
   bool _paused = false;
   bool _started = false;
+  final _restored = Completer<void>();
   bool _authBusy = false;
   bool _needsSync = false;
   String? _revision;
@@ -153,7 +154,10 @@ class AccountController with WidgetsBindingObserver {
       }
     } on Object {
       _emit(error: 'SESSION_STORAGE');
+    } finally {
+      if (!_restored.isCompleted) _restored.complete();
     }
+    if (_disposed) return;
     _poll = Timer.periodic(pollInterval, (_) => unawaited(sync()));
     _emit();
     await sync();
@@ -170,10 +174,13 @@ class AccountController with WidgetsBindingObserver {
     String password, {
     bool create = false,
   }) async {
-    if (_authBusy || _running != null) return;
+    if (_authBusy) return;
     _authBusy = true;
     _emit(busy: true);
     try {
+      if (_started) await _restored.future;
+      await _running;
+      if (_disposed) return;
       final session = await api.signIn(email, password, create: create);
       final owner = await db.settingsDao.getString(bindingKey);
       if (owner != null && owner != session.uid) {
@@ -200,6 +207,7 @@ class AccountController with WidgetsBindingObserver {
     if (_authBusy) return;
     _authBusy = true;
     try {
+      if (_started) await _restored.future;
       await _running;
       await vault.write(null);
       _session = null;

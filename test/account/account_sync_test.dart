@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -18,6 +19,12 @@ class MemoryVault implements SessionVault {
   Future<String?> read() async => value;
   @override
   Future<void> write(String? value) async => this.value = value;
+}
+
+class DelayedVault extends MemoryVault {
+  final restored = Completer<String?>();
+  @override
+  Future<String?> read() => restored.future;
 }
 
 class Cloud {
@@ -356,6 +363,38 @@ void main() {
     await a.sync();
     expect(cloud.reads, reads);
   });
+
+  test(
+    'sign-in waits for secure session restoration before replacing it',
+    () async {
+      a.dispose();
+      final vault = DelayedVault();
+      a = AccountController(db: phone, api: FakeApi(cloud), vault: vault);
+      final restoring = a.start();
+      final signing = a.authenticate('owner-new@example.test', 'password');
+      final old = await FakeApi(cloud)
+          .signIn('owner-old@example.test', 'password');
+      vault.restored.complete(jsonEncode(old.toJson()));
+      await restoring;
+      await signing;
+      expect(a.view.email, 'owner-new@example.test');
+      expect(a.view.error, isNull);
+    },
+  );
+
+  test(
+    'an explicit cloud password removal cannot revive a stale local secret',
+    () async {
+      final id = await seed(phone);
+      final local = LocalSyncStore(phone);
+      final snapshot = await local.export();
+      final key = snapshot.keys.singleWhere((k) => k.startsWith('source:'));
+      snapshot[key] = {...snapshot[key]!, 'password': null};
+      await local.apply(snapshot);
+      expect((await phone.sourcesDao.configFor(id))!.password, isNull);
+      expect(syncChanges(snapshot, await local.export()), isEmpty);
+    },
+  );
 
   test(
     'local file playlists transfer as verified chunks rather than device paths',

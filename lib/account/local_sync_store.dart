@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../app/settings.dart';
 import '../core/db/app_db.dart';
+import '../core/secure/secret_store.dart';
 import '../sources/models.dart';
 import 'firebase_api.dart';
 import 'sync_model.dart';
@@ -282,6 +283,11 @@ class LocalSyncStore {
         } else {
           final old = await db.sourcesDao.configFor(id);
           await db.sourcesDao.updateConfig(id, config);
+          // A cloud replacement carries an explicit null, whereas the
+          // editor's null means "keep the existing password".
+          if (config.password == null) {
+            await DbSecretStore(db).delete(id, SecretNames.password);
+          }
           if (old?.url != config.url ||
               old?.username != config.username ||
               old?.password != config.password ||
