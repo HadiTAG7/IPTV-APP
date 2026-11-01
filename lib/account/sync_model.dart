@@ -40,6 +40,17 @@ Map<String, Map<String, Object?>?> syncChanges(
     if (!syncEqual(before[key], after[key])) key: after[key],
 };
 
+/// Records that stand for one moment, and the field that says when: of two
+/// copies, the newer wins, whichever device uploads last.
+const _moments = {'progress': 'updatedAt', 'recent': 'lastWatchedAt'};
+
+/// Whether [next] is an older moment than [old] (see [_moments]).
+bool _older(Map<String, Object?> next, Map<String, Object?>? old) {
+  final field = _moments[next['type']];
+  if (field == null || old == null) return false;
+  return ((old[field] as int?) ?? 0) > ((next[field] as int?) ?? 0);
+}
+
 SyncData mergeSyncData(
   SyncData remote,
   Map<String, Map<String, Object?>?> changes,
@@ -50,13 +61,9 @@ SyncData mergeSyncData(
     if (next == null) {
       merged.remove(entry.key);
     } else {
-      // A stale offline playback checkpoint must not rewind newer viewing.
-      final old = merged[entry.key];
-      if (next['type'] == 'progress' &&
-          old != null &&
-          (old['updatedAt'] as int) > (next['updatedAt'] as int)) {
-        continue;
-      }
+      // A stale offline playback checkpoint must not rewind newer viewing,
+      // nor an older zap reorder the recent channels.
+      if (_older(next, merged[entry.key])) continue;
       merged[entry.key] = next;
     }
   }
@@ -115,6 +122,9 @@ const _playlistFields = {'kind', 'url', 'fileParts', 'fileHash'};
 ///   device heard of it: reviving a source or list alone would drop its
 ///   contents, and a list entry or favourite that only moved (a removal
 ///   here renumbers the rest) is no re-add.
+/// * A position change that keeps the order of the other entries is no
+///   move: a removal here renumbers the entries after it, and the order
+///   the account has, maybe made on another device meanwhile, stays.
 /// * A record changed both here and elsewhere keeps the fields each side
 ///   changed, this device's where both did. A playlist file's fields name
 ///   its chunks, so they come from one side together, and a playlist
@@ -125,7 +135,9 @@ Map<String, Map<String, Object?>?> pendingSyncChanges(
   Set<String> deleted,
   SyncData local,
 ) {
-  final changes = syncChanges(baseline, local);
+  final renumbered = _renumbered(baseline, local);
+  final changes = syncChanges(baseline, local)
+    ..removeWhere((key, _) => renumbered.contains(key));
   for (final e in local.entries) {
     if (baseline.containsKey(e.key) &&
         !remote.containsKey(e.key) &&
@@ -170,15 +182,59 @@ Map<String, Map<String, Object?>?> pendingSyncChanges(
   return changes;
 }
 
+/// The entries of [local] whose only change since [baseline] is a position
+/// that keeps the order of their group: the entries both hold, sorted by
+/// position, come in the same order.
+Set<String> _renumbered(SyncData baseline, SyncData local) {
+  final groups = <String, List<String>>{};
+  for (final e in local.entries) {
+    final group = _positionGroup(e.value);
+    if (group != null && baseline.containsKey(e.key)) {
+      (groups[group] ??= []).add(e.key);
+    }
+  }
+  final renumbered = <String>{};
+  for (final keys in groups.values) {
+    List<String> ordered(SyncData data) => [...keys]
+      ..sort((a, b) {
+        final compared = (data[a]!['position'] as int).compareTo(
+          data[b]!['position'] as int,
+        );
+        return compared == 0 ? a.compareTo(b) : compared;
+      });
+    if (!syncEqual(ordered(baseline), ordered(local))) continue;
+    for (final key in keys) {
+      final base = baseline[key]!;
+      final mine = local[key]!;
+      if (!syncEqual(base, mine) &&
+          syncEqual({...mine, 'position': 0}, {...base, 'position': 0})) {
+        renumbered.add(key);
+      }
+    }
+  }
+  return renumbered;
+}
+
+/// The ordered group of [row]: its position counts among the group's.
+String? _positionGroup(Map<String, Object?> row) => switch (row['type']) {
+  'source' => 'sources',
+  'list' => jsonEncode(['lists', row['source']]),
+  'item' => jsonEncode(['items', row['list']]),
+  'favorite' => jsonEncode(['favorites', row['source'], row['kind']]),
+  _ => null,
+};
+
 /// [mine] and [theirs], both changed since [base], field by field.
 Map<String, Object?> _mergeRecord(
   Map<String, Object?> base,
   Map<String, Object?> mine,
   Map<String, Object?> theirs,
 ) {
-  // A playback checkpoint is one moment (the newer wins in mergeSyncData),
-  // and a playlist chunk goes with its source record.
-  if (mine['type'] == 'progress' || mine['type'] == 'file') return mine;
+  // A moment goes whole (the newer wins in mergeSyncData), and a playlist
+  // chunk goes with its source record.
+  if (_moments.containsKey(mine['type']) || mine['type'] == 'file') {
+    return mine;
+  }
   bool changed(String field) => !syncEqual(base[field], mine[field]);
   final playlist = mine['type'] == 'source' && _playlistFields.any(changed);
   final merged = Map.of(theirs);
@@ -211,16 +267,21 @@ SyncData decodeSyncData(Object? value) => value is Map
 /// device holds favourites, lists, list entries or viewing progress of its
 /// own in it: dropping it would delete those here, and the account holds no
 /// copy of them. Its children deleted elsewhere stay deleted.
+///
+/// A device moved to the account on purpose ([keepLocal]) keeps all it
+/// holds instead: see [_keepLocal].
 Map<String, Map<String, Object?>?> initialSyncChanges(
   SyncData remote,
   Set<String> deleted,
-  SyncData local,
-) {
+  SyncData local, {
+  bool keepLocal = false,
+}) {
+  if (keepLocal) return _keepLocal(remote, local);
   final changes = syncChanges({}, local)
     ..removeWhere(
       (key, value) =>
           deleted.contains(key) ||
-          (remote.containsKey(key) && value?['type'] != 'progress'),
+          (remote.containsKey(key) && !_moments.containsKey(value?['type'])),
     );
   void revive(String key) {
     final row = local[key];
@@ -248,35 +309,59 @@ Map<String, Map<String, Object?>?> initialSyncChanges(
         revive('list:${e.value['list']}');
     }
   }
-  String? group(Map<String, Object?> row) => switch (row['type']) {
-    'source' => 'sources',
-    'list' => jsonEncode(['lists', row['source']]),
-    'item' => jsonEncode(['items', row['list']]),
-    'favorite' => jsonEncode(['favorites', row['source'], row['kind']]),
-    _ => null,
-  };
+  _append(changes, remote.values, {
+    for (final e in changes.entries)
+      if (e.value != null) e.key: e.value!,
+  });
+  return changes;
+}
+
+/// The first link of a device moved to the account on purpose: what it
+/// holds stays as it is and goes to the account, as the confirmation says.
+/// Its copies win over the account's (but for an older moment, see
+/// [mergeSyncData]) and over the account's tombstones, which then delete
+/// only what this device does not hold; the account's other entries follow
+/// this device's own in each ordered group.
+Map<String, Map<String, Object?>?> _keepLocal(SyncData remote, SyncData local) {
+  final changes = syncChanges(remote, local)
+    ..removeWhere((_, value) => value == null);
+  final groups = {for (final row in local.values) ?_positionGroup(row)};
+  final moved = <String, Map<String, Object?>?>{};
+  _append(moved, local.values, {
+    for (final e in remote.entries)
+      if (!local.containsKey(e.key) && groups.contains(_positionGroup(e.value)))
+        e.key: e.value,
+  });
+  moved.removeWhere((key, value) => syncEqual(value, remote[key]));
+  return changes..addAll(moved);
+}
+
+/// Puts [rows] into [changes] after the entries of [after] in each ordered
+/// group, in their order.
+void _append(
+  Map<String, Map<String, Object?>?> changes,
+  Iterable<Map<String, Object?>> after,
+  SyncData rows,
+) {
   final maxima = <String, int>{};
-  for (final row in remote.values) {
-    final g = group(row);
+  for (final row in after) {
+    final g = _positionGroup(row);
     if (g == null) continue;
     final position = row['position'] as int;
     if (position > (maxima[g] ?? -1)) maxima[g] = position;
   }
   final additions =
-      changes.entries
-          .where((e) => e.value != null && group(e.value!) != null)
-          .toList()
+      rows.entries.where((e) => _positionGroup(e.value) != null).toList()
         ..sort((a, b) {
-          final compared = (a.value!['position'] as int).compareTo(
-            b.value!['position'] as int,
+          final compared = (a.value['position'] as int).compareTo(
+            b.value['position'] as int,
           );
           return compared == 0 ? a.key.compareTo(b.key) : compared;
         });
   for (final entry in additions) {
-    final g = group(entry.value!)!;
+    final g = _positionGroup(entry.value)!;
     final position = (maxima[g] ?? -1) + 1;
     maxima[g] = position;
-    changes[entry.key] = {...entry.value!, 'position': position};
+    changes[entry.key] = {...entry.value, 'position': position};
   }
-  return changes;
 }

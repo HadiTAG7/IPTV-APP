@@ -2789,13 +2789,13 @@ abstract class AppLocalizations {
   /// Confirmation before switching accounts. {owner} is the email of the account this device's data belonged to, wrapped in U+2068/U+2069 (first-strong isolate).
   ///
   /// In en, this message translates to:
-  /// **'This device stops syncing with ⁨{owner}⁩. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with. ⁨{owner}⁩ keeps its own copy, which this device no longer changes.'**
+  /// **'This device stops syncing with ⁨{owner}⁩. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with, replacing that account\'s copies of the same items. ⁨{owner}⁩ keeps its own copy, which this device no longer changes.'**
   String accountSwitchBody(String owner);
 
   /// accountSwitchBody for a device linked by an earlier version, which did not keep the account's email.
   ///
   /// In en, this message translates to:
-  /// **'This device stops syncing with the account it was linked to. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with. The previous account keeps its own copy, which this device no longer changes.'**
+  /// **'This device stops syncing with the account it was linked to. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with, replacing that account\'s copies of the same items. The previous account keeps its own copy, which this device no longer changes.'**
   String get accountSwitchBodyUnnamed;
 
   /// No description provided for @accountSwitchConfirm.
@@ -2809,6 +2809,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Sync stopped. Open to see why.'**
   String get accountSyncStopped;
+
+  /// Account screen, signed in, when the account database refuses this device (its access rules): sync stops until that is fixed.
+  ///
+  /// In en, this message translates to:
+  /// **'Sync stopped: the account service refused access to your data. Your changes stay on this device. Press Sync now once the account\'s setup is fixed.'**
+  String get accountSyncDenied;
+
+  /// Account screen, signed in, for any other failure that does not clear by itself (unlike a dropped connection): sync stops until it is dealt with.
+  ///
+  /// In en, this message translates to:
+  /// **'Sync stopped: a change on this device or in the account could not be saved. Your changes stay on this device. Press Sync now to try again; if it keeps failing, update the app on all your devices.'**
+  String get accountSyncBlocked;
 
   /// Button in the programme info of the guide: plays the programme's channel live.
   ///

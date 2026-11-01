@@ -12,6 +12,9 @@ import 'package:iptv_player/features/settings/settings_dialogs.dart';
 import 'package:iptv_player/features/settings/settings_screen.dart';
 import 'package:iptv_player/player/engine/player_engine.dart';
 
+import '../../account/account_sync_test.dart'
+    show BrokenVault, Cloud, FakeApi, MemoryVault;
+import '../../unit/db/db_test_utils.dart';
 import 'settings_harness.dart';
 
 const _rowOrder = [
@@ -122,6 +125,43 @@ void main() {
         expect(_inRow('settings-account', value), findsOneWidget);
         await h.dispose(tester);
       }
+    });
+
+    testWidgets('$lang TV: the account row asks nothing of a device signed '
+        'out on purpose whose secure storage cannot be read', (tester) async {
+      final view = (await tester.runAsync(() async {
+        final db = openTestDb();
+        final cloud = Cloud();
+        final first = AccountController(
+          db: db,
+          api: FakeApi(cloud),
+          vault: MemoryVault(),
+        );
+        await first.authenticate('viewer@example.test', 'sample-password');
+        await first.signOut();
+        first.dispose();
+        final next = AccountController(
+          db: db,
+          api: FakeApi(cloud),
+          vault: BrokenVault(),
+        );
+        await next.start();
+        final view = next.view;
+        next.dispose();
+        await db.close();
+        return view;
+      }))!;
+      expect(view.linked, isTrue);
+      final h = await pumpSettingsApp(
+        tester,
+        locale: locale,
+        overrides: [
+          accountViewProvider.overrideWith((ref) => Stream.value(view)),
+        ],
+      );
+      await openSettingsTv(tester);
+      expect(_inRow('settings-account', l10n.accountSignInAgain), findsNothing);
+      await h.dispose(tester);
     });
 
     testWidgets('$lang TV: the account row says when sync stopped, but not '

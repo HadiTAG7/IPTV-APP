@@ -17,8 +17,9 @@ Future<void> openAccountScreen(BuildContext context) => Navigator.of(context)
 
 /// While [signedOut], a failure comes from signing in or resetting the
 /// password, never from sync, so unknown codes mean the account service
-/// could not be reached. [owner] is the email of the account this device's
-/// data belongs to, when known.
+/// could not be reached; signed in, they stopped sync unless they clear by
+/// themselves (see [accountErrorPasses]). [owner] is the email of the
+/// account this device's data belongs to, when known.
 String accountErrorText(
   AppLocalizations l,
   String code, {
@@ -43,6 +44,8 @@ String accountErrorText(
   'USER_DISABLED' ||
   'WEAK_PASSWORD' => l.accountAuthFailed,
   _ when signedOut => l.accountServiceUnavailable,
+  'PERMISSION_DENIED' => l.accountSyncDenied,
+  _ when !accountErrorPasses(code) => l.accountSyncBlocked,
   _ => l.accountSyncFailed,
 };
 
@@ -70,7 +73,10 @@ class SwitchAccountDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final owner = this.owner;
+    // The longest text of the app's dialogs: at a large font size it
+    // scrolls rather than lose its end.
     return AlertDialog(
+      scrollable: true,
       title: Text(l.accountSwitchTitle),
       content: Text(
         owner == null ? l.accountSwitchBodyUnnamed : l.accountSwitchBody(owner),
@@ -122,6 +128,16 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
 
   bool get _validEmail =>
       RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(_email.text.trim());
+
+  /// The email of the account this device's data belongs to, but not when
+  /// it is the one entered: another account has it now (the first one was
+  /// deleted), and naming it would contradict the message.
+  String? _ownerOf(AccountView account) {
+    final owner = account.owner;
+    return owner?.toLowerCase() == _email.text.trim().toLowerCase()
+        ? null
+        : owner;
+  }
 
   /// Feedback appears above the buttons after the one pressed, so a focused
   /// button there moves down: scroll it back into view, as nothing else
@@ -219,7 +235,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
               l,
               error,
               signedOut: account.email == null,
-              owner: account.owner,
+              owner: _ownerOf(account),
             ),
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
@@ -232,7 +248,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
             key: const ValueKey('account-switch'),
             label: l.accountSwitch,
             busy: busy,
-            onSelect: () => unawaited(_switchAccount(account.owner)),
+            onSelect: () => unawaited(_switchAccount(_ownerOf(account))),
           ),
         ],
       ],

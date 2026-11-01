@@ -478,6 +478,13 @@ void main() {
     expect(mergeSyncData({'p': newer}, {'p': older})['p'], newer);
   });
 
+  test('an older recent channel cannot replace a newer one', () {
+    final newer = <String, Object?>{'type': 'recent', 'lastWatchedAt': 30};
+    final older = <String, Object?>{'type': 'recent', 'lastWatchedAt': 20};
+    expect(mergeSyncData({'r': newer}, {'r': older})['r'], newer);
+    expect(mergeSyncData({'r': older}, {'r': newer})['r'], newer);
+  });
+
   test('automatic DB observation uploads edits and a restart retains offline changes', () async {
     final id = await seed(phone);
     await login(a);
@@ -1314,8 +1321,8 @@ void main() {
     expect(cloud.data.values.where((r) => r['type'] == 'source'), hasLength(1));
     await a.signOut().timeout(const Duration(seconds: 2));
     expect(a.view.email, isNull);
-    // A read that never returns explains the sign-in form, and signing in
-    // does not wait for it forever.
+    // A read that never returns cannot hold back signing in, nor ask a
+    // device signed out on purpose to sign in again.
     a.dispose();
     a = AccountController(
       db: phone,
@@ -1324,7 +1331,7 @@ void main() {
       vaultTimeout: limit,
     );
     await a.start();
-    expect(a.view.error, 'SESSION_STORAGE');
+    expect(a.view.error, isNull);
     await a
         .authenticate('owner@example.test', 'sample-password')
         .timeout(const Duration(seconds: 2));
@@ -1973,6 +1980,445 @@ void main() {
     expect(await phone.sourcesDao.all(), hasLength(1));
   });
 
+  for (final (store, stuck) in <(String, MemoryVault Function())>[
+    ('rejects', ReadOnlyVault.new),
+    ('never finishes', HangingVault.new),
+  ]) {
+    test('after a switch that a secure storage which $store writes could not '
+        'save, a restart asks for a sign-in instead of restoring the account '
+        'the device left', () async {
+      final api = AccountsApi({'owner': cloud, 'other': Cloud()});
+      final healthy = MemoryVault();
+      a.dispose();
+      a = AccountController(db: phone, api: api, vault: healthy);
+      await seed(phone);
+      await login(a);
+      // The secure storage stops taking writes, but reads what it holds.
+      final vault = stuck()..value = healthy.value;
+      AccountController restart() {
+        a.dispose();
+        return a = AccountController(
+          db: phone,
+          api: api,
+          vault: vault,
+          vaultTimeout: const Duration(milliseconds: 100),
+        );
+      }
+
+      await restart().start();
+      await a.signOut();
+      await expectLater(
+        a.authenticate('other@example.test', 'sample-password'),
+        throwsA(isA<AccountException>()),
+      );
+      await a.release();
+      await a.authenticate('other@example.test', 'sample-password');
+      expect(a.view.email, 'other@example.test');
+      await restart().start();
+      expect(a.view.email, isNull);
+      expect(a.view.error, 'SESSION_EXPIRED');
+      expect(a.view.owner, 'other@example.test');
+      await a.authenticate('other@example.test', 'sample-password');
+      expect(a.view.error, isNull);
+    });
+  }
+
+  test('Create account with the email of the account this device belongs to '
+      'answers that it has an account, and leaves the device linked', () async {
+    final id = await seed(phone);
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', true);
+    await login(a);
+    await a.signOut();
+    // Removed while signed out: the next sign-in removes it everywhere.
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', false);
+    final api = CountingApi(cloud)..taken.add('owner@example.test');
+    a.dispose();
+    a = AccountController(db: phone, api: api, vault: MemoryVault());
+    await a.start();
+    await expectLater(
+      a.authenticate(' Owner@Example.test ', 'sample-password', create: true),
+      throwsA(
+        isA<AccountException>().having((e) => e.code, 'code', 'EMAIL_EXISTS'),
+      ),
+    );
+    expect(api.signUps, 1);
+    expect(a.view.linked, isTrue);
+    expect(a.view.owner, 'owner@example.test');
+    await login(a);
+    expect(a.view.error, isNull);
+    expect(await phone.favoritesDao.favoriteKeys(id, ContentKind.live), []);
+    expect(cloud.data.values.where((r) => r['type'] == 'favorite'), isEmpty);
+  });
+
+  test('a device signed out on purpose is not asked to sign in again when '
+      'its secure storage cannot be read', () async {
+    await seed(phone);
+    await login(a);
+    await a.signOut();
+    a.dispose();
+    a = AccountController(db: phone, api: FakeApi(cloud), vault: BrokenVault());
+    await a.start();
+    expect(a.view.linked, isTrue);
+    expect(a.view.error, isNull);
+    // One that was signed in still is.
+    await phone.settingsDao.setBool(AccountController.signedInKey, true);
+    a.dispose();
+    a = AccountController(db: phone, api: FakeApi(cloud), vault: BrokenVault());
+    await a.start();
+    expect(a.view.error, 'SESSION_STORAGE');
+  });
+
+  test('a sync that stopped keeps saying so while a poll retries it', () async {
+    final api = DeniedApi(cloud);
+    a.dispose();
+    a = AccountController(db: phone, api: api, vault: MemoryVault());
+    await seed(phone);
+    await login(a);
+    api.denied = true;
+    await a.sync(force: true);
+    expect(a.view.error, 'PERMISSION_DENIED');
+    final seen = <(bool, String?)>[];
+    final views = a.views.listen((v) => seen.add((v.busy, v.error)));
+    await a.sync();
+    await Future<void>.delayed(Duration.zero);
+    await views.cancel();
+    expect(seen, [(true, 'PERMISSION_DENIED'), (false, 'PERMISSION_DENIED')]);
+    api.denied = false;
+    await a.sync();
+    expect(a.view.error, isNull);
+  });
+
+  test('a subscription a newer version gives a live format this version does '
+      'not know keeps syncing: what either side changes or deletes reaches '
+      'the other', () async {
+    final id = await seed(phone);
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', true);
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'two', true);
+    await login(a);
+    await login(b);
+    final key = cloud.data.keys.singleWhere((k) => k.startsWith('source:'));
+    final sid = cloud.data[key]!['source']! as String;
+    final tid = (await tv.sourcesDao.all()).single.id;
+    final newer = FakeApi(cloud);
+    newer.commit({
+      key: {...cloud.data[key]!, 'liveFormat': 'dash', 'name': 'Renamed'},
+    });
+    await b.sync();
+    expect(b.view.error, isNull);
+    final config = (await tv.sourcesDao.configFor(tid))!;
+    expect(config.name, 'Renamed');
+    expect(config.liveFormat, LiveFormat.ts);
+    expect(cloud.data[key]!['liveFormat'], 'dash');
+    // The newer device removes one favourite, this one the other.
+    newer.commit({'favorite:$sid:live:one': null});
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'two', false);
+    await b.sync();
+    await b.sync();
+    expect(cloud.data.values.where((r) => r['type'] == 'favorite'), isEmpty);
+    expect(await tv.favoritesDao.favoriteKeys(tid, ContentKind.live), isEmpty);
+    expect(cloud.data[key]!['liveFormat'], 'dash');
+    // A format chosen here goes to the account.
+    await tv.sourcesDao.updateConfig(
+      tid,
+      config.copyWith(liveFormat: LiveFormat.m3u8),
+    );
+    await b.sync();
+    expect(cloud.data[key]!['liveFormat'], 'm3u8');
+    // The newer device chooses its own again, then deletes the subscription.
+    newer.commit({
+      key: {...cloud.data[key]!, 'liveFormat': 'dash'},
+    });
+    await b.sync();
+    newer.commit({key: null});
+    await b.sync();
+    await b.sync();
+    expect(b.view.error, isNull);
+    expect(cloud.data.containsKey(key), isFalse);
+    expect(await tv.sourcesDao.all(), isEmpty);
+  });
+
+  test('a subscription a newer version moves to a kind this version does not '
+      'know keeps its copy here, what is in it keeps syncing, and it follows '
+      'the account once it can', () async {
+    final id = await seed(phone);
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', true);
+    final second = await phone.sourcesDao.create(
+      const SourceConfig(
+        kind: SourceKind.m3uUrl,
+        name: 'Movies',
+        url: 'https://provider.example/movies.m3u',
+      ),
+    );
+    await phone.favoritesDao.setFavorite(second, ContentKind.movie, 'm', true);
+    await login(a);
+    await login(b);
+    String keyOf(String name) =>
+        cloud.data.entries.singleWhere((e) => e.value['name'] == name).key;
+    final key = keyOf('Sports');
+    final movies = keyOf('Movies');
+    final sid = cloud.data[key]!['source']! as String;
+    final rows = await tv.sourcesDao.all();
+    final tid = rows.first.id;
+    final newer = FakeApi(cloud);
+    final moved = {
+      ...cloud.data[key]!,
+      'kind': 'portal',
+      'url': 'https://portal.example',
+      'name': 'Portal',
+    };
+    newer.commit({
+      key: moved,
+      movies: {...cloud.data[movies]!, 'kind': 'portal'},
+    });
+    await b.sync();
+    expect(b.view.error, isNull);
+    expect(cloud.data[key], moved);
+    expect((await tv.sourcesDao.configFor(tid))!.name, 'Sports');
+    // What is in it syncs both ways, also after a restart.
+    newer.commit({'favorite:$sid:live:one': null});
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'two', true);
+    final vault = b.vault;
+    b.dispose();
+    b = AccountController(db: tv, api: FakeApi(cloud), vault: vault);
+    await b.start();
+    await b.sync();
+    expect(b.view.error, isNull);
+    expect(await tv.favoritesDao.favoriteKeys(tid, ContentKind.live), ['two']);
+    expect(cloud.data.keys.where((k) => k.startsWith('favorite:$sid')), [
+      'favorite:$sid:live:two',
+    ]);
+    expect(cloud.data[key], moved);
+    // Back to a kind this version knows: brought up to date here.
+    newer.commit({
+      key: {...moved, 'kind': 'm3uUrl', 'url': 'https://provider.example/tv'},
+    });
+    await b.sync();
+    final config = (await tv.sourcesDao.configFor(tid))!;
+    expect([config.kind, config.name], [SourceKind.m3uUrl, 'Portal']);
+    // Deleted on the newer device: deleted here too. Deleted here: deleted
+    // in the account too.
+    newer.commit({key: null});
+    await tv.sourcesDao.deleteSource(rows.last.id);
+    await b.sync();
+    await b.sync();
+    expect(b.view.error, isNull);
+    expect(await tv.sourcesDao.all(), isEmpty);
+    expect(cloud.data.keys.where((k) => k != 'preferences'), isEmpty);
+  });
+
+  test('what an earlier version could not hold here is applied by one that '
+      'can, never taken for a deletion or a change here', () async {
+    final id = await seed(phone);
+    await login(a);
+    final key = cloud.data.keys.singleWhere((k) => k.startsWith('source:'));
+    final later = {
+      ...cloud.data[key]!,
+      'source': 'later',
+      'name': 'Later',
+      'url': 'https://later.example',
+      'position': 1,
+    };
+    const favorite = {
+      'type': 'favorite',
+      'source': 'later',
+      'kind': 'live',
+      'key': 'x',
+      'position': 0,
+      'addedAt': 1,
+    };
+    FakeApi(cloud).commit({
+      'source:later': later,
+      'favorite:later:live:x': favorite,
+      key: {...cloud.data[key]!, 'liveFormat': 'm3u8'},
+    });
+    // As an earlier version left this device: the synced state holds them,
+    // the database not.
+    await phone.settingsDao.setJson('account_sync_baseline_v1:owner', {
+      ...cloud.data,
+    });
+    await phone.settingsDao.setJson('account_sync_foreign_v1', {
+      'records': ['source:later', 'favorite:later:live:x'],
+      'fields': {
+        key: ['liveFormat'],
+      },
+      'frozen': <String>[],
+    });
+    final vault = a.vault;
+    a.dispose();
+    a = AccountController(db: phone, api: FakeApi(cloud), vault: vault);
+    await a.start();
+    expect(a.view.error, isNull);
+    expect(cloud.deleted, isEmpty);
+    expect(cloud.data['source:later'], later);
+    expect(cloud.data['favorite:later:live:x'], favorite);
+    expect(cloud.data[key]!['liveFormat'], 'm3u8');
+    expect((await phone.sourcesDao.configFor(id))!.liveFormat, LiveFormat.m3u8);
+    final added = (await phone.sourcesDao.all()).last.id;
+    expect((await phone.sourcesDao.configFor(added))!.name, 'Later');
+    expect(await phone.favoritesDao.favoriteKeys(added, ContentKind.live), [
+      'x',
+    ]);
+  });
+
+  test('a language a newer version adds stays the account language until one '
+      'is chosen here', () async {
+    await seed(phone);
+    await login(a);
+    await login(b);
+    FakeApi(cloud).commit({
+      'preferences': {...cloud.data['preferences']!, 'locale': 'fr'},
+    });
+    await b.sync();
+    await b.sync();
+    expect(b.view.error, isNull);
+    expect(cloud.data['preferences']!['locale'], 'fr');
+    final settings = await loadAppSettings(tv.settingsDao);
+    expect(settings.locale, AppLocaleSetting.auto);
+    await tv.settingsDao.setJson(
+      kAppSettingsKey,
+      settings.copyWith(locale: AppLocaleSetting.ar).toJson(),
+    );
+    await b.sync();
+    expect(cloud.data['preferences']!['locale'], 'ar');
+  });
+
+  test('a channel removed on one device keeps the order another device made '
+      'meanwhile', () async {
+    final id = await seed(phone);
+    final lid = await phone.channelListsDao.createList(
+      id,
+      'Sports',
+      channels: ['a', 'b', 'c', 'd'],
+    );
+    await login(a);
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    final tlid = (await tv.channelListsDao.lists(tid)).single.id;
+    cloud.offline = true;
+    // Renumbers "c" and "d" here.
+    await tv.channelListsDao.setChannel(tlid, 'b', false);
+    await b.sync();
+    cloud.offline = false;
+    await phone.channelListsDao.moveChannel(lid, 'd', -3);
+    await a.sync();
+    await b.sync();
+    await a.sync();
+    expect(await tv.channelListsDao.channelKeys(tlid), ['d', 'a', 'c']);
+    expect(await phone.channelListsDao.channelKeys(lid), ['d', 'a', 'c']);
+  });
+
+  test('a channel watched last on another device stays the most recent '
+      'one', () async {
+    final id = await seed(phone);
+    Future<void> watch(AppDatabase db, int sid, String key, int at) => db
+        .into(db.recentChannels)
+        .insertOnConflictUpdate(
+          RecentChannelsCompanion.insert(
+            sourceId: sid,
+            key: key,
+            lastWatchedAt: at,
+          ),
+        );
+    await watch(phone, id, 'news', 1000);
+    await watch(phone, id, 'sport', 1500);
+    await login(a);
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    cloud.offline = true;
+    await watch(phone, id, 'news', 2000);
+    await a.sync();
+    cloud.offline = false;
+    await watch(tv, tid, 'sport', 2500);
+    await watch(tv, tid, 'news', 3000);
+    await b.sync();
+    await a.sync();
+    await b.sync();
+    expect(await tv.recentDao.recentChannelKeys(tid), ['news', 'sport']);
+    expect(await phone.recentDao.recentChannelKeys(id), ['news', 'sport']);
+  });
+
+  test('a device switched to an account keeps all it holds, also what that '
+      'account deleted or holds an older copy of', () async {
+    final other = Cloud();
+    final api = AccountsApi({'owner': cloud, 'other': other});
+    a.dispose();
+    b.dispose();
+    a = AccountController(db: phone, api: api, vault: MemoryVault());
+    b = AccountController(db: tv, api: api, vault: MemoryVault());
+    // The other account holds the same subscription with older login
+    // details, a favourite since removed, a second subscription since
+    // deleted and a favourite of its own.
+    final tid = await seed(tv);
+    final movies = await tv.sourcesDao.create(
+      const SourceConfig(
+        kind: SourceKind.m3uUrl,
+        name: 'Movies',
+        url: 'https://provider.example/movies.m3u',
+      ),
+    );
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'news', true);
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'kids', true);
+    await b.authenticate('other@example.test', 'sample-password');
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'news', false);
+    await tv.sourcesDao.deleteSource(movies);
+    await b.sync();
+    expect(other.deleted, hasLength(2));
+    // This device, linked to the first account, holds both, renewed.
+    final id = await seed(phone);
+    await phone.sourcesDao.updateConfig(
+      id,
+      (await phone.sourcesDao.configFor(id))!
+          .copyWith(name: 'My TV', password: 'renewed-password'),
+    );
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'sport', true);
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'news', true);
+    await phone.sourcesDao.create(
+      const SourceConfig(
+        kind: SourceKind.m3uUrl,
+        name: 'Movies',
+        url: 'https://provider.example/movies.m3u',
+      ),
+    );
+    await login(a);
+    await a.signOut();
+    await expectLater(
+      a.authenticate('other@example.test', 'sample-password'),
+      throwsA(isA<AccountException>()),
+    );
+    await a.release();
+    await a.authenticate('other@example.test', 'sample-password');
+    expect(a.view.error, isNull);
+    final sources = await phone.sourcesDao.all();
+    expect(sources.map((s) => s.name), ['My TV', 'Movies']);
+    final config = (await phone.sourcesDao.configFor(id))!;
+    expect(config.password, 'renewed-password');
+    // Its favourites first, then the account's own.
+    expect(await phone.favoritesDao.favoriteKeys(id, ContentKind.live), [
+      'sport',
+      'news',
+      'kids',
+    ]);
+    await b.sync();
+    expect(
+      [for (final s in await tv.sourcesDao.all()) s.name],
+      ['My TV', 'Movies'],
+    );
+    expect(await tv.favoritesDao.favoriteKeys(tid, ContentKind.live), [
+      'sport',
+      'news',
+      'kids',
+    ]);
+    // Only the first link after the switch: later ones follow the account.
+    await a.signOut();
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'kids', false);
+    await b.sync();
+    await a.authenticate('other@example.test', 'sample-password');
+    expect(await phone.favoritesDao.favoriteKeys(id, ContentKind.live), [
+      'sport',
+      'news',
+    ]);
+  });
+
   group('changes to merge into the account', () {
     Map<String, Object?> item(String key, int position) => {
       'type': 'item',
@@ -2017,6 +2463,64 @@ void main() {
       });
     });
 
+    test('a position change that keeps the order is no move, so the order '
+        'made elsewhere stays; a move here is one', () {
+      final base = {
+        'item:l:a': item('a', 0),
+        'item:l:b': item('b', 1),
+        'item:l:c': item('c', 2),
+      };
+      final remote = {...base, 'item:l:c': item('c', 0)};
+      final removed = {'item:l:a': item('a', 0), 'item:l:c': item('c', 1)};
+      expect(pendingSyncChanges(base, remote, {}, removed), {'item:l:b': null});
+      final moved = {'item:l:a': item('a', 1), 'item:l:c': item('c', 0)};
+      expect(pendingSyncChanges(base, base, {}, moved), {
+        'item:l:a': item('a', 1),
+        'item:l:b': null,
+        'item:l:c': item('c', 0),
+      });
+    });
+
+    test('a device moved to the account on purpose keeps its copies over the '
+        "account's and its tombstones, the account's other entries after "
+        'its own', () {
+      Map<String, Object?> favorite(String key, int position) => {
+        'type': 'favorite',
+        'source': 's',
+        'kind': 'live',
+        'key': key,
+        'position': position,
+        'addedAt': 1,
+      };
+      final local = {
+        'source:s': {...source('Mine', 'h1'), 'position': 0},
+        'favorite:s:live:a': favorite('a', 0),
+        'favorite:s:live:b': favorite('b', 1),
+      };
+      final remote = {
+        'source:s': {...source('Theirs', 'h0'), 'position': 0},
+        'favorite:s:live:c': favorite('c', 0),
+      };
+      expect(
+        initialSyncChanges(remote, {'favorite:s:live:b'}, local),
+        isNot(contains('favorite:s:live:b')),
+      );
+      expect(
+        initialSyncChanges(
+          remote,
+          {'favorite:s:live:b'},
+          local,
+          keepLocal: true,
+        ),
+        {
+          'source:s': local['source:s'],
+          'favorite:s:live:a': favorite('a', 0),
+          'favorite:s:live:b': favorite('b', 1),
+          'favorite:s:live:c': favorite('c', 2),
+        },
+      );
+    });
+
     test('a subscription renamed here keeps the playlist replaced '
         'elsewhere, with its chunks', () {
       final base = {'source:s': source('File', 'h1'), 'file:s:0': chunk('e1')};
@@ -2056,18 +2560,43 @@ void main() {
   });
 }
 
-/// Counts the accounts created.
+/// Counts the accounts created; creating one for an email in [taken] fails
+/// as the account service does.
 class CountingApi extends FakeApi {
   CountingApi(super.cloud);
   int signUps = 0;
+  final taken = <String>{};
   @override
   Future<AccountSession> signIn(
     String email,
     String password, {
     bool create = false,
-  }) {
-    if (create) signUps++;
+  }) async {
+    if (create) {
+      signUps++;
+      if (taken.contains(email.trim().toLowerCase())) {
+        throw const AccountException('EMAIL_EXISTS');
+      }
+    }
     return super.signIn(email, password, create: create);
+  }
+}
+
+/// An account whose database refuses this device once [denied] is set, as
+/// with access rules that were not deployed.
+class DeniedApi extends FakeApi {
+  DeniedApi(super.cloud);
+  bool denied = false;
+  @override
+  Future<String?> revision(AccountSession session) async {
+    if (denied) throw const AccountException('PERMISSION_DENIED');
+    return super.revision(session);
+  }
+
+  @override
+  Future<RemoteState> read(AccountSession session) async {
+    if (denied) throw const AccountException('PERMISSION_DENIED');
+    return super.read(session);
   }
 }
 

@@ -23,9 +23,12 @@ typedef _Playlist = ({
   String hash,
 });
 
-/// Account records this version cannot hold, and the fields it does not
-/// know of the records it holds.
-typedef _Foreign = ({SyncData records, SyncData fields});
+/// Account records this version cannot hold; of the records it holds, the
+/// field values it cannot (fields a newer version added, and values it
+/// added to a field this version knows); and the subscriptions held here
+/// whose own record is one of those records (see
+/// [LocalSyncStore._foreignOf]).
+typedef _Foreign = ({SyncData records, SyncData fields, Set<Object?> frozen});
 
 /// Maps device-local integer IDs to stable cloud IDs without migrating the
 /// catalogue database. Only account data is exported, never the catalogue.
@@ -35,6 +38,18 @@ class LocalSyncStore {
   final AppDatabase db;
   final Future<Directory> Function() directory;
   static const _idsKey = 'account_sync_ids_v1';
+
+  /// What of the account last applied this device did not hold, by key (see
+  /// [_foreign]). Kept, so a version that can hold it applies it instead of
+  /// taking its absence or the value held in its place for a change here.
+  static const _foreignKey = 'account_sync_foreign_v1';
+
+  /// Fields whose values a newer version may add, and the value held here
+  /// in place of one this version does not know.
+  static const _choices = <String, Map<String, (List<Enum>, Enum)>>{
+    'source': {'liveFormat': (LiveFormat.values, LiveFormat.ts)},
+    'preferences': {'locale': (AppLocaleSetting.values, AppLocaleSetting.auto)},
+  };
   Map<String, String> _ids = {};
   bool _loaded = false;
   final _files = <String, _Playlist>{};
@@ -47,7 +62,16 @@ class LocalSyncStore {
   /// What the account last synced holds that this version cannot hold here
   /// (see [_foreignOf]). [export] returns it as received, so it never looks
   /// deleted or changed on this device.
-  _Foreign _foreign = (records: {}, fields: {});
+  _Foreign _foreign = (records: {}, fields: {}, frozen: {});
+
+  /// The account holds what an earlier version could not hold here and
+  /// this one can: the next sync applies it (see [stale]).
+  bool _stale = false;
+
+  /// Whether this device lacks what the account last synced holds, which
+  /// an earlier version could not hold here: a sync then applies the
+  /// account even when it holds what was sent.
+  bool get stale => _stale;
 
   Future<void> _load() async {
     if (_loaded) return;
@@ -83,7 +107,34 @@ class LocalSyncStore {
     return _ids[key] = id;
   }
 
+  /// This device's account data, with what of the account it cannot hold
+  /// as received (see [_foreign]).
   Future<SyncData> export() => db.transaction(() async {
+    final result = await _export(_foreign.frozen);
+    final rows = await _sourceRows();
+    for (final e in _foreign.records.entries) {
+      // A subscription frozen here and deleted since: so is its record.
+      final sid = e.value['source'];
+      if (_foreign.frozen.contains(sid) && !rows.containsKey(sid)) continue;
+      result[e.key] = e.value;
+    }
+    for (final e in _foreign.fields.entries) {
+      final held = result[e.key];
+      if (held == null) continue;
+      final merged = result[e.key] = {...held};
+      for (final f in e.value.entries) {
+        // Changed here from the value held in place of the received one.
+        final fallback = _fallback(held['type'], f.key);
+        if (fallback != null && held[f.key] != fallback) continue;
+        merged[f.key] = f.value;
+      }
+    }
+    return result;
+  });
+
+  /// The account data the database here holds, but for the records of the
+  /// subscriptions in [frozen] (see [_foreignOf]).
+  Future<SyncData> _export(Set<Object?> frozen) => db.transaction(() async {
     await _load();
     final result = <String, Map<String, Object?>>{};
     final sources = <int, String>{};
@@ -93,6 +144,11 @@ class LocalSyncStore {
     for (final row in rows) {
       final config = (await db.sourcesDao.configFor(row.id))!;
       paths.add(config.url);
+      final cached = _ids['source:${row.id}'];
+      if (cached != null && frozen.contains(cached)) {
+        sources[row.id] = cached;
+        continue;
+      }
       _Playlist? file;
       if (config.kind == SourceKind.m3uFile) {
         final stat = await File(config.url).stat();
@@ -226,13 +282,6 @@ class LocalSyncStore {
       'preferredAudioLang': settings.preferredAudioLang,
       'preferredSubLang': settings.preferredSubLang,
     };
-    for (final e in _foreign.records.entries) {
-      result[e.key] = e.value;
-    }
-    for (final e in _foreign.fields.entries) {
-      final held = result[e.key];
-      if (held != null) result[e.key] = {...e.value, ...held};
-    }
     if (!syncEqual(await db.settingsDao.getJson(_idsKey), _ids)) {
       await db.settingsDao.setJson(_idsKey, _ids);
     }
@@ -263,12 +312,30 @@ class LocalSyncStore {
     }
   }
 
+  /// The cloud IDs of the subscriptions held here, with their row IDs.
+  Future<Map<String, int>> _sourceRows() async {
+    await _load();
+    return {
+      for (final row in await db.sourcesDao.all())
+        ?_ids['source:${row.id}']: row.id,
+    };
+  }
+
   /// Keeps the account's encoding of playlist files unchanged since [data]
   /// was synced, so a restart does not re-encode and re-upload them, and
-  /// what of [data] this version cannot hold.
+  /// what of [data] this version cannot hold, or an earlier one could not.
   Future<void> remember(SyncData data) async {
     await _load();
-    _foreign = _foreignOf(data);
+    final kept = await db.settingsDao.getJson(_foreignKey);
+    final frozen = kept is Map ? kept['frozen'] : null;
+    final own = _foreignOf(data, {
+      ...(await _sourceRows()).keys,
+      if (frozen is List) ...frozen,
+    });
+    _foreign = _withKept(own, data, kept);
+    _stale =
+        _foreign.records.length > own.records.length ||
+        !syncEqual(_foreign.fields, own.fields);
     final local = {
       for (final e in _ids.entries)
         if (e.key.startsWith('source:'))
@@ -359,32 +426,46 @@ class LocalSyncStore {
     if (!syncEqual(before, _ids)) await db.settingsDao.setJson(_idsKey, _ids);
   });
 
+  static bool _known(Object? name, List<Enum> values) =>
+      values.any((v) => v.name == name);
+
+  /// The value held here for [field] of a record of [type] in place of one
+  /// this version does not know, or null when [field] takes no such value.
+  static String? _fallback(Object? type, String field) =>
+      _choices[type]?[field]?.$2.name;
+
   /// What of [data] this version cannot hold here: records of types a newer
-  /// version added, or with a kind or format it added, with everything in
-  /// their sources and lists; and of the other records, the fields a newer
-  /// version added. Kept as received, a newer device's data survives the
+  /// version added, or with a kind it added, with everything in their
+  /// sources and lists; and of the other records, the fields a newer
+  /// version added and the values it added to a field this version knows
+  /// (see [_choices]). Kept as received, a newer device's data survives the
   /// syncs of an older one.
-  static _Foreign _foreignOf(SyncData data) {
-    bool known(Object? name, List<Enum> values) =>
-        values.any((v) => v.name == name);
+  ///
+  /// A subscription held here ([local] holds its cloud ID) whose kind a
+  /// newer version changed is frozen: the database keeps its copy, which
+  /// [export] leaves out, and only its own record and playlist wait for a
+  /// version that can hold them; what is in it syncs as before.
+  static _Foreign _foreignOf(SyncData data, Set<Object?> local) {
     final records = <String, Map<String, Object?>>{};
     final sources = <Object?>{};
+    final frozen = <Object?>{};
     final lists = <Object?>{};
     for (final e in data.entries) {
       final r = e.value;
       final held = switch (r['type']) {
-        'source' =>
-          known(r['kind'], SourceKind.values) &&
-              known(r['liveFormat'], LiveFormat.values),
-        'favorite' => known(r['kind'], ContentKind.values),
-        'progress' => known(r['kind'], PlayableKind.values),
+        'source' => _known(r['kind'], SourceKind.values),
+        'favorite' => _known(r['kind'], ContentKind.values),
+        'progress' => _known(r['kind'], PlayableKind.values),
         final type => syncFields.containsKey(type),
       };
       if (held) continue;
       records[e.key] = r;
-      if (r['type'] == 'source') sources.add(r['source'] ?? e.key);
+      if (r['type'] == 'source') {
+        final sid = r['source'] ?? e.key;
+        (local.contains(sid) ? frozen : sources).add(sid);
+      }
     }
-    if (sources.isNotEmpty) {
+    if (sources.isNotEmpty || frozen.isNotEmpty) {
       for (final e in data.entries) {
         if (e.value['type'] == 'list' && sources.contains(e.value['source'])) {
           lists.add(e.value['list'] ?? e.key);
@@ -394,7 +475,8 @@ class LocalSyncStore {
         final r = e.value;
         if (r['type'] == 'item'
             ? lists.contains(r['list'])
-            : sources.contains(r['source'])) {
+            : sources.contains(r['source']) ||
+                  r['type'] == 'file' && frozen.contains(r['source'])) {
           records[e.key] = r;
         }
       }
@@ -402,27 +484,77 @@ class LocalSyncStore {
     final fields = <String, Map<String, Object?>>{};
     for (final e in data.entries) {
       if (records.containsKey(e.key)) continue;
-      final names = syncFields[e.value['type']]!;
       final added = {
         for (final f in e.value.entries)
-          if (!names.contains(f.key)) f.key: f.value,
+          if (_foreignValue(e.value['type'], f.key, f.value)) f.key: f.value,
       };
       if (added.isNotEmpty) fields[e.key] = added;
     }
-    return (records: records, fields: fields);
+    return (records: records, fields: fields, frozen: frozen);
   }
 
-  /// [data] without what [foreign] names.
+  /// Whether [value] of [field], in a record of [type] this version holds,
+  /// is one it cannot hold: a field a newer version added, or a value it
+  /// added to a field this version knows.
+  static bool _foreignValue(Object? type, String field, Object? value) {
+    if (!syncFields[type]!.contains(field)) return true;
+    final choice = _choices[type]?[field];
+    return choice != null && !_known(value, choice.$1);
+  }
+
+  /// [foreign] with what of [data] an earlier version, which saved [kept],
+  /// could not hold here, and this one could: it stays as received until
+  /// this version applies it. A subscription held here that it names is
+  /// frozen until then too.
+  static _Foreign _withKept(_Foreign foreign, SyncData data, Object? kept) {
+    if (kept is! Map) return foreign;
+    final records = {...foreign.records};
+    final fields = {
+      for (final e in foreign.fields.entries) e.key: {...e.value},
+    };
+    final frozen = {...foreign.frozen};
+    final keptFrozen = kept['frozen'];
+    final keptRecords = kept['records'];
+    if (keptRecords is List) {
+      for (final key in keptRecords) {
+        final r = data[key];
+        if (r == null || records.containsKey(key)) continue;
+        records[key as String] = r;
+        if (r['type'] == 'source' &&
+            keptFrozen is List &&
+            keptFrozen.contains(r['source'])) {
+          frozen.add(r['source']);
+        }
+      }
+    }
+    final keptFields = kept['fields'];
+    if (keptFields is Map) {
+      for (final MapEntry(:key, :value) in keptFields.entries) {
+        final r = data[key];
+        if (r == null || records.containsKey(key) || value is! List) continue;
+        for (final field in value.whereType<String>()) {
+          if (r.containsKey(field)) {
+            (fields[key as String] ??= {})[field] = r[field];
+          }
+        }
+      }
+    }
+    return (records: records, fields: fields, frozen: frozen);
+  }
+
+  /// [data] without what [foreign] names, a value this version cannot hold
+  /// replaced by the one held in its place.
   static SyncData _holdable(SyncData data, _Foreign foreign) => {
     for (final e in data.entries)
       if (!foreign.records.containsKey(e.key))
-        e.key: foreign.fields.containsKey(e.key)
-            ? {
-                for (final f in e.value.entries)
-                  if (!foreign.fields[e.key]!.containsKey(f.key))
-                    f.key: f.value,
-              }
-            : e.value,
+        e.key: switch (foreign.fields[e.key]) {
+          final fields? => {
+            for (final f in e.value.entries)
+              if (!fields.containsKey(f.key)) f.key: f.value,
+            for (final f in fields.keys) f: ?_fallback(e.value['type'], f),
+          },
+          null => e.value,
+        },
   };
 
   /// Account records of [type] whose ID no row here holds, in their order.
@@ -552,9 +684,10 @@ class LocalSyncStore {
   /// Returns the sources whose catalogue needs an import, and those whose
   /// guide offset changed: their guides need a forced refresh.
   Future<({Set<int> imports, Set<int> guides})> apply(SyncData target) async {
-    final foreign = _foreignOf(target);
-    final exported = await export();
-    final current = _holdable(exported, _foreignOf(exported));
+    final foreign = _foreignOf(target, (await _sourceRows()).keys.toSet());
+    // Compared with what the database holds: a subscription that stops
+    // being frozen, or is deleted, is brought up to date here.
+    final current = await _export(foreign.frozen);
     final held = _holdable(target, foreign);
     // What this version cannot hold is neither applied nor deleted here.
     final changed = syncChanges(current, held)
@@ -563,6 +696,16 @@ class LocalSyncStore {
     final guides = <int>{};
     try {
       await _apply(held, current, changed, needImport, guides);
+      final kept = {
+        'records': foreign.records.keys.toList(),
+        'fields': {
+          for (final e in foreign.fields.entries) e.key: e.value.keys.toList(),
+        },
+        'frozen': foreign.frozen.toList(),
+      };
+      if (!syncEqual(await db.settingsDao.getJson(_foreignKey), kept)) {
+        await db.settingsDao.setJson(_foreignKey, kept);
+      }
     } on Object {
       // The rollback also removed rows created here: forget the cloud IDs
       // given to them, or a later local row would inherit one.
@@ -570,6 +713,7 @@ class LocalSyncStore {
       rethrow;
     }
     _foreign = foreign;
+    _stale = false;
     return (imports: needImport, guides: guides);
   }
 

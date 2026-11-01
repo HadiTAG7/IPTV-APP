@@ -1614,18 +1614,26 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String accountSwitchBody(String owner) {
-    return 'This device stops syncing with ⁨$owner⁩. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with. ⁨$owner⁩ keeps its own copy, which this device no longer changes.';
+    return 'This device stops syncing with ⁨$owner⁩. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with, replacing that account\'s copies of the same items. ⁨$owner⁩ keeps its own copy, which this device no longer changes.';
   }
 
   @override
   String get accountSwitchBodyUnnamed =>
-      'This device stops syncing with the account it was linked to. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with. The previous account keeps its own copy, which this device no longer changes.';
+      'This device stops syncing with the account it was linked to. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with, replacing that account\'s copies of the same items. The previous account keeps its own copy, which this device no longer changes.';
 
   @override
   String get accountSwitchConfirm => 'Switch';
 
   @override
   String get accountSyncStopped => 'Sync stopped. Open to see why.';
+
+  @override
+  String get accountSyncDenied =>
+      'Sync stopped: the account service refused access to your data. Your changes stay on this device. Press Sync now once the account\'s setup is fixed.';
+
+  @override
+  String get accountSyncBlocked =>
+      'Sync stopped: a change on this device or in the account could not be saved. Your changes stay on this device. Press Sync now to try again; if it keeps failing, update the app on all your devices.';
 
   @override
   String get guideWatchChannel => 'Watch channel';

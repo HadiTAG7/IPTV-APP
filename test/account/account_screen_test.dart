@@ -23,7 +23,7 @@ import 'package:iptv_player/tv/tv_text_field.dart';
 
 import '../support/text_entry.dart';
 import '../unit/db/db_test_utils.dart';
-import 'account_sync_test.dart' show Cloud, FakeApi;
+import 'account_sync_test.dart' show Cloud, CountingApi, FakeApi;
 
 /// Signing in fails with [code]; a password reset fails with it when set.
 class FailingApi extends FirebaseAccountApi {
@@ -626,6 +626,115 @@ void main() {
       await tester.runAsync(() async {
         expect(await db.sourcesDao.all(), hasLength(1));
       });
+    });
+
+    testWidgets('$lang phone: Create account with the email this device '
+        'belongs to says to sign in, and offers no switch', (tester) async {
+      final db = openTestDb();
+      addTearDown(db.close);
+      final api = CountingApi(Cloud())..taken.add('owner@example.test');
+      await tester.runAsync(() async {
+        final first = AccountController(db: db, api: api, vault: MemoryVault());
+        await first.authenticate('owner@example.test', 'sample-password');
+        await first.signOut();
+        first.dispose();
+      });
+      late AccountController account;
+      final l = await pumpAccount(
+        tester,
+        lang: lang,
+        tv: false,
+        account: accountControllerProvider.overrideWith((ref) {
+          account = AccountController(db: db, api: api, vault: MemoryVault());
+          ref.onDispose(account.dispose);
+          return account;
+        }),
+      );
+      await tapKey(tester, 'account-toggle');
+      for (final (key, text) in [
+        ('account-email', 'owner@example.test'),
+        ('account-password', 'sample-password'),
+        ('account-confirm', 'sample-password'),
+      ]) {
+        await typeText(tester, find.byKey(ValueKey(key)), text);
+      }
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'account-submit');
+      await work(tester);
+      expect(find.text(l.accountExists), findsOneWidget);
+      expect(find.byKey(const ValueKey('account-switch')), findsNothing);
+      expect(api.signUps, 1);
+      expect(account.view.email, isNull);
+      await tester.runAsync(() async {
+        expect(
+          await db.settingsDao.getString(AccountController.ownerEmailKey),
+          'owner@example.test',
+        );
+      });
+    });
+
+    testWidgets('$lang phone: the switch confirmation scrolls at the largest '
+        'font size rather than lose its end', (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.reset);
+      const owner = 'owner.family.account@example.test';
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.dark(tv: false),
+          locale: Locale(lang),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: const Scaffold(body: SwitchAccountDialog(owner: owner)),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final l = AppLocalizations.of(
+        tester.element(find.byType(SwitchAccountDialog)),
+      );
+      final body = find.text(l.accountSwitchBody(owner));
+      final paragraph = tester.renderObject<RenderParagraph>(
+        find.descendant(of: body, matching: find.byType(RichText)),
+      );
+      expect(
+        paragraph.size.height,
+        greaterThanOrEqualTo(
+          paragraph.getMaxIntrinsicHeight(paragraph.size.width) - 1,
+        ),
+      );
+      expect(tester.takeException(), isNull);
+      final confirm = find.byKey(const ValueKey('account-switch-confirm'));
+      expect(tester.getRect(confirm).bottom, lessThanOrEqualTo(844));
+    });
+
+    test('$lang: a sync stopped for a reason that does not clear by itself '
+        'never reads like a dropped connection', () {
+      final l = lookupAppLocalizations(Locale(lang));
+      final dropped = accountErrorText(l, 'NETWORK_ERROR');
+      expect(dropped, l.accountSyncFailed);
+      expect(accountErrorText(l, 'PERMISSION_DENIED'), l.accountSyncDenied);
+      for (final code in [
+        'RECORD_TOO_LARGE',
+        'SYNC_ERROR',
+        'INVALID_PLAYLIST',
+      ]) {
+        expect(accountErrorPasses(code), isFalse, reason: code);
+        expect(accountErrorText(l, code), l.accountSyncBlocked, reason: code);
+      }
+      for (final text in [l.accountSyncDenied, l.accountSyncBlocked]) {
+        expect(text, isNot(dropped));
+        expect(text, contains(l.accountSyncNow));
+      }
+      // Signed out, the account service could not be reached.
+      expect(
+        accountErrorText(l, 'SYNC_ERROR', signedOut: true),
+        l.accountServiceUnavailable,
+      );
     });
 
     test('$lang: switching a device linked by an earlier version explains '

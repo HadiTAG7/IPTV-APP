@@ -705,8 +705,9 @@ class _Note extends StatelessWidget {
 }
 
 /// The signed-in email; after an expired sign-in, or one the secure storage
-/// could not read on a linked device, a request to sign in again, since a
-/// TV user rarely opens the account screen to see why sync stopped.
+/// could not read on a linked device (a device signed out on purpose has
+/// none to read), a request to sign in again, since a TV user rarely opens
+/// the account screen to see why sync stopped.
 String? _accountValue(AppLocalizations l10n, AccountView? view) =>
     view?.email ??
     (view?.error == 'SESSION_EXPIRED' ||
