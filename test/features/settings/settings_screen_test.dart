@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iptv_player/account/account_controller.dart';
 import 'package:iptv_player/app/form_factor.dart';
 import 'package:iptv_player/app/home_shell.dart';
 import 'package:iptv_player/app/providers.dart';
@@ -94,6 +95,28 @@ void main() {
       await _back(tester);
       expect(focusedIn(settingsRail), isTrue);
       await h.dispose(tester);
+    });
+
+    testWidgets('$lang TV: the account row asks to sign in again after the '
+        'sign-in expired', (tester) async {
+      for (final (account, value) in [
+        (const AccountView(error: 'SESSION_EXPIRED'), l10n.accountSignInAgain),
+        (
+          const AccountView(email: 'viewer@example.test', linked: true),
+          'viewer@example.test',
+        ),
+      ]) {
+        final h = await pumpSettingsApp(
+          tester,
+          locale: locale,
+          overrides: [
+            accountViewProvider.overrideWith((ref) => Stream.value(account)),
+          ],
+        );
+        await openSettingsTv(tester);
+        expect(_inRow('settings-account', value), findsOneWidget);
+        await h.dispose(tester);
+      }
     });
 
     testWidgets('$lang TV: Page Down and Page Up move focus a screen at a '

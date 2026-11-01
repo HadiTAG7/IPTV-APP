@@ -7,6 +7,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/app/app.dart';
 import 'package:iptv_player/app/home_shell.dart';
@@ -85,7 +86,7 @@ class SettingsHarness {
 ///
 /// [seed] runs before the app starts. [refresh] replaces the recording guide
 /// refresh action. With [prefill] the Help screen gets an "Add as source"
-/// action that records its calls.
+/// action that records its calls. [overrides] come after the harness's own.
 Future<SettingsHarness> pumpSettingsApp(
   WidgetTester tester, {
   bool tv = true,
@@ -97,6 +98,7 @@ Future<SettingsHarness> pumpSettingsApp(
   bool prefill = false,
   RefreshGuideAction? refresh,
   Future<void> Function(AppDatabase db, int sourceId)? seed,
+  List<Override> overrides = const [],
 }) async {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
   final db = AppDatabase(NativeDatabase.memory());
@@ -150,6 +152,7 @@ Future<SettingsHarness> pumpSettingsApp(
                 h.prefillCalls.add((url: url, name: name)),
           ),
         homePageBuilderProvider.overrideWithValue(_page),
+        ...overrides,
       ],
       child: const IptvApp(),
     ),

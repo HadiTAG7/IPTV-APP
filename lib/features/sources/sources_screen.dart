@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../account/account_controller.dart';
 import '../../app/form_factor.dart';
 import '../../app/home_shell.dart' show describeSourceError;
 import '../../app/providers.dart';
@@ -413,18 +414,25 @@ class _SourceCard extends ConsumerWidget {
 }
 
 /// Asks before deleting a source; pops true to delete. Cancel has the
-/// focus, so a stray OK never deletes.
-class DeleteSourceDialog extends StatelessWidget {
+/// focus, so a stray OK never deletes. On a device linked to an account it
+/// says that the deletion reaches the other devices too.
+class DeleteSourceDialog extends ConsumerWidget {
   const DeleteSourceDialog({super.key, required this.name});
 
   final String name;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
+    final account = ref.watch(accountViewProvider).value;
+    final synced = account != null && (account.linked || account.email != null);
     return AlertDialog(
       title: Text(l10n.settingsDeleteSource),
-      content: Text(l10n.settingsDeleteSourceConfirm(name)),
+      content: Text(
+        synced
+            ? l10n.settingsDeleteSourceConfirmSynced(name)
+            : l10n.settingsDeleteSourceConfirm(name),
+      ),
       actions: [
         TextButton(
           key: const ValueKey('delete-cancel'),

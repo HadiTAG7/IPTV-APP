@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'package:drift/drift.dart';
@@ -13,6 +14,15 @@ import '../sources/source_repository.dart';
 import 'firebase_api.dart';
 import 'sync_model.dart';
 
+/// A playlist file as the account holds it, for a file of [size] bytes
+/// last modified at [modified].
+typedef _Playlist = ({
+  DateTime modified,
+  int size,
+  String encoded,
+  String hash,
+});
+
 /// Maps device-local integer IDs to stable cloud IDs without migrating the
 /// catalogue database. Only account data is exported, never the catalogue.
 class LocalSyncStore {
@@ -23,7 +33,7 @@ class LocalSyncStore {
   static const _idsKey = 'account_sync_ids_v1';
   Map<String, String> _ids = {};
   bool _loaded = false;
-  final _files = <String, ({DateTime modified, int size, String encoded})>{};
+  final _files = <String, _Playlist>{};
 
   /// Playlist copies replaced or deleted by [apply], removed by [export] once
   /// no source uses them (a rolled-back apply still does).
@@ -74,36 +84,36 @@ class LocalSyncStore {
     for (final row in rows) {
       final config = (await db.sourcesDao.configFor(row.id))!;
       paths.add(config.url);
-      String? file;
+      _Playlist? file;
       if (config.kind == SourceKind.m3uFile) {
-        final input = File(config.url);
-        final stat = await input.stat();
+        final stat = await File(config.url).stat();
         if (stat.type != FileSystemEntityType.file) {
           throw const AccountException('PLAYLIST_FILE_MISSING');
         }
         if (stat.size > 32 * 1024 * 1024) {
           throw const AccountException('PLAYLIST_FILE_TOO_LARGE');
         }
-        final cache = _files[config.url];
-        file =
-            cache != null &&
-                cache.modified == stat.modified &&
-                cache.size == stat.size
-            ? cache.encoded
-            : base64Encode(gzip.encode(await input.readAsBytes()));
-        _files[config.url] = (
-          modified: stat.modified,
-          size: stat.size,
-          encoded: file,
-        );
+        file = _files[config.url];
+        if (file == null ||
+            file.modified != stat.modified ||
+            file.size != stat.size) {
+          final encoded = await _encodeFile(config.url);
+          file = _files[config.url] = (
+            modified: stat.modified,
+            size: stat.size,
+            encoded: encoded.encoded,
+            hash: encoded.hash,
+          );
+        }
       }
       final sid = _id('source:${row.id}', [
         config.kind.name,
-        file ?? config.url,
+        file?.encoded ?? config.url,
         config.username,
       ], heldSources);
       sources[row.id] = sid;
-      final parts = file == null ? 0 : (file.length / 350000).ceil();
+      final encoded = file?.encoded;
+      final parts = encoded == null ? 0 : (encoded.length / 350000).ceil();
       result['source:$sid'] = {
         'type': 'source',
         'source': sid,
@@ -118,16 +128,16 @@ class LocalSyncStore {
         'epgOffsetMin': config.epgOffsetMin,
         'position': row.sortIndex,
         'fileParts': parts,
-        if (file != null) 'fileHash': syncId(file),
+        'fileHash': ?file?.hash,
       };
       for (var i = 0; i < parts; i++) {
         result['file:$sid:$i'] = {
           'type': 'file',
           'source': sid,
           'part': i,
-          'data': file!.substring(
+          'data': encoded!.substring(
             i * 350000,
-            ((i + 1) * 350000).clamp(0, file.length),
+            ((i + 1) * 350000).clamp(0, encoded.length),
           ),
         };
       }
@@ -255,16 +265,18 @@ class LocalSyncStore {
           _files.containsKey(config.url)) {
         continue;
       }
+      final parts = _parts(data, r);
+      if (parts == null) continue;
       try {
-        final encoded = _encoded(data, r);
-        if (encoded == null) continue;
-        final input = File(config.url);
-        final stat = await input.stat();
-        if (_same(await input.readAsBytes(), _decode(encoded))) {
+        final stat = await File(config.url).stat();
+        final hash = r['fileHash']! as String;
+        final encoded = await _matching(parts, hash, config.url);
+        if (encoded != null) {
           _files[config.url] = (
             modified: stat.modified,
             size: stat.size,
             encoded: encoded,
+            hash: hash,
           );
         }
       } on Object {
@@ -273,16 +285,127 @@ class LocalSyncStore {
     }
   }
 
-  /// The verified encoded playlist of file source [r], or null.
-  static String? _encoded(SyncData data, Map<String, Object?> r) {
+  /// First link: a source or list here that matches an account record by
+  /// what it is now takes that record's ID, so the account copy applies
+  /// instead of a second copy being uploaded. Its own ID comes from what it
+  /// was at its first export, which matches nothing once a subscription
+  /// moved to a new address or a list was renamed since, or when another
+  /// platform's gzip encoded the same playlist file differently.
+  Future<void> link(SyncData remote) => db.transaction(() async {
+    await _load();
+    final before = Map.of(_ids);
+    final rows = await db.sourcesDao.all();
+    final open = _unheld(
+      remote,
+      'source',
+      _held('source', [for (final row in rows) row.id]),
+    );
+    final sources = <int, String?>{};
+    for (final row in rows) {
+      var sid = _ids['source:${row.id}'];
+      if (sid == null || !remote.containsKey('source:$sid')) {
+        final config = (await db.sourcesDao.configFor(row.id))!;
+        for (final r in open) {
+          if (r['kind'] == config.kind.name &&
+              r['username'] == config.username &&
+              await _sameSource(remote, r, config)) {
+            open.remove(r);
+            sid = _ids['source:${row.id}'] = r['source']! as String;
+            break;
+          }
+        }
+      }
+      sources[row.id] = sid;
+    }
+    final listRows = await db.select(db.channelLists).get();
+    final openLists = _unheld(
+      remote,
+      'list',
+      _held('list', [for (final row in listRows) row.id]),
+    );
+    for (final row in listRows) {
+      final lid = _ids['list:${row.id}'];
+      if (lid != null && remote.containsKey('list:$lid')) continue;
+      final name = row.name.toLowerCase();
+      final match = openLists
+          .where(
+            (r) =>
+                r['source'] == sources[row.sourceId] &&
+                (r['name']! as String).toLowerCase() == name,
+          )
+          .firstOrNull;
+      if (match == null) continue;
+      openLists.remove(match);
+      _ids['list:${row.id}'] = match['list']! as String;
+    }
+    if (!syncEqual(before, _ids)) await db.settingsDao.setJson(_idsKey, _ids);
+  });
+
+  /// Account records of [type] whose ID no row here holds, in their order.
+  static List<Map<String, Object?>> _unheld(
+    SyncData remote,
+    String type,
+    Set<String> held,
+  ) => [
+    for (final r in remote.values)
+      if (r['type'] == type && !held.contains(r[type])) r,
+  ]..sort((a, b) => (a['position']! as int).compareTo(b['position']! as int));
+
+  /// Whether account source [r] is the subscription or playlist [config].
+  Future<bool> _sameSource(
+    SyncData remote,
+    Map<String, Object?> r,
+    SourceConfig config,
+  ) async {
+    if (config.kind != SourceKind.m3uFile) return r['url'] == config.url;
+    if (_files[config.url]?.hash == r['fileHash']) return true;
+    final parts = _parts(remote, r);
+    if (parts == null) return false;
+    try {
+      final hash = r['fileHash']! as String;
+      return await _matching(parts, hash, config.url) != null;
+    } on Object {
+      return false;
+    }
+  }
+
+  /// The encoded chunks of file source [r], or null.
+  static List<String>? _parts(SyncData data, Map<String, Object?> r) {
     final count = r['fileParts'] as int;
     if (count < 1 || count > 200) return null;
-    final encoded = List.generate(
+    return List.generate(
       count,
       (i) => data['file:${r['source']}:$i']?['data'] as String? ?? '',
-    ).join();
-    return syncId(encoded) == r['fileHash'] ? encoded : null;
+    );
   }
+
+  /// The verified encoded playlist of file source [r], or null.
+  static String? _encoded(SyncData data, Map<String, Object?> r) {
+    final encoded = _parts(data, r)?.join();
+    return encoded != null && syncId(encoded) == r['fileHash'] ? encoded : null;
+  }
+
+  /// The playlist file at [path] as the account holds it, and its hash.
+  /// Off the UI isolate: a playlist may be 32 MB.
+  static Future<({String encoded, String hash})> _encodeFile(String path) =>
+      Isolate.run(() {
+        final encoded = base64Encode(gzip.encode(File(path).readAsBytesSync()));
+        return (encoded: encoded, hash: syncId(encoded));
+      });
+
+  /// The playlist [parts] joined, when they hash to [hash] and hold the
+  /// file at [path], or null. Off the UI isolate, like [_encodeFile].
+  static Future<String?> _matching(
+    List<String> parts,
+    String hash,
+    String path,
+  ) => Isolate.run(() {
+    final encoded = parts.join();
+    if (syncId(encoded) != hash) return null;
+    return _same(File(path).readAsBytesSync(), _decode(encoded))
+        ? encoded
+        : null;
+  });
 
   /// The folder [SourceRepository] imports playlists into and cleans up.
   static String _importDir(String root) =>
@@ -308,6 +431,7 @@ class LocalSyncStore {
   /// the source removes them.
   Future<String> _receive(
     String encoded,
+    String hash,
     String? current,
     String cloudId,
   ) async {
@@ -326,29 +450,37 @@ class LocalSyncStore {
       await folder.create(recursive: true);
       path =
           '${folder.path}${Platform.pathSeparator}'
-          'cloud-${syncId([cloudId, syncId(encoded)])}.m3u';
+          'cloud-${syncId([cloudId, hash])}.m3u';
       await File(path).writeAsBytes(bytes, flush: true);
     }
     final stat = await File(path!).stat();
-    _files[path] = (modified: stat.modified, size: stat.size, encoded: encoded);
+    _files[path] = (
+      modified: stat.modified,
+      size: stat.size,
+      encoded: encoded,
+      hash: hash,
+    );
     return path;
   }
 
   /// Applies only changed rows in one local transaction. Remote IDs never
   /// become database IDs. File sources are reconstructed in app-private storage.
-  Future<Set<int>> apply(SyncData target) async {
+  /// Returns the sources whose catalogue needs an import, and those whose
+  /// guide offset changed: their guides need a forced refresh.
+  Future<({Set<int> imports, Set<int> guides})> apply(SyncData target) async {
     final current = await export();
     final changed = syncChanges(current, target);
     final needImport = <int>{};
+    final guides = <int>{};
     try {
-      await _apply(target, current, changed, needImport);
+      await _apply(target, current, changed, needImport, guides);
     } on Object {
       // The rollback also removed rows created here: forget the cloud IDs
       // given to them, or a later local row would inherit one.
       _loaded = false;
       rethrow;
     }
-    return needImport;
+    return (imports: needImport, guides: guides);
   }
 
   Future<void> _apply(
@@ -356,6 +488,7 @@ class LocalSyncStore {
     SyncData current,
     Map<String, Map<String, Object?>?> changed,
     Set<int> needImport,
+    Set<int> guides,
   ) async {
     await db.transaction(() async {
       final sources = <String, int>{};
@@ -438,7 +571,12 @@ class LocalSyncStore {
             if (encoded == null) {
               throw const AccountException('INVALID_PLAYLIST');
             }
-            url = await _receive(encoded, oldFile, cloudId);
+            url = await _receive(
+              encoded,
+              r['fileHash']! as String,
+              oldFile,
+              cloudId,
+            );
           }
         }
         if (oldFile != null && oldFile != url) _replaced.add(oldFile);
@@ -470,6 +608,12 @@ class LocalSyncStore {
               old?.username != config.username ||
               old?.password != config.password) {
             needImport.add(id);
+          }
+          // Offsets apply at import (see `setSourceEpgOffset`): the guides
+          // download again in full instead of keeping the old shift.
+          if (old?.epgOffsetMin != config.epgOffsetMin) {
+            await db.epgDao.forgetGuideVersions(id);
+            guides.add(id);
           }
         }
         await (db.update(db.sources)..where((s) => s.id.equals(id!))).write(

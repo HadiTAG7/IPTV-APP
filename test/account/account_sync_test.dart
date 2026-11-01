@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:drift/drift.dart' show Value;
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iptv_player/account/account_controller.dart';
@@ -37,6 +38,26 @@ class DelayedVault extends MemoryVault {
 class BrokenVault extends MemoryVault {
   @override
   Future<String?> read() async => throw const FileSystemException('locked');
+}
+
+/// A secure storage whose writes (and reads, with [readHangs]) never
+/// return, like the Windows store retrying a file it cannot write.
+class HangingVault extends MemoryVault {
+  HangingVault({this.readHangs = false});
+  final bool readHangs;
+  @override
+  Future<String?> read() =>
+      readHangs ? Completer<String?>().future : super.read();
+  @override
+  Future<void> write(String? value) => Completer<void>().future;
+}
+
+/// A secure storage that reads but rejects every write, like a locked
+/// Linux keyring.
+class ReadOnlyVault extends MemoryVault {
+  @override
+  Future<void> write(String? value) async =>
+      throw PlatformException(code: 'Libsecret error', message: 'locked');
 }
 
 class Cloud {
@@ -86,8 +107,22 @@ class WindowsZlibStore extends LocalSyncStore {
 class FakeApi extends FirebaseAccountApi {
   FakeApi(this.cloud) : super(projectId: 'test', apiKey: 'test');
   final Cloud cloud;
+  int refreshes = 0;
   void check() {
     if (cloud.offline) throw const AccountException('NETWORK_ERROR');
+  }
+
+  @override
+  Future<AccountSession> refresh(AccountSession session) async {
+    check();
+    refreshes++;
+    return AccountSession(
+      uid: session.uid,
+      email: session.email,
+      idToken: 'token-$refreshes',
+      refreshToken: session.refreshToken,
+      expiresAt: DateTime.now().add(const Duration(hours: 1)),
+    );
   }
 
   String? get version => cloud.version == 0 ? null : '${cloud.version}';
@@ -835,7 +870,7 @@ void main() {
       // What an older Windows device uploads for the same playlist.
       final target = await WindowsZlibStore(phone).export();
       expect(syncChanges(local, target), isNotEmpty);
-      expect(await store.apply(target), isEmpty);
+      expect((await store.apply(target)).imports, isEmpty);
       expect((await phone.sourcesDao.configFor(id))!.url, file.path);
       expect(syncChanges(target, await store.export()), isEmpty);
     } finally {
@@ -1174,4 +1209,446 @@ void main() {
     expect(a.view.error, isNull);
     expect(a.view.busy, isFalse);
   });
+
+  /// A sign-in saved by an earlier run, expired when [expired].
+  String savedSession({bool expired = false}) => jsonEncode(
+    AccountSession(
+      uid: 'owner',
+      email: 'owner@example.test',
+      idToken: 'token',
+      refreshToken: 'refresh',
+      expiresAt: DateTime.now().add(
+        expired ? const Duration(minutes: -5) : const Duration(hours: 1),
+      ),
+    ).toJson(),
+  );
+
+  test('a sign-in the secure storage lost asks to sign in again, also after '
+      'the sign-in expired and the app restarted', () async {
+    final vault = MemoryVault();
+    a.dispose();
+    a = AccountController(db: phone, api: FakeApi(cloud), vault: vault);
+    await a.start();
+    expect(a.view.error, isNull, reason: 'never signed in');
+    await login(a);
+    a.dispose();
+    // Android resets an entry it can no longer decrypt: it reads as empty.
+    vault.value = null;
+    a = AccountController(db: phone, api: FakeApi(cloud), vault: vault);
+    await a.start();
+    expect(a.view.email, isNull);
+    expect(a.view.error, 'SESSION_EXPIRED');
+    // A failed attempt does not hide that the device needs a sign-in.
+    await expectLater(
+      a.authenticate('other@example.test', 'password'),
+      throwsA(isA<AccountException>()),
+    );
+    expect(a.view.error, 'SESSION_EXPIRED');
+    await login(a);
+    expect(a.view.error, isNull);
+    a.dispose();
+    a = AccountController(db: phone, api: FakeApi(cloud), vault: vault);
+    await a.start();
+    expect(a.view.email, 'owner@example.test');
+    expect(a.view.error, isNull);
+    await a.signOut();
+    a.dispose();
+    a = AccountController(db: phone, api: FakeApi(cloud), vault: vault);
+    await a.start();
+    expect(a.view.error, isNull, reason: 'signed out on purpose');
+  });
+
+  test(
+    'a sign-in saved by v0.1.7 is restored, and asks again once lost',
+    () async {
+      final vault = MemoryVault()..value = savedSession();
+      await phone.settingsDao.setString(AccountController.bindingKey, 'owner');
+      a.dispose();
+      a = AccountController(db: phone, api: FakeApi(cloud), vault: vault);
+      await a.start();
+      expect(a.view.email, 'owner@example.test');
+      a.dispose();
+      vault.value = null;
+      a = AccountController(db: phone, api: FakeApi(cloud), vault: vault);
+      await a.start();
+      expect(a.view.error, 'SESSION_EXPIRED');
+    },
+  );
+
+  test('a secure storage that stops answering cannot freeze sign-in, sync '
+      'or sign-out', () async {
+    const limit = Duration(milliseconds: 200);
+    a.dispose();
+    a = AccountController(
+      db: phone,
+      api: FakeApi(cloud),
+      vault: HangingVault(),
+      vaultTimeout: limit,
+    );
+    await a.start();
+    await expectLater(
+      a.authenticate('owner@example.test', 'sample-password'),
+      throwsA(
+        isA<AccountException>().having(
+          (e) => e.code,
+          'code',
+          'SESSION_STORAGE',
+        ),
+      ),
+    );
+    expect(a.view.busy, isFalse);
+    // A saved sign-in whose refreshed token cannot be saved keeps syncing.
+    await seed(phone);
+    await phone.settingsDao.setString(AccountController.bindingKey, 'owner');
+    a.dispose();
+    final api = FakeApi(cloud);
+    a = AccountController(
+      db: phone,
+      api: api,
+      vault: HangingVault()..value = savedSession(expired: true),
+      vaultTimeout: limit,
+    );
+    await a.start();
+    await a.sync(force: true);
+    expect(a.view.busy, isFalse);
+    expect(a.view.error, isNull);
+    expect(api.refreshes, 1);
+    expect(cloud.data.values.where((r) => r['type'] == 'source'), hasLength(1));
+    await a.signOut().timeout(const Duration(seconds: 2));
+    expect(a.view.email, isNull);
+    // A read that never returns explains the sign-in form, and signing in
+    // does not wait for it forever.
+    a.dispose();
+    a = AccountController(
+      db: phone,
+      api: FakeApi(cloud),
+      vault: HangingVault(readHangs: true),
+      vaultTimeout: limit,
+    );
+    await a.start();
+    expect(a.view.error, 'SESSION_STORAGE');
+    await expectLater(
+      a
+          .authenticate('owner@example.test', 'sample-password')
+          .timeout(const Duration(seconds: 2)),
+      throwsA(isA<AccountException>()),
+    );
+  });
+
+  test('a secure storage that rejects writes still signs out, also after a '
+      'restart, and syncs on a refreshed token it cannot save', () async {
+    await seed(phone);
+    await phone.settingsDao.setString(AccountController.bindingKey, 'owner');
+    final vault = ReadOnlyVault()..value = savedSession(expired: true);
+    final api = FakeApi(cloud);
+    a.dispose();
+    a = AccountController(db: phone, api: api, vault: vault);
+    await a.start();
+    for (var i = 0; i < 3; i++) {
+      await a.sync(force: true);
+    }
+    expect(a.view.error, isNull);
+    expect(api.refreshes, 1);
+    expect(cloud.data.values.where((r) => r['type'] == 'source'), hasLength(1));
+    await a.signOut();
+    expect(a.view.email, isNull);
+    expect(a.view.error, isNull);
+    final reads = cloud.reads;
+    await a.sync(force: true);
+    expect(cloud.reads, reads);
+    // The stored sign-in could not be deleted, yet the device stays signed
+    // out.
+    expect(vault.value, isNotNull);
+    a.dispose();
+    a = AccountController(db: phone, api: api, vault: vault);
+    await a.start();
+    expect(a.view.email, isNull);
+    expect(a.view.error, isNull);
+  });
+
+  test('a subscription moved and a list renamed after their first upload '
+      'merge when another device links', () async {
+    final id = await phone.sourcesDao.create(
+      const SourceConfig(
+        kind: SourceKind.xtream,
+        name: 'Sports',
+        url: 'https://old-dns.example',
+        username: 'sample',
+        password: 'private-password',
+      ),
+    );
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', true);
+    final list = await phone.channelListsDao.createList(
+      id,
+      'Sports',
+      channels: ['one'],
+    );
+    await login(a);
+    final old = (await phone.sourcesDao.configFor(id))!;
+    await phone.sourcesDao.updateConfig(
+      id,
+      old.copyWith(url: 'https://new-dns.example'),
+    );
+    await phone.channelListsDao.renameList(list, 'Football');
+    await a.sync();
+    // The TV already holds the subscription at its new address, and a
+    // list of that name.
+    final tid = await tv.sourcesDao.create(
+      const SourceConfig(
+        kind: SourceKind.xtream,
+        name: 'Sports',
+        url: 'https://new-dns.example',
+        username: 'sample',
+        password: 'private-password',
+      ),
+    );
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'two', true);
+    await tv.channelListsDao.createList(tid, 'Football', channels: ['two']);
+    await login(b);
+    await a.sync();
+    expect((await tv.sourcesDao.all()).single.id, tid);
+    expect(
+      (await tv.favoritesDao.favoriteKeys(tid, ContentKind.live)).toSet(),
+      {'one', 'two'},
+    );
+    expect(await describeLists(tv, tid), ['Football=one,two']);
+    expect((await phone.sourcesDao.all()).single.id, id);
+    expect(await describeLists(phone, id), ['Football=one,two']);
+  });
+
+  test('the same playlist file from a Windows and an Android device merges '
+      'at first link', () async {
+    final temp = await Directory.systemTemp.createTemp('iptv-sync-test-');
+    try {
+      const playlist =
+          '#EXTM3U\n#EXTINF:-1,Sample\nhttps://provider.example/live.ts\n';
+      final pc = File('${temp.path}/pc.m3u')..writeAsStringSync(playlist);
+      final box = File('${temp.path}/tv.m3u')..writeAsStringSync(playlist);
+      final pid = await phone.sourcesDao.create(
+        SourceConfig(kind: SourceKind.m3uFile, url: pc.path, name: 'Home'),
+      );
+      final tid = await tv.sourcesDao.create(
+        SourceConfig(kind: SourceKind.m3uFile, url: box.path, name: 'Home'),
+      );
+      await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'tv', true);
+      // The ID the Windows build derives from its own gzip header.
+      await phone.settingsDao.setJson('account_sync_ids_v1', {
+        'source:$pid': syncId([
+          'm3uFile',
+          base64Encode(gzip.encode(utf8.encode(playlist))..[9] = 10),
+          null,
+        ]),
+      });
+      a.dispose();
+      b.dispose();
+      a = AccountController(
+        db: phone,
+        api: FakeApi(cloud),
+        vault: MemoryVault(),
+        local: WindowsZlibStore(phone),
+      );
+      b = AccountController(
+        db: tv,
+        api: FakeApi(cloud),
+        vault: MemoryVault(),
+        local: LocalSyncStore(
+          tv,
+          directory: () async => Directory('${temp.path}/tv'),
+        ),
+      );
+      await login(a);
+      await login(b);
+      await a.sync();
+      expect(await phone.sourcesDao.all(), hasLength(1));
+      expect((await tv.sourcesDao.all()).single.id, tid);
+      expect((await tv.sourcesDao.configFor(tid))!.url, box.path);
+      expect(await phone.favoritesDao.favoriteKeys(pid, ContentKind.live), [
+        'tv',
+      ]);
+    } finally {
+      await temp.delete(recursive: true);
+    }
+  });
+
+  test('first sign-in keeps a subscription deleted elsewhere while this '
+      'device has its own lists, favourites or progress in it', () async {
+    final id = await seed(phone);
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'shared', true);
+    await login(a);
+    await phone.sourcesDao.deleteSource(id);
+    await a.sync();
+    // An upgraded TV that never signed in, with data of its own.
+    final tid = await seed(tv);
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'shared', true);
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'tv-only', true);
+    await tv.channelListsDao.createList(tid, 'Kids', channels: ['cartoons']);
+    await tv.progressDao.saveProgress(
+      tid,
+      PlayableKind.movie,
+      'film',
+      900000,
+      7200000,
+    );
+    await login(b);
+    expect(b.view.error, isNull);
+    expect((await tv.sourcesDao.all()).single.id, tid);
+    expect((await tv.sourcesDao.configFor(tid))!.password, 'private-password');
+    // What was deleted with it elsewhere stays deleted.
+    expect(await tv.favoritesDao.favoriteKeys(tid, ContentKind.live), [
+      'tv-only',
+    ]);
+    expect(await describeLists(tv, tid), ['Kids=cartoons']);
+    expect(
+      await tv.progressDao.progressFor(tid, PlayableKind.movie, 'film'),
+      isNotNull,
+    );
+    await a.sync();
+    final back = (await phone.sourcesDao.all()).single.id;
+    expect(await describeLists(phone, back), ['Kids=cartoons']);
+  });
+
+  test('first sign-in still removes a subscription deleted elsewhere when '
+      'this device has nothing of its own in it', () async {
+    final id = await seed(phone);
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'shared', true);
+    await login(a);
+    await phone.sourcesDao.deleteSource(id);
+    await a.sync();
+    final tid = await seed(tv);
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'shared', true);
+    await tv.recentDao.markRecent(tid, 'shared');
+    await login(b);
+    expect(b.view.error, isNull);
+    expect(await tv.sourcesDao.all(), isEmpty);
+  });
+
+  test('a guide offset received from the account downloads the guides '
+      'again', () async {
+    final refreshed = <int>{};
+    b.dispose();
+    b = AccountController(
+      db: tv,
+      api: FakeApi(cloud),
+      vault: MemoryVault(),
+      onGuideOffset: refreshed.addAll,
+    );
+    final id = await seed(phone);
+    await login(a);
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    final guide = await tv.epgDao.addEpgSource(
+      tid,
+      'https://provider.example/xmltv.php',
+      EpgOrigin.xtream,
+    );
+    await (tv.update(tv.epgSources)..where((e) => e.id.equals(guide))).write(
+      const EpgSourcesCompanion(
+        etag: Value('"v1"'),
+        lastModified: Value('Sat, 31 Oct 2026 00:00:00 GMT'),
+        lastFetchAt: Value(1793404800),
+      ),
+    );
+    final old = (await phone.sourcesDao.configFor(id))!;
+    await phone.sourcesDao.updateConfig(id, old.copyWith(epgOffsetMin: 60));
+    await a.sync();
+    await b.sync();
+    expect((await tv.sourcesDao.byId(tid))!.epgOffsetMin, 60);
+    final row = await (tv.select(
+      tv.epgSources,
+    )..where((e) => e.id.equals(guide))).getSingle();
+    expect(row.etag, isNull);
+    expect(row.lastModified, isNull);
+    expect(row.lastFetchAt, isNull);
+    expect(refreshed, {tid});
+  });
+
+  test('an unfocused window keeps syncing, and hiding it uploads playback '
+      'at once', () async {
+    final id = await startPlayback(const Duration(hours: 1));
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    a.didChangeAppLifecycleState(AppLifecycleState.inactive);
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'news', true);
+    await b.sync();
+    // The 30 s poll.
+    await a.sync();
+    expect(await phone.favoritesDao.favoriteKeys(id, ContentKind.live), [
+      'news',
+    ]);
+    await checkpoint(id, 600000);
+    await a.sync();
+    expect(uploadedPosition(), isNull, reason: 'batched while watching');
+    a.didChangeAppLifecycleState(AppLifecycleState.hidden);
+    await until(() => uploadedPosition() == 600000);
+  });
+
+  test('returning to the app checks the account revision instead of '
+      'reading the whole account', () async {
+    await startPlayback(const Duration(hours: 1));
+    final reads = cloud.reads;
+    for (var i = 0; i < 3; i++) {
+      // Focus moving to another window and back.
+      a.didChangeAppLifecycleState(AppLifecycleState.inactive);
+      a.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      // Backgrounded and back.
+      a.didChangeAppLifecycleState(AppLifecycleState.hidden);
+      a.didChangeAppLifecycleState(AppLifecycleState.paused);
+      a.didChangeAppLifecycleState(AppLifecycleState.hidden);
+      a.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await a.sync();
+    }
+    expect(cloud.reads, reads);
+    expect(a.view.error, isNull);
+  });
+
+  test('a favourite whose upload failed during playback goes with the next '
+      'poll', () async {
+    final id = await startPlayback(const Duration(hours: 1));
+    cloud.offline = true;
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'fav', true);
+    await until(() => a.view.error == 'NETWORK_ERROR');
+    // A progress checkpoint while the connection is still down.
+    await checkpoint(id, 10000);
+    cloud.offline = false;
+    await a.sync();
+    expect(cloud.data.values.any((r) => r['key'] == 'fav'), isTrue);
+  });
+
+  test(
+    'unchanged polls neither export this device nor read the account',
+    () async {
+      final local = CountingStore(phone);
+      a.dispose();
+      a = AccountController(
+        db: phone,
+        api: FakeApi(cloud),
+        vault: MemoryVault(),
+        local: local,
+      );
+      final id = await seed(phone);
+      await login(a);
+      await a.start();
+      final exports = local.exports;
+      final reads = cloud.reads;
+      for (var i = 0; i < 3; i++) {
+        await a.sync();
+      }
+      expect(local.exports, exports);
+      expect(cloud.reads, reads);
+      // A change is still seen.
+      await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', true);
+      await until(() => cloud.data.values.any((r) => r['key'] == 'one'));
+    },
+  );
+}
+
+/// Counts exports of this device's account data.
+class CountingStore extends LocalSyncStore {
+  CountingStore(super.db);
+  int exports = 0;
+  @override
+  Future<SyncData> export() {
+    exports++;
+    return super.export();
+  }
 }

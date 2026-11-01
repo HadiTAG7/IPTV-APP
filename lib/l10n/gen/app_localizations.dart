@@ -1490,6 +1490,12 @@ abstract class AppLocalizations {
   /// **'Delete “⁨{name}⁩”? Its channels, favorites and watch progress will be removed from this device.'**
   String settingsDeleteSourceConfirm(String name);
 
+  /// Shown instead of settingsDeleteSourceConfirm on a device linked to an account, where a deletion syncs. {name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete “⁨{name}⁩”? Its channels, favorites, lists and watch progress will be removed from this device and from your other devices that use your account.'**
+  String settingsDeleteSourceConfirmSynced(String name);
+
   /// No description provided for @settingsSetActive.
   ///
   /// In en, this message translates to:
@@ -2585,7 +2591,7 @@ abstract class AppLocalizations {
   /// No description provided for @accountIntro.
   ///
   /// In en, this message translates to:
-  /// **'Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favourites and viewing progress sync automatically. Your existing data is merged when you sign in.'**
+  /// **'Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favourites, viewing progress and language settings sync automatically. Your existing data is merged when you sign in.'**
   String get accountIntro;
 
   /// No description provided for @accountEmail.
@@ -2755,6 +2761,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Your sign-in has expired. Sign in again to resume sync; your data on this device is safe.'**
   String get accountSessionExpired;
+
+  /// Value of the Account & sync row in Settings after the sign-in expired.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in again'**
+  String get accountSignInAgain;
 
   /// Button in the programme info of the guide: plays the programme's channel live.
   ///

@@ -853,6 +853,11 @@ class AppLocalizationsAr extends AppLocalizations {
   }
 
   @override
+  String settingsDeleteSourceConfirmSynced(String name) {
+    return 'هل تريد حذف «⁨$name⁩»؟ ستُحذف قنواته ومفضلته وقوائمه وسجل المشاهدة من هذا الجهاز ومن أجهزتك الأخرى المرتبطة بحسابك.';
+  }
+
+  @override
   String get settingsSetActive => 'تعيين كمصدر نشط';
 
   @override
@@ -1525,7 +1530,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get accountIntro =>
-      'استخدم الحساب نفسه على الجوال والتلفزيون وويندوز. تتزامن الاشتراكات وبيانات دخولها والقوائم وترتيب القنوات والمفضلة ومتابعة المشاهدة تلقائيًا. تُدمج بياناتك الحالية عند تسجيل الدخول.';
+      'استخدم الحساب نفسه على الجوال والتلفزيون وويندوز. تتزامن الاشتراكات وبيانات دخولها والقوائم وترتيب القنوات والمفضلة ومتابعة المشاهدة وإعدادات اللغة تلقائيًا. تُدمج بياناتك الحالية عند تسجيل الدخول.';
 
   @override
   String get accountEmail => 'البريد الإلكتروني';
@@ -1621,6 +1626,9 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get accountSessionExpired =>
       'انتهت صلاحية تسجيل الدخول. سجّل الدخول مجددًا لاستئناف المزامنة؛ بياناتك على هذا الجهاز محفوظة.';
+
+  @override
+  String get accountSignInAgain => 'سجّل الدخول مجددًا';
 
   @override
   String get guideWatchChannel => 'مشاهدة القناة';

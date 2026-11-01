@@ -536,6 +536,15 @@
       }
     }
   },
+  "settingsDeleteSourceConfirmSynced": "Delete “⁨{name}⁩”? Its channels, favorites, lists and watch progress will be removed from this device and from your other devices that use your account.",
+  "@settingsDeleteSourceConfirmSynced": {
+    "description": "Shown instead of settingsDeleteSourceConfirm on a device linked to an account, where a deletion syncs. {name} is wrapped in U+2068/U+2069 (first-strong isolate) so text in either script keeps its own direction.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "settingsSetActive": "Set active",
   "settingsActive": "Active",
   "settingsAccountExpires": "Account expires {date}",
@@ -970,7 +979,7 @@
     }
   },
   "accountTitle": "Account & sync",
-  "accountIntro": "Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favourites and viewing progress sync automatically. Your existing data is merged when you sign in.",
+  "accountIntro": "Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favourites, viewing progress and language settings sync automatically. Your existing data is merged when you sign in.",
   "accountEmail": "Email",
   "accountPassword": "Password",
   "accountConfirmPassword": "Confirm password",
@@ -999,6 +1008,10 @@
   "accountTooManyAttempts": "Too many attempts. Wait a few minutes or reset your password.",
   "accountServiceUnavailable": "Cannot reach the account service. Check your connection and try again.",
   "accountSessionExpired": "Your sign-in has expired. Sign in again to resume sync; your data on this device is safe.",
+  "accountSignInAgain": "Sign in again",
+  "@accountSignInAgain": {
+    "description": "Value of the Account & sync row in Settings after the sign-in expired."
+  },
   "guideWatchChannel": "Watch channel",
   "@guideWatchChannel": {
     "description": "Button in the programme info of the guide: plays the programme's channel live."

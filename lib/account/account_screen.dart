@@ -58,6 +58,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
   String? _error;
   String? _message;
 
+  /// The feedback last shown, to notice when it changes.
+  (String?, String?) _shown = (null, null);
+
   @override
   void dispose() {
     _email.dispose();
@@ -68,6 +71,27 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
 
   bool get _validEmail =>
       RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(_email.text.trim());
+
+  /// Feedback appears above the buttons after the one pressed, so a focused
+  /// button there moves down: scroll it back into view, as nothing else
+  /// does while the focus stays put.
+  void _keepFocusVisible() {
+    if (!mounted ||
+        FocusManager.instance.highlightMode != FocusHighlightMode.traditional) {
+      return;
+    }
+    final focused = FocusManager.instance.primaryFocus?.context;
+    if (focused == null || !focused.mounted) return;
+    if (Scrollable.maybeOf(focused) == null) return;
+    unawaited(
+      Scrollable.ensureVisible(
+        focused,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+        duration: FocusTokens.scrollOf(context),
+        curve: Curves.easeOutCubic,
+      ),
+    );
+  }
 
   Future<void> _run(Future<void> Function() action) async {
     if (_busy) return;
@@ -112,6 +136,10 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     final busy = _busy || account.busy;
     final error = _error ?? account.error;
     final tv = FormFactorScope.isTv(context);
+    if ((error, _message) != _shown) {
+      _shown = (error, _message);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _keepFocusVisible());
+    }
     // Right under the button just pressed: on a TV the remote cannot scroll
     // to text below the last control.
     final feedback = [
@@ -303,6 +331,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                         ),
                         const SizedBox(height: Spacing.sm),
                         TvButton(
+                          key: const ValueKey('account-sign-out'),
                           label: l.accountSignOut,
                           busy: busy,
                           onSelect: () => unawaited(

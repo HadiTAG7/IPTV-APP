@@ -7,17 +7,28 @@ typedef SyncData = Map<String, Map<String, Object?>>;
 String syncId(Object value) =>
     sha256.convert(utf8.encode(jsonEncode(value))).toString();
 
-Object? _canonical(Object? value) {
-  if (value is Map) {
-    final keys = value.keys.cast<String>().toList()..sort();
-    return {for (final key in keys) key: _canonical(value[key])};
+/// Whether two JSON values hold the same data, whatever their key order.
+/// Compared in place: encoding every playlist chunk on each sync is costly.
+bool syncEqual(Object? a, Object? b) {
+  if (identical(a, b)) return true;
+  if (a is Map && b is Map) {
+    if (a.length != b.length) return false;
+    for (final e in a.entries) {
+      if (!b.containsKey(e.key) || !syncEqual(e.value, b[e.key])) {
+        return false;
+      }
+    }
+    return true;
   }
-  if (value is List) return value.map(_canonical).toList();
-  return value;
+  if (a is List && b is List) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!syncEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  return a == b;
 }
-
-bool syncEqual(Object? a, Object? b) =>
-    jsonEncode(_canonical(a)) == jsonEncode(_canonical(b));
 
 /// Missing keys are explicit deletions. Records, rather than whole device
 /// snapshots, are merged, so an offline favourite never erases another list.
@@ -62,6 +73,11 @@ SyncData decodeSyncData(Object? value) => value is Map
 /// First-link reconciliation: the account owns existing choices. New local
 /// entries append in their local order, rather than colliding with position 0
 /// in a cloud list and unexpectedly rearranging that list.
+///
+/// A source or list deleted on another device still comes back when this
+/// device holds favourites, lists, list entries or viewing progress of its
+/// own in it: dropping it would delete those here, and the account holds no
+/// copy of them. Its children deleted elsewhere stay deleted.
 Map<String, Map<String, Object?>?> initialSyncChanges(
   SyncData remote,
   Set<String> deleted,
@@ -73,6 +89,32 @@ Map<String, Map<String, Object?>?> initialSyncChanges(
           deleted.contains(key) ||
           (remote.containsKey(key) && value?['type'] != 'progress'),
     );
+  void revive(String key) {
+    final row = local[key];
+    if (row == null || !deleted.contains(key) || changes.containsKey(key)) {
+      return;
+    }
+    changes[key] = row;
+    if (row['type'] == 'list') revive('source:${row['source']}');
+    // A playlist file comes back with its chunks.
+    if (row['type'] == 'source') {
+      for (final e in local.entries) {
+        if (e.value['type'] == 'file' && e.value['source'] == row['source']) {
+          changes[e.key] = e.value;
+        }
+      }
+    }
+  }
+
+  for (final e in local.entries) {
+    if (remote.containsKey(e.key) || deleted.contains(e.key)) continue;
+    switch (e.value['type']) {
+      case 'favorite' || 'progress' || 'list':
+        revive('source:${e.value['source']}');
+      case 'item':
+        revive('list:${e.value['list']}');
+    }
+  }
   String? group(Map<String, Object?> row) => switch (row['type']) {
     'source' => 'sources',
     'list' => jsonEncode(['lists', row['source']]),

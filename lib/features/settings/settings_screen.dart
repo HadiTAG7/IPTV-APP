@@ -258,7 +258,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         large: large,
         icon: Icons.account_circle_outlined,
         title: l10n.accountTitle,
-        value: ref.watch(accountViewProvider).value?.email,
+        value: _accountValue(l10n, ref.watch(accountViewProvider).value),
         onSelect: () => unawaited(openAccountScreen(context)),
       ),
       SettingsTile(
@@ -700,6 +700,13 @@ class _Note extends StatelessWidget {
     );
   }
 }
+
+/// The signed-in email; after an expired sign-in, a request to sign in
+/// again, since a TV user rarely opens the account screen to see why sync
+/// stopped.
+String? _accountValue(AppLocalizations l10n, AccountView? view) =>
+    view?.email ??
+    (view?.error == 'SESSION_EXPIRED' ? l10n.accountSignInAgain : null);
 
 String _localeLabel(AppLocalizations l10n, AppLocaleSetting v) => switch (v) {
   AppLocaleSetting.auto => l10n.languageAuto,

@@ -13,12 +13,17 @@ import 'package:iptv_player/account/account_screen.dart';
 import 'package:iptv_player/account/firebase_api.dart';
 import 'package:iptv_player/app/form_factor.dart';
 import 'package:iptv_player/core/db/app_db.dart';
+import 'package:iptv_player/features/sources/sources_screen.dart';
+import 'package:iptv_player/features/sources/widgets/tv_buttons.dart';
 import 'package:iptv_player/l10n/gen/app_localizations.dart';
+import 'package:iptv_player/sources/models.dart';
 import 'package:iptv_player/theme/app_theme.dart';
+import 'package:iptv_player/tv/dpad_shortcuts.dart';
 import 'package:iptv_player/tv/tv_text_field.dart';
 
 import '../support/text_entry.dart';
 import '../unit/db/db_test_utils.dart';
+import 'account_sync_test.dart' show Cloud, FakeApi;
 
 /// Signing in fails with [code]; a password reset fails with it when set.
 class FailingApi extends FirebaseAccountApi {
@@ -46,6 +51,13 @@ class MemoryVault implements SessionVault {
   Future<String?> read() async => value;
   @override
   Future<void> write(String? value) async => this.value = value;
+}
+
+/// Signs in, syncs and sends password resets locally.
+class LocalApi extends FakeApi {
+  LocalApi(super.cloud);
+  @override
+  Future<void> resetPassword(String email) async {}
 }
 
 void main() {
@@ -308,6 +320,127 @@ void main() {
       await tapKey(tester, 'account-reset');
       expect(find.text(l.accountInvalidEmail), findsOneWidget);
       expect(api.resets, 1);
+    });
+
+    testWidgets('$lang TV: feedback above the focused button keeps that '
+        'button in view', (tester) async {
+      applyFocusHighlightStrategy(tv: true);
+      addTearDown(() => applyFocusHighlightStrategy(tv: false));
+      final db = openTestDb();
+      addTearDown(db.close);
+      await db.sourcesDao.create(
+        const SourceConfig(
+          kind: SourceKind.xtream,
+          name: 'Sports',
+          url: 'https://provider.example',
+          username: 'sample',
+          password: 'private-password',
+        ),
+      );
+      final cloud = Cloud();
+      late AccountController account;
+      final l = await pumpAccount(
+        tester,
+        lang: lang,
+        tv: true,
+        size: const Size(960, 540),
+        account: accountControllerProvider.overrideWith((ref) {
+          account = AccountController(
+            db: db,
+            api: LocalApi(cloud),
+            vault: MemoryVault(),
+          );
+          ref.onDispose(account.dispose);
+          return account;
+        }),
+      );
+      Future<void> focus(String key) async {
+        Focus.of(
+          tester.element(
+            find
+                .descendant(
+                  of: find.byKey(ValueKey(key)),
+                  matching: find.byType(Text),
+                )
+                .first,
+          ),
+        ).requestFocus();
+        await tester.pumpAndSettle();
+      }
+
+      void expectInView(String key) {
+        final viewport = tester.getRect(find.byType(SingleChildScrollView));
+        final button = tester.getRect(find.byKey(ValueKey(key)));
+        expect(button.bottom, lessThanOrEqualTo(viewport.bottom + 0.5));
+        expect(
+          FocusManager.instance.primaryFocus?.context
+              ?.findAncestorWidgetOfExactType<TvButton>()
+              ?.key,
+          ValueKey(key),
+        );
+      }
+
+      // The reset confirmation shows above Reset password.
+      await typeText(
+        tester,
+        find.byKey(const ValueKey('account-email')),
+        'viewer@example.test',
+      );
+      await focus('account-reset');
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text(l.accountResetSent), findsOneWidget);
+      expectInView('account-reset');
+      // A failed poll shows its error above Sign out.
+      await tester.runAsync(
+        () => account.authenticate('viewer@example.test', 'sample-password'),
+      );
+      await tester.pumpAndSettle();
+      await focus('account-sign-out');
+      cloud.offline = true;
+      await tester.runAsync(() => account.sync(force: true));
+      await tester.pumpAndSettle();
+      expect(find.text(l.accountSyncFailed), findsOneWidget);
+      expectInView('account-sign-out');
+    });
+
+    testWidgets('$lang: deleting a source on a device linked to an account '
+        'says the other devices lose it too', (tester) async {
+      final l = lookupAppLocalizations(Locale(lang));
+      for (final (i, (account, synced)) in [
+        (const AccountView(), false),
+        (const AccountView(email: 'viewer@example.test', linked: true), true),
+        // Signed out: the deletion still syncs at the next sign-in.
+        (const AccountView(linked: true), true),
+      ].indexed) {
+        await tester.pumpWidget(
+          ProviderScope(
+            key: ValueKey(i),
+            overrides: [view(account)],
+            child: MaterialApp(
+              locale: Locale(lang),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: const Scaffold(body: DeleteSourceDialog(name: 'Home')),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.text(
+            synced
+                ? l.settingsDeleteSourceConfirmSynced('Home')
+                : l.settingsDeleteSourceConfirm('Home'),
+          ),
+          findsOneWidget,
+          reason: '$i',
+        );
+      }
+    });
+
+    test('$lang: the account intro says language settings sync', () {
+      final l = lookupAppLocalizations(Locale(lang));
+      expect(l.accountIntro, contains(lang == 'ar' ? 'اللغة' : 'language'));
     });
 
     testWidgets('$lang phone: an expired sign-in explains the sign-in form', (

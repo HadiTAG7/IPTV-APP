@@ -832,6 +832,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String settingsDeleteSourceConfirmSynced(String name) {
+    return 'Delete “⁨$name⁩”? Its channels, favorites, lists and watch progress will be removed from this device and from your other devices that use your account.';
+  }
+
+  @override
   String get settingsSetActive => 'Set active';
 
   @override
@@ -1494,7 +1499,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get accountIntro =>
-      'Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favourites and viewing progress sync automatically. Your existing data is merged when you sign in.';
+      'Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favourites, viewing progress and language settings sync automatically. Your existing data is merged when you sign in.';
 
   @override
   String get accountEmail => 'Email';
@@ -1592,6 +1597,9 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get accountSessionExpired =>
       'Your sign-in has expired. Sign in again to resume sync; your data on this device is safe.';
+
+  @override
+  String get accountSignInAgain => 'Sign in again';
 
   @override
   String get guideWatchChannel => 'Watch channel';
