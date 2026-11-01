@@ -23,7 +23,8 @@ import 'package:iptv_player/tv/tv_text_field.dart';
 
 import '../support/text_entry.dart';
 import '../unit/db/db_test_utils.dart';
-import 'account_sync_test.dart' show Cloud, CountingApi, FakeApi;
+import 'account_sync_test.dart'
+    show Cloud, CountingApi, EmailAccountsApi, FakeApi;
 
 /// Signing in fails with [code]; a password reset fails with it when set.
 class FailingApi extends FirebaseAccountApi {
@@ -628,17 +629,87 @@ void main() {
       });
     });
 
-    testWidgets('$lang phone: Create account with the email this device '
-        'belongs to says to sign in, and offers no switch', (tester) async {
+    for (final earlier in [false, true]) {
+      testWidgets('$lang phone: Create account with the email this device '
+          'belongs to says to sign in, and offers no switch'
+          '${earlier ? ', also when an earlier version linked it' : ''}', (
+        tester,
+      ) async {
+        final db = openTestDb();
+        addTearDown(db.close);
+        final api = CountingApi(Cloud())..taken.add('owner@example.test');
+        await tester.runAsync(() async {
+          final first = AccountController(
+            db: db,
+            api: api,
+            vault: MemoryVault(),
+          );
+          await first.authenticate('owner@example.test', 'sample-password');
+          await first.signOut();
+          first.dispose();
+          // v0.1.7 and v0.1.8 kept no email.
+          if (earlier) {
+            await db.settingsDao.remove(AccountController.ownerEmailKey);
+          }
+        });
+        late AccountController account;
+        final l = await pumpAccount(
+          tester,
+          lang: lang,
+          tv: false,
+          account: accountControllerProvider.overrideWith((ref) {
+            account = AccountController(db: db, api: api, vault: MemoryVault());
+            ref.onDispose(account.dispose);
+            return account;
+          }),
+        );
+        await tapKey(tester, 'account-toggle');
+        for (final (key, text) in [
+          ('account-email', 'owner@example.test'),
+          ('account-password', 'sample-password'),
+          ('account-confirm', 'sample-password'),
+        ]) {
+          await typeText(tester, find.byKey(ValueKey(key)), text);
+        }
+        await tester.pumpAndSettle();
+        await tapKey(tester, 'account-submit');
+        await work(tester);
+        expect(find.text(l.accountExists), findsOneWidget);
+        expect(find.byKey(const ValueKey('account-switch')), findsNothing);
+        expect(api.signUps, 1);
+        expect(account.view.email, isNull);
+        await tester.runAsync(() async {
+          expect(
+            await db.settingsDao.getString(AccountController.bindingKey),
+            'owner',
+          );
+          expect(
+            await db.settingsDao.getString(AccountController.ownerEmailKey),
+            earlier ? isNull : 'owner@example.test',
+          );
+        });
+      });
+    }
+
+    testWidgets('$lang phone: switching to the account a refused Create '
+        'account made moves this device to it without creating it again', (
+      tester,
+    ) async {
       final db = openTestDb();
       addTearDown(db.close);
-      final api = CountingApi(Cloud())..taken.add('owner@example.test');
+      final api = EmailAccountsApi();
       await tester.runAsync(() async {
         final first = AccountController(db: db, api: api, vault: MemoryVault());
-        await first.authenticate('owner@example.test', 'sample-password');
+        await first.authenticate(
+          'owner@example.test',
+          'sample-password',
+          create: true,
+        );
         await first.signOut();
         first.dispose();
       });
+      // Deleted in the console: a new account can take the email.
+      api.uids.remove('owner@example.test');
       late AccountController account;
       final l = await pumpAccount(
         tester,
@@ -661,15 +732,101 @@ void main() {
       await tester.pumpAndSettle();
       await tapKey(tester, 'account-submit');
       await work(tester);
+      expect(api.signUps, 2);
+      // Not named: the account entered has its email now.
+      expect(find.text(l.accountOtherOwner), findsOneWidget);
+      await tapKey(tester, 'account-switch');
+      expect(find.text(l.accountSwitchBodyUnnamed), findsOneWidget);
+      await tapKey(tester, 'account-switch-confirm');
+      await work(tester);
+      expect(find.text(l.accountExists), findsNothing);
+      expect(api.signUps, 2);
+      expect(account.view.email, 'owner@example.test');
+      expect(account.view.error, isNull);
+      expect(find.byKey(const ValueKey('account-sync')), findsOneWidget);
+    });
+
+    testWidgets('$lang TV: a switch the account service refuses says why '
+        'under the focused button and leaves this device as it was', (
+      tester,
+    ) async {
+      applyFocusHighlightStrategy(tv: true);
+      addTearDown(() => applyFocusHighlightStrategy(tv: false));
+      final db = openTestDb();
+      addTearDown(db.close);
+      final api = EmailAccountsApi();
+      await tester.runAsync(() async {
+        await db.sourcesDao.create(
+          const SourceConfig(
+            kind: SourceKind.xtream,
+            name: 'Sports',
+            url: 'https://provider.example',
+            username: 'sample',
+            password: 'private-password',
+          ),
+        );
+        final first = AccountController(db: db, api: api, vault: MemoryVault());
+        await first.authenticate(
+          'owner@example.test',
+          'sample-password',
+          create: true,
+        );
+        await first.signOut();
+        first.dispose();
+      });
+      // The account's email changed since this device learnt it.
+      api.uids['renamed@example.test'] = api.uids.remove('owner@example.test')!;
+      late AccountController account;
+      final l = await pumpAccount(
+        tester,
+        lang: lang,
+        tv: true,
+        size: const Size(960, 540),
+        account: accountControllerProvider.overrideWith((ref) {
+          account = AccountController(db: db, api: api, vault: MemoryVault());
+          ref.onDispose(account.dispose);
+          return account;
+        }),
+      );
+      await tapKey(tester, 'account-toggle');
+      for (final (key, text) in [
+        ('account-email', 'renamed@example.test'),
+        ('account-password', 'sample-password'),
+        ('account-confirm', 'sample-password'),
+      ]) {
+        await typeText(tester, find.byKey(ValueKey(key)), text);
+      }
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'account-submit');
+      await work(tester);
+      expect(
+        find.text(l.accountOtherOwnerNamed('owner@example.test')),
+        findsOneWidget,
+      );
+      await tapKey(tester, 'account-switch');
+      await tapKey(tester, 'account-switch-confirm');
+      await work(tester);
       expect(find.text(l.accountExists), findsOneWidget);
       expect(find.byKey(const ValueKey('account-switch')), findsNothing);
-      expect(api.signUps, 1);
-      expect(account.view.email, isNull);
+      expect(account.view.linked, isTrue);
+      expect(account.view.owner, 'owner@example.test');
+      final viewport = tester.getRect(find.byType(SingleChildScrollView));
+      expect(
+        tester.getRect(find.byKey(const ValueKey('account-error'))).bottom,
+        lessThanOrEqualTo(viewport.bottom + 0.5),
+      );
+      expect(
+        FocusManager.instance.primaryFocus?.context
+            ?.findAncestorWidgetOfExactType<TvButton>()
+            ?.key,
+        const ValueKey('account-submit'),
+      );
       await tester.runAsync(() async {
         expect(
-          await db.settingsDao.getString(AccountController.ownerEmailKey),
-          'owner@example.test',
+          await db.settingsDao.getBool(AccountController.switchedKey),
+          isNull,
         );
+        expect(await db.sourcesDao.all(), hasLength(1));
       });
     });
 

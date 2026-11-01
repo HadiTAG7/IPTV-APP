@@ -124,7 +124,8 @@ const _playlistFields = {'kind', 'url', 'fileParts', 'fileHash'};
 ///   here renumbers the rest) is no re-add.
 /// * A position change that keeps the order of the other entries is no
 ///   move: a removal here renumbers the entries after it, and the order
-///   the account has, maybe made on another device meanwhile, stays.
+///   the account has, maybe made on another device meanwhile, stays. In a
+///   group with an entry added here, every position goes.
 /// * A record changed both here and elsewhere keeps the fields each side
 ///   changed, this device's where both did. A playlist file's fields name
 ///   its chunks, so they come from one side together, and a playlist
@@ -184,15 +185,22 @@ Map<String, Map<String, Object?>?> pendingSyncChanges(
 
 /// The entries of [local] whose only change since [baseline] is a position
 /// that keeps the order of their group: the entries both hold, sorted by
-/// position, come in the same order.
+/// position, come in the same order. Not in a group with an entry added
+/// here: its position counts on theirs (appended after a removal closed a
+/// gap, or added and moved up), so the whole group goes.
 Set<String> _renumbered(SyncData baseline, SyncData local) {
   final groups = <String, List<String>>{};
+  final added = <String>{};
   for (final e in local.entries) {
     final group = _positionGroup(e.value);
-    if (group != null && baseline.containsKey(e.key)) {
+    if (group == null) continue;
+    if (baseline.containsKey(e.key)) {
       (groups[group] ??= []).add(e.key);
+    } else {
+      added.add(group);
     }
   }
+  groups.removeWhere((group, _) => added.contains(group));
   final renumbered = <String>{};
   for (final keys in groups.values) {
     List<String> ordered(SyncData data) => [...keys]
@@ -321,10 +329,17 @@ Map<String, Map<String, Object?>?> initialSyncChanges(
 /// Its copies win over the account's (but for an older moment, see
 /// [mergeSyncData]) and over the account's tombstones, which then delete
 /// only what this device does not hold; the account's other entries follow
-/// this device's own in each ordered group.
+/// this device's own in each ordered group. The account's language
+/// settings stay, as at any first sign-in, so its other devices keep their
+/// language: the confirmation names only the data that replaces the
+/// account's.
 Map<String, Map<String, Object?>?> _keepLocal(SyncData remote, SyncData local) {
   final changes = syncChanges(remote, local)
-    ..removeWhere((_, value) => value == null);
+    ..removeWhere(
+      (key, value) =>
+          value == null ||
+          value['type'] == 'preferences' && remote.containsKey(key),
+    );
   final groups = {for (final row in local.values) ?_positionGroup(row)};
   final moved = <String, Map<String, Object?>?>{};
   _append(moved, local.values, {

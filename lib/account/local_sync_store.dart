@@ -39,7 +39,7 @@ class LocalSyncStore {
   final Future<Directory> Function() directory;
   static const _idsKey = 'account_sync_ids_v1';
 
-  /// What of the account last applied this device did not hold, by key (see
+  /// What of the account last synced this device did not hold, by key (see
   /// [_foreign]). Kept, so a version that can hold it applies it instead of
   /// taking its absence or the value held in its place for a change here.
   static const _foreignKey = 'account_sync_foreign_v1';
@@ -696,16 +696,7 @@ class LocalSyncStore {
     final guides = <int>{};
     try {
       await _apply(held, current, changed, needImport, guides);
-      final kept = {
-        'records': foreign.records.keys.toList(),
-        'fields': {
-          for (final e in foreign.fields.entries) e.key: e.value.keys.toList(),
-        },
-        'frozen': foreign.frozen.toList(),
-      };
-      if (!syncEqual(await db.settingsDao.getJson(_foreignKey), kept)) {
-        await db.settingsDao.setJson(_foreignKey, kept);
-      }
+      await _keep(foreign);
     } on Object {
       // The rollback also removed rows created here: forget the cloud IDs
       // given to them, or a later local row would inherit one.
@@ -715,6 +706,43 @@ class LocalSyncStore {
     _foreign = foreign;
     _stale = false;
     return (imports: needImport, guides: guides);
+  }
+
+  /// The account as now synced holds [data], as this device does, so
+  /// nothing was applied: what of it this version cannot hold replaces what
+  /// was recorded, which may name a value changed here since. A value this
+  /// version could not hold, then one chosen here, then the one held in its
+  /// place again is a change here, not the account's value to keep.
+  Future<void> synced(SyncData data) async {
+    final foreign = _foreignOf(data, {
+      ...(await _sourceRows()).keys,
+      ..._foreign.frozen,
+    });
+    await _keep(foreign);
+    _foreign = foreign;
+    _stale = false;
+  }
+
+  /// Forgets what of the account last synced this device did not hold: the
+  /// device moves to another account, whose first sync starts afresh.
+  Future<void> forget() async {
+    await db.settingsDao.remove(_foreignKey);
+    _foreign = (records: {}, fields: {}, frozen: {});
+    _stale = false;
+  }
+
+  /// Records [foreign] for a later version (see [_foreignKey]).
+  Future<void> _keep(_Foreign foreign) async {
+    final kept = {
+      'records': foreign.records.keys.toList(),
+      'fields': {
+        for (final e in foreign.fields.entries) e.key: e.value.keys.toList(),
+      },
+      'frozen': foreign.frozen.toList(),
+    };
+    if (!syncEqual(await db.settingsDao.getJson(_foreignKey), kept)) {
+      await db.settingsDao.setJson(_foreignKey, kept);
+    }
   }
 
   Future<void> _apply(

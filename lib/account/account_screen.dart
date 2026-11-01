@@ -61,8 +61,8 @@ bool accountErrorPasses(String code) => const {
   'CONFLICT',
 }.contains(code);
 
-/// Asks before [AccountController.release]; pops true to switch. Cancel
-/// has the focus, so a stray OK never switches.
+/// Asks before [AccountController.switchAccount]; pops true to switch.
+/// Cancel has the focus, so a stray OK never switches.
 class SwitchAccountDialog extends StatelessWidget {
   const SwitchAccountDialog({super.key, this.owner});
 
@@ -178,7 +178,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     }
   }
 
-  void _authenticate() {
+  /// Signs in, or with [move] moves this device to the account entered
+  /// (see [AccountController.switchAccount]).
+  void _authenticate({bool move = false}) {
     if (!_validEmail ||
         _password.text.length < (_create ? 8 : 1) ||
         (_create && _confirm.text != _password.text)) {
@@ -187,28 +189,27 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     }
     unawaited(
       _run(() async {
-        await ref
-            .read(accountControllerProvider)
-            .authenticate(_email.text, _password.text, create: _create);
+        final account = ref.read(accountControllerProvider);
+        final authenticate = move
+            ? account.switchAccount
+            : account.authenticate;
+        await authenticate(_email.text, _password.text, create: _create);
         _password.clear();
         _confirm.clear();
       }),
     );
   }
 
-  /// After a confirmation, unlinks this device from the account its data
-  /// belongs to and signs in with the account entered, from Sign in, where
-  /// its progress and result show.
+  /// After a confirmation, moves this device to the account entered, from
+  /// the submit button, where its progress and result show.
   Future<void> _switchAccount(String? owner) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => SwitchAccountDialog(owner: owner),
     );
     if (confirmed != true || !mounted) return;
-    await _run(() => ref.read(accountControllerProvider).release());
-    if (!mounted || _error != null) return;
     _submitNode.requestFocus();
-    _authenticate();
+    _authenticate(move: true);
   }
 
   @override

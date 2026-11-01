@@ -155,6 +155,10 @@ class AccountController with WidgetsBindingObserver {
   /// until a sign-in succeeds.
   bool _expired = false;
   final _restored = Completer<void>();
+
+  /// The account a sign-in reached but was refused, as another account than
+  /// the one this device's data belongs to: a switch to it uses it.
+  AccountSession? _refused;
   bool _authBusy = false;
   bool _needsSync = false;
 
@@ -177,9 +181,9 @@ class AccountController with WidgetsBindingObserver {
   /// it, and this tells either case apart from a device never signed in.
   static const signedInKey = 'account_signed_in_v1';
 
-  /// Set when the user moves this device to another account ([release]),
-  /// until its next first sign-in, which keeps everything it holds (see
-  /// `initialSyncChanges`), as the confirmation says.
+  /// Set when the user moves this device to another account
+  /// ([switchAccount]), until its first sync there, which keeps everything
+  /// it holds (see `initialSyncChanges`), as the confirmation says.
   static const switchedKey = 'account_sync_switched_v1';
   static const _playbackTables = {'watch_progress', 'recent_channels'};
 
@@ -357,34 +361,78 @@ class AccountController with WidgetsBindingObserver {
     String email,
     String password, {
     bool create = false,
+  }) => _authenticate(email, password, create: create, move: false);
+
+  /// Moves this device, signed out, from the account its data belongs to
+  /// to the account of [email], once that account has signed in (or, with
+  /// [create], been created): should that fail, the device stays as it
+  /// was. Nothing is deleted: the data stays here and merges into that
+  /// account, winning over its copies and tombstones, and the old account
+  /// keeps its copy, which this device no longer changes.
+  Future<void> switchAccount(
+    String email,
+    String password, {
+    bool create = false,
+  }) => _authenticate(email, password, create: create, move: true);
+
+  Future<void> _authenticate(
+    String email,
+    String password, {
+    required bool create,
+    required bool move,
   }) async {
-    if (_authBusy) return;
+    if (_authBusy || move && _session != null) return;
     _authBusy = true;
     _emit(busy: true);
     try {
       if (_started) await _restored.future;
       await _running;
       if (_disposed) return;
-      // A new account is never the one this device's data belongs to: it is
-      // refused before it is created. With that account's own email the
-      // service answers that the email has an account already.
-      if (create &&
-          await db.settingsDao.getString(bindingKey) != null &&
-          !_sameEmail(email, await db.settingsDao.getString(ownerEmailKey))) {
+      final refused = _refused;
+      _refused = null;
+      final owner = await db.settingsDao.getString(bindingKey);
+      final known = await db.settingsDao.getString(ownerEmailKey);
+      // A new account is never the one this device's data belongs to: one
+      // with another email is refused before it is created. Asked with that
+      // account's email, the service answers that the email has an account;
+      // so it is asked too when an earlier version kept no email.
+      if (!move &&
+          create &&
+          owner != null &&
+          known != null &&
+          !_sameEmail(email, known)) {
         await _otherAccount();
       }
-      final session = await api.signIn(email, password, create: create);
-      final owner = await db.settingsDao.getString(bindingKey);
-      if (owner != null && owner != session.uid) await _otherAccount();
+      // The account the refused attempt signed in to, or created: it is not
+      // created a second time.
+      final session =
+          move && refused != null && _sameEmail(email, refused.email)
+          ? refused
+          : await api.signIn(email, password, create: create);
+      final moved = owner != null && owner != session.uid;
+      if (moved && !move) {
+        _refused = session;
+        await _otherAccount();
+      }
       try {
         await _vault(() => vault.write(jsonEncode(session.toJson())));
       } on Object {
         // Signed in already: as with a refreshed token, the session syncs
         // from memory, and after a restart the device asks for a sign-in.
       }
-      await db.settingsDao.setString(bindingKey, session.uid);
-      await db.settingsDao.setString(ownerEmailKey, session.email);
-      await db.settingsDao.setBool(signedInKey, true);
+      await db.transaction(() async {
+        if (moved) {
+          // Without its baseline the first sync is a first sign-in, which
+          // deletes nothing in either account, and keeps all this device
+          // holds; a later return to the old account is one too.
+          await db.settingsDao.remove(_baselineKey(owner));
+          await local.forget();
+          await db.settingsDao.setBool(switchedKey, true);
+        }
+        await db.settingsDao.setString(bindingKey, session.uid);
+        await db.settingsDao.setString(ownerEmailKey, session.email);
+        await db.settingsDao.setBool(signedInKey, true);
+      });
       _owner = session.email;
       _session = session;
       _linked = true;
@@ -430,36 +478,6 @@ class AccountController with WidgetsBindingObserver {
       _session = null;
       _hasRead = false;
       _revision = null;
-      _emit();
-    } finally {
-      _authBusy = false;
-    }
-  }
-
-  /// Unlinks this device, signed out, from the account its data belongs to,
-  /// so another account can sign in. Nothing is deleted: the data stays
-  /// here and merges into the next account, winning over that account's
-  /// copies and tombstones, and the old account keeps its copy, which this
-  /// device no longer changes.
-  Future<void> release() async {
-    if (_authBusy || _session != null) return;
-    _authBusy = true;
-    try {
-      if (_started) await _restored.future;
-      await _running;
-      final owner = await db.settingsDao.getString(bindingKey);
-      await db.transaction(() async {
-        // Without its baseline a later sign-in to the old account is a first
-        // sign-in too, which deletes nothing there.
-        if (owner != null) await db.settingsDao.remove(_baselineKey(owner));
-        await db.settingsDao.remove(bindingKey);
-        await db.settingsDao.remove(ownerEmailKey);
-        await db.settingsDao.setBool(signedInKey, false);
-        await db.settingsDao.setBool(switchedKey, true);
-      });
-      _linked = false;
-      _owner = null;
-      _expired = false;
       _emit();
     } finally {
       _authBusy = false;
@@ -624,6 +642,8 @@ class AccountController with WidgetsBindingObserver {
               syncChanges(sent, latest),
             );
             applied = await local.apply(withLateChanges);
+          } else {
+            await local.synced(merged);
           }
           await db.settingsDao.setJson(_baselineKey(session.uid), merged);
           if (switched) await db.settingsDao.remove(switchedKey);

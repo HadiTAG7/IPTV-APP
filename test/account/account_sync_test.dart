@@ -1703,10 +1703,7 @@ void main() {
       ),
     );
     expect(a.view.owner, 'owner@example.test');
-    await a.release();
-    expect(a.view.linked, isFalse);
-    expect(a.view.owner, isNull);
-    await a.authenticate('other@example.test', 'sample-password');
+    await a.switchAccount('other@example.test', 'sample-password');
     expect(a.view.email, 'other@example.test');
     expect(a.view.owner, 'other@example.test');
     expect(a.view.error, isNull);
@@ -1725,8 +1722,7 @@ void main() {
     await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', false);
     await a.sync();
     await a.signOut();
-    await a.release();
-    await login(a);
+    await a.switchAccount('owner@example.test', 'sample-password');
     expect(a.view.error, isNull);
     expect(cloud.deleted, isEmpty);
     expect(
@@ -2011,8 +2007,7 @@ void main() {
         a.authenticate('other@example.test', 'sample-password'),
         throwsA(isA<AccountException>()),
       );
-      await a.release();
-      await a.authenticate('other@example.test', 'sample-password');
+      await a.switchAccount('other@example.test', 'sample-password');
       expect(a.view.email, 'other@example.test');
       await restart().start();
       expect(a.view.email, isNull);
@@ -2385,8 +2380,7 @@ void main() {
       a.authenticate('other@example.test', 'sample-password'),
       throwsA(isA<AccountException>()),
     );
-    await a.release();
-    await a.authenticate('other@example.test', 'sample-password');
+    await a.switchAccount('other@example.test', 'sample-password');
     expect(a.view.error, isNull);
     final sources = await phone.sourcesDao.all();
     expect(sources.map((s) => s.name), ['My TV', 'Movies']);
@@ -2417,6 +2411,327 @@ void main() {
       'sport',
       'news',
     ]);
+  });
+
+  for (final (name, channels, edit, order)
+      in <
+        (
+          String,
+          List<String>,
+          Future<void> Function(AppDatabase, int),
+          List<String>,
+        )
+      >[
+        (
+          'a channel removed and another added',
+          ['news', 'sport', 'zeta'],
+          (db, lid) async {
+            await db.channelListsDao.setChannel(lid, 'news', false);
+            await db.channelListsDao.setChannel(lid, 'alpha', true);
+          },
+          ['sport', 'zeta', 'alpha'],
+        ),
+        (
+          'two channels removed and another added',
+          ['news', 'sport', 'zeta'],
+          (db, lid) async {
+            await db.channelListsDao.setChannel(lid, 'news', false);
+            await db.channelListsDao.setChannel(lid, 'sport', false);
+            await db.channelListsDao.setChannel(lid, 'alpha', true);
+          },
+          ['zeta', 'alpha'],
+        ),
+        (
+          'a channel added and moved up',
+          ['a', 'b', 'c'],
+          (db, lid) async {
+            await db.channelListsDao.setChannel(lid, 'd', true);
+            await db.channelListsDao.moveChannel(lid, 'd', -1);
+          },
+          ['a', 'b', 'd', 'c'],
+        ),
+      ]) {
+    test('$name in one upload keep that order on every device', () async {
+      final id = await seed(phone);
+      final lid = await phone.channelListsDao.createList(
+        id,
+        'Sports',
+        channels: channels,
+      );
+      await login(a);
+      await login(b);
+      final tid = (await tv.sourcesDao.all()).single.id;
+      final tlid = (await tv.channelListsDao.lists(tid)).single.id;
+      // Offline (or signed out, or within the debounce): one upload.
+      cloud.offline = true;
+      await edit(phone, lid);
+      expect(await phone.channelListsDao.channelKeys(lid), order);
+      await a.sync();
+      cloud.offline = false;
+      await a.sync();
+      await b.sync();
+      expect([a.view.error, b.view.error], [null, null]);
+      expect(
+        [
+          await phone.channelListsDao.channelKeys(lid),
+          await tv.channelListsDao.channelKeys(tlid),
+        ],
+        [order, order],
+      );
+    });
+  }
+
+  test('after a language a newer version added, one chosen here and then '
+      'the system language again reach the account and stay', () async {
+    final id = await seed(phone);
+    await login(a);
+    await login(b);
+    FakeApi(cloud).commit({
+      'preferences': {...cloud.data['preferences']!, 'locale': 'fr'},
+    });
+    await b.sync();
+    expect(b.view.error, isNull);
+    Future<void> choose(AppLocaleSetting locale) async {
+      final settings = await loadAppSettings(tv.settingsDao);
+      await tv.settingsDao.setJson(
+        kAppSettingsKey,
+        settings.copyWith(locale: locale).toJson(),
+      );
+      await b.sync();
+    }
+
+    await choose(AppLocaleSetting.ar);
+    expect(cloud.data['preferences']!['locale'], 'ar');
+    await choose(AppLocaleSetting.auto);
+    expect(cloud.data['preferences']!['locale'], 'auto');
+    // A later change from another device, and a restart, apply the account.
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', true);
+    await a.sync();
+    await b.sync();
+    final vault = b.vault;
+    b.dispose();
+    b = AccountController(db: tv, api: FakeApi(cloud), vault: vault);
+    await b.start();
+    expect([a.view.error, b.view.error], [null, null]);
+    expect(
+      (await loadAppSettings(tv.settingsDao)).locale,
+      AppLocaleSetting.auto,
+    );
+    expect(cloud.data['preferences']!['locale'], 'auto');
+  });
+
+  test('after a live format a newer version added, one chosen here and then '
+      'TS again reach the account and stay', () async {
+    final id = await seed(phone);
+    await login(a);
+    await login(b);
+    final key = cloud.data.keys.singleWhere((k) => k.startsWith('source:'));
+    final tid = (await tv.sourcesDao.all()).single.id;
+    FakeApi(cloud).commit({
+      key: {...cloud.data[key]!, 'liveFormat': 'dash'},
+    });
+    await b.sync();
+    Future<void> choose(LiveFormat format) async {
+      final config = (await tv.sourcesDao.configFor(tid))!;
+      await tv.sourcesDao.updateConfig(
+        tid,
+        config.copyWith(liveFormat: format),
+      );
+      await b.sync();
+    }
+
+    await choose(LiveFormat.m3u8);
+    expect(cloud.data[key]!['liveFormat'], 'm3u8');
+    await choose(LiveFormat.ts);
+    expect(cloud.data[key]!['liveFormat'], 'ts');
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', true);
+    await a.sync();
+    await b.sync();
+    expect([a.view.error, b.view.error], [null, null]);
+    expect((await tv.sourcesDao.configFor(tid))!.liveFormat, LiveFormat.ts);
+    expect(cloud.data[key]!['liveFormat'], 'ts');
+  });
+
+  test('a device moved to another account keeps syncing a subscription a '
+      'newer version gave the first account a kind this version does not '
+      'know', () async {
+    final other = Cloud();
+    final api = AccountsApi({'owner': cloud, 'other': other});
+    a.dispose();
+    a = AccountController(db: phone, api: api, vault: MemoryVault());
+    final id = await seed(phone);
+    await login(a);
+    final key = cloud.data.keys.singleWhere((k) => k.startsWith('source:'));
+    FakeApi(cloud).commit({
+      key: {...cloud.data[key]!, 'kind': 'webrtc'},
+    });
+    await a.sync();
+    expect(a.view.error, isNull);
+    await a.signOut();
+    await a.switchAccount('other@example.test', 'sample-password');
+    expect(other.data[key]!['kind'], 'xtream');
+    final config = (await phone.sourcesDao.configFor(id))!;
+    await phone.sourcesDao.updateConfig(
+      id,
+      config.copyWith(password: 'renewed-password'),
+    );
+    await a.sync();
+    expect(a.view.error, isNull);
+    expect(other.data[key]!['password'], 'renewed-password');
+    expect(
+      (await phone.sourcesDao.configFor(id))!.password,
+      'renewed-password',
+    );
+    expect(cloud.data[key]!['kind'], 'webrtc');
+  });
+
+  test('Create account with its own email on a device an earlier version '
+      'linked answers that it has an account, and signing in then keeps '
+      'what other devices deleted', () async {
+    final api = EmailAccountsApi();
+    a.dispose();
+    b.dispose();
+    a = AccountController(db: phone, api: api, vault: MemoryVault());
+    b = AccountController(db: tv, api: api, vault: MemoryVault());
+    final id = await seed(phone);
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', true);
+    await a.authenticate('owner@example.test', 'sample-password', create: true);
+    await a.signOut();
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'one', false);
+    await b.sync();
+    // As v0.1.7 and v0.1.8 left it: they kept no email.
+    await phone.settingsDao.remove(AccountController.ownerEmailKey);
+    await expectLater(
+      a.authenticate('owner@example.test', 'sample-password', create: true),
+      throwsA(
+        isA<AccountException>().having((e) => e.code, 'code', 'EMAIL_EXISTS'),
+      ),
+    );
+    expect(api.signUps, 2);
+    expect(a.view.linked, isTrue);
+    await login(a);
+    await b.sync();
+    expect([a.view.error, b.view.error], [null, null]);
+    expect(await phone.favoritesDao.favoriteKeys(id, ContentKind.live), []);
+    expect(await tv.favoritesDao.favoriteKeys(tid, ContentKind.live), []);
+  });
+
+  test('a switch the account service refuses leaves the device linked to its '
+      'account, which then keeps what other devices deleted', () async {
+    final api = EmailAccountsApi();
+    a.dispose();
+    b.dispose();
+    a = AccountController(db: phone, api: api, vault: MemoryVault());
+    b = AccountController(db: tv, api: api, vault: MemoryVault());
+    final id = await seed(phone);
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'one', true);
+    await a.authenticate('owner@example.test', 'sample-password', create: true);
+    await a.signOut();
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'one', false);
+    await b.sync();
+    // The account's email changed since this device learnt it.
+    api.uids['renamed@example.test'] = api.uids.remove('owner@example.test')!;
+    await expectLater(
+      a.authenticate('renamed@example.test', 'sample-password', create: true),
+      throwsA(
+        isA<AccountException>().having((e) => e.code, 'code', 'OTHER_ACCOUNT'),
+      ),
+    );
+    await expectLater(
+      a.switchAccount('renamed@example.test', 'sample-password', create: true),
+      throwsA(
+        isA<AccountException>().having((e) => e.code, 'code', 'EMAIL_EXISTS'),
+      ),
+    );
+    expect(a.view.linked, isTrue);
+    expect(a.view.owner, 'owner@example.test');
+    expect(
+      await phone.settingsDao.getBool(AccountController.switchedKey),
+      isNull,
+    );
+    await a.authenticate('renamed@example.test', 'sample-password');
+    await b.sync();
+    expect([a.view.error, b.view.error], [null, null]);
+    expect(a.view.owner, 'renamed@example.test');
+    expect(await phone.favoritesDao.favoriteKeys(id, ContentKind.live), []);
+    expect(await tv.favoritesDao.favoriteKeys(tid, ContentKind.live), []);
+  });
+
+  test('a switch to the account a refused Create account made signs in to it '
+      'instead of creating it again', () async {
+    final api = EmailAccountsApi();
+    a.dispose();
+    a = AccountController(db: phone, api: api, vault: MemoryVault());
+    await seed(phone);
+    await a.authenticate('owner@example.test', 'sample-password', create: true);
+    await a.signOut();
+    final first = api.uids['owner@example.test'];
+    // Deleted in the console: a new account can take the email.
+    api.uids.remove('owner@example.test');
+    await expectLater(
+      a.authenticate('owner@example.test', 'sample-password', create: true),
+      throwsA(
+        isA<AccountException>().having((e) => e.code, 'code', 'OTHER_ACCOUNT'),
+      ),
+    );
+    expect(api.signUps, 2);
+    final created = api.uids['owner@example.test'];
+    expect(created, isNot(first));
+    await a.switchAccount(
+      'owner@example.test',
+      'sample-password',
+      create: true,
+    );
+    expect(api.signUps, 2);
+    expect(a.view.email, 'owner@example.test');
+    expect(a.view.error, isNull);
+    expect(
+      await phone.settingsDao.getString(AccountController.bindingKey),
+      created,
+    );
+    expect(
+      api.clouds[created]!.data.values.where((r) => r['type'] == 'source'),
+      hasLength(1),
+    );
+  });
+
+  test("a device moved to another account keeps that account's language "
+      'settings', () async {
+    final other = Cloud();
+    final api = AccountsApi({'owner': cloud, 'other': other});
+    a.dispose();
+    b.dispose();
+    a = AccountController(db: phone, api: api, vault: MemoryVault());
+    b = AccountController(db: tv, api: api, vault: MemoryVault());
+    Future<void> speak(AppDatabase db, AppLocaleSetting locale) async {
+      final settings = await loadAppSettings(db.settingsDao);
+      await db.settingsDao.setJson(
+        kAppSettingsKey,
+        settings.copyWith(locale: locale).toJson(),
+      );
+    }
+
+    await speak(tv, AppLocaleSetting.en);
+    await b.authenticate('other@example.test', 'sample-password');
+    await speak(phone, AppLocaleSetting.ar);
+    await seed(phone);
+    await login(a);
+    await a.signOut();
+    await a.switchAccount('other@example.test', 'sample-password');
+    await b.sync(force: true);
+    expect([a.view.error, b.view.error], [null, null]);
+    expect(other.data['preferences']!['locale'], 'en');
+    expect((await loadAppSettings(tv.settingsDao)).locale, AppLocaleSetting.en);
+    expect(
+      (await loadAppSettings(phone.settingsDao)).locale,
+      AppLocaleSetting.en,
+    );
+    // Its data went to that account.
+    expect(await tv.sourcesDao.all(), hasLength(1));
   });
 
   group('changes to merge into the account', () {
@@ -2479,6 +2794,45 @@ void main() {
         'item:l:b': null,
         'item:l:c': item('c', 0),
       });
+    });
+
+    test('in a group with an entry added here every position goes, as the '
+        "new entry's counts on them", () {
+      final base = {
+        'item:l:a': item('a', 0),
+        'item:l:b': item('b', 1),
+        'item:l:c': item('c', 2),
+      };
+      final local = {
+        'item:l:b': item('b', 0),
+        'item:l:c': item('c', 1),
+        'item:l:d': item('d', 2),
+      };
+      expect(pendingSyncChanges(base, base, {}, local), {
+        'item:l:a': null,
+        'item:l:b': item('b', 0),
+        'item:l:c': item('c', 1),
+        'item:l:d': item('d', 2),
+      });
+    });
+
+    test("a device moved to the account on purpose leaves the account's "
+        'language settings, and gives its own to an account without', () {
+      const mine = {'type': 'preferences', 'locale': 'ar'};
+      const theirs = {'type': 'preferences', 'locale': 'en'};
+      expect(
+        initialSyncChanges(
+          {'preferences': theirs},
+          {},
+          {'preferences': mine},
+          keepLocal: true,
+        ),
+        isEmpty,
+      );
+      expect(
+        initialSyncChanges({}, {}, {'preferences': mine}, keepLocal: true),
+        {'preferences': mine},
+      );
     });
 
     test('a device moved to the account on purpose keeps its copies over the '
@@ -2580,6 +2934,53 @@ class CountingApi extends FakeApi {
     }
     return super.signIn(email, password, create: create);
   }
+}
+
+/// Accounts by email, each with its own [Cloud], as the account service
+/// keeps them: creating one for a taken email fails, and the email of a
+/// deleted account can make a new one, with another uid.
+class EmailAccountsApi extends FakeApi {
+  EmailAccountsApi() : super(Cloud());
+  final uids = <String, String>{};
+  final clouds = <String, Cloud>{};
+  int signUps = 0;
+  @override
+  Future<AccountSession> signIn(
+    String email,
+    String password, {
+    bool create = false,
+  }) async {
+    final key = email.trim().toLowerCase();
+    if (create) {
+      signUps++;
+      if (uids.containsKey(key)) throw const AccountException('EMAIL_EXISTS');
+      final uid = uids[key] = 'uid-${clouds.length}';
+      clouds[uid] = Cloud();
+    }
+    final uid = uids[key];
+    if (uid == null) throw const AccountException('INVALID_LOGIN_CREDENTIALS');
+    return AccountSession(
+      uid: uid,
+      email: key,
+      idToken: 'token',
+      refreshToken: 'refresh',
+      expiresAt: DateTime.now().add(const Duration(hours: 1)),
+    );
+  }
+
+  FakeApi _of(AccountSession session) => FakeApi(clouds[session.uid]!);
+  @override
+  Future<String?> revision(AccountSession session) =>
+      _of(session).revision(session);
+  @override
+  Future<RemoteState> read(AccountSession session) =>
+      _of(session).read(session);
+  @override
+  Future<String?> write(
+    AccountSession session,
+    RemoteState remote,
+    Map<String, Map<String, Object?>?> changes,
+  ) => _of(session).write(session, remote, changes);
 }
 
 /// An account whose database refuses this device once [denied] is set, as
