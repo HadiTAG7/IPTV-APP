@@ -188,9 +188,10 @@ Map<String, Map<String, Object?>?> pendingSyncChanges(
 ///
 /// * The entries placed here (added, sent again, or the fewest that moved
 ///   to make the order here, see [_moved]) go, in their order here, where
-///   the most of the others keep their order here to them: after the
-///   entry before them here, unless the account moved that one away, and
-///   last when appended or moved to the end.
+///   the most of the others keep their order here to them, then the most
+///   of those they moved past here: before the entry they moved up past
+///   here, or else after the entry before them here, unless the account
+///   moved that one away, and last when appended or moved to the end.
 /// * The other entries keep the account's order and positions, so the
 ///   positions a removal here closed are no move and an order made on
 ///   another device meanwhile stays. Only the entries after a placed one
@@ -241,9 +242,9 @@ void _place(
         if (!placed.contains(key) && !removed.contains(key)) key,
     ];
     final here = {for (final (i, key) in mine.indexed) key: i};
-    final last = mine.lastIndexWhere(
-      (key) => !placed.contains(key) && remote.containsKey(key),
-    );
+    final was = {for (final (i, key) in (bases[group] ?? []).indexed) key: i};
+    bool kept(String key) => !placed.contains(key) && remote.containsKey(key);
+    final last = mine.lastIndexWhere(kept);
     // The entry here before the next placed one, in [order] already.
     String? previous;
     for (final (i, key) in mine.indexed) {
@@ -259,22 +260,44 @@ void _place(
         continue;
       }
       // Where the most of the entries here before it come before it, and
-      // of those after it after it: right after [previous] if that is such
-      // a place (first if none), else the first one.
-      var score = order.where((k) => (here[k] ?? -1) > i).length;
+      // of those after it after it, then the most of those it moved past
+      // here: right before the entry after it here if it moved up past
+      // that one, else right after [previous] (first if none), if that is
+      // such a place; else the first one.
+      final from = was[key];
+      // One it moved past counts a little more, never as much as one more.
+      int weight(String k) {
+        final then = was[k];
+        final passed =
+            from != null && then != null && (then < from) != (here[k]! < i);
+        return mine.length + (passed ? 1 : 0);
+      }
+
+      final next = mine.skip(i + 1).firstWhere(kept);
+      final up = from != null && (was[next] ?? from) < from;
+      var score = 0;
+      for (final k in order) {
+        if ((here[k] ?? -1) > i) score += weight(k);
+      }
       var best = score;
       var at = 0;
       var after = previous == null ? (0, score) : null;
+      (int, int)? before;
       for (final (s, k) in order.indexed) {
+        if (k == next) before = (s, score);
         final j = here[k];
-        if (j != null) score += j < i ? 1 : -1;
+        if (j != null) score += j < i ? weight(k) : -weight(k);
         if (score > best) {
           best = score;
           at = s + 1;
         }
         if (k == previous) after = (s + 1, score);
       }
-      if (after != null && after.$2 == best) at = after.$1;
+      if (up && before != null && before.$2 == best) {
+        at = before.$1;
+      } else if (after != null && after.$2 == best) {
+        at = after.$1;
+      }
       order.insert(at, key);
       previous = key;
     }

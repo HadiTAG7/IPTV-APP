@@ -2302,6 +2302,106 @@ void main() {
     expect(await phone.channelListsDao.channelKeys(lid), ['d', 'a', 'c']);
   });
 
+  for (final (name, late, order)
+      in <(String, Future<void> Function(AppDatabase, int), List<String>)>[
+        (
+          'moved back',
+          (db, lid) => db.channelListsDao.moveChannel(lid, 'e', -1),
+          ['a', 'd', 'e', 'f'],
+        ),
+        (
+          'added',
+          (db, lid) => db.channelListsDao.setChannel(lid, 'x', true),
+          ['a', 'd', 'f', 'e', 'x'],
+        ),
+        (
+          'removed',
+          (db, lid) => db.channelListsDao.setChannel(lid, 'd', false),
+          ['a', 'f', 'e'],
+        ),
+      ]) {
+    test('a channel $name while a move uploads, in a list with channels '
+        'removed elsewhere, keeps the order made here on every '
+        'device', () async {
+      final id = await seed(phone);
+      final lid = await phone.channelListsDao.createList(
+        id,
+        'Sports',
+        channels: ['a', 'b', 'c', 'd', 'e', 'f'],
+      );
+      await login(a);
+      await login(b);
+      final tid = (await tv.sourcesDao.all()).single.id;
+      final tlid = (await tv.channelListsDao.lists(tid)).single.id;
+      // The account keeps the positions the removals left: a gap here.
+      await tv.channelListsDao.setChannel(tlid, 'b', false);
+      await tv.channelListsDao.setChannel(tlid, 'c', false);
+      await b.sync();
+      await a.sync();
+      await phone.channelListsDao.moveChannel(lid, 'f', -1);
+      cloud.duringWrite = () => late(phone, lid);
+      await a.sync();
+      expect(await phone.channelListsDao.channelKeys(lid), order);
+      await a.sync();
+      await b.sync();
+      expect([a.view.error, b.view.error], [null, null]);
+      expect(
+        [
+          await phone.channelListsDao.channelKeys(lid),
+          await tv.channelListsDao.channelKeys(tlid),
+        ],
+        [order, order],
+      );
+    });
+  }
+
+  test('a subscription edited here while an upload runs keeps the name that '
+      'sync received from another device', () async {
+    final id = await seed(phone);
+    await login(a);
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    final theirs = (await tv.sourcesDao.configFor(tid))!;
+    await tv.sourcesDao.updateConfig(tid, theirs.copyWith(name: 'Renamed'));
+    await b.sync();
+    cloud.duringWrite = () async {
+      final mine = (await phone.sourcesDao.configFor(id))!;
+      await phone.sourcesDao.updateConfig(id, mine.copyWith(epgOffsetMin: 60));
+    };
+    await a.sync();
+    await a.sync();
+    await b.sync();
+    expect([a.view.error, b.view.error], [null, null]);
+    for (final (db, sid) in [(phone, id), (tv, tid)]) {
+      final row = (await db.sourcesDao.byId(sid))!;
+      expect([row.name, row.epgOffsetMin], ['Renamed', 60]);
+    }
+  });
+
+  test('a list deleted on another device stays deleted when renamed here '
+      'while an upload runs', () async {
+    final id = await seed(phone);
+    final lid = await phone.channelListsDao.createList(
+      id,
+      'Sports',
+      channels: ['news', 'sport'],
+    );
+    await login(a);
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    await tv.channelListsDao.deleteList(
+      (await tv.channelListsDao.lists(tid)).single.id,
+    );
+    await b.sync();
+    cloud.duringWrite = () => phone.channelListsDao.renameList(lid, 'Football');
+    await a.sync();
+    await a.sync();
+    await b.sync();
+    expect([a.view.error, b.view.error], [null, null]);
+    expect(await phone.channelListsDao.lists(id), isEmpty);
+    expect(await tv.channelListsDao.lists(tid), isEmpty);
+  });
+
   test('a channel watched last on another device stays the most recent '
       'one', () async {
     final id = await seed(phone);
@@ -2524,6 +2624,12 @@ void main() {
         await db.channelListsDao.moveChannel(lid, 'd', -2);
       },
     ),
+    (
+      'the last channel moved up',
+      (db, lid) async {
+        await db.channelListsDao.moveChannel(lid, 'd', -1);
+      },
+    ),
   ];
   for (final (phoneEdit, edit, orders)
       in <
@@ -2539,6 +2645,7 @@ void main() {
             ['c', 'a', 'b', 'd'],
             ['a', 'c', 'b', 'd'],
             ['d', 'b', 'c'],
+            ['a', 'b', 'd', 'c'],
           ],
         ),
         (
@@ -2553,6 +2660,7 @@ void main() {
             ['c', 'd', 'a', 'b'],
             ['d', 'a', 'c', 'b'],
             ['d', 'b', 'c'],
+            ['a', 'b', 'd', 'c'],
           ],
         ),
         (
@@ -2567,6 +2675,7 @@ void main() {
             ['c', 'a', 'd'],
             ['a', 'c', 'd'],
             ['d', 'c'],
+            ['a', 'd', 'c'],
           ],
         ),
         (
@@ -2581,6 +2690,7 @@ void main() {
             ['c', 'a', 'b', 'd', 'x'],
             ['a', 'c', 'b', 'd', 'x'],
             ['d', 'b', 'c', 'x'],
+            ['a', 'b', 'd', 'c', 'x'],
           ],
         ),
         (
@@ -2595,6 +2705,22 @@ void main() {
             ['c', 'b', 'd', 'a'],
             ['c', 'b', 'd', 'a'],
             ['d', 'b', 'c'],
+            ['b', 'd', 'c', 'a'],
+          ],
+        ),
+        (
+          'two channels swapped',
+          (db, lid) async {
+            await db.channelListsDao.moveChannel(lid, 'c', -1);
+          },
+          [
+            ['c', 'b', 'd', 'e'],
+            ['a', 'c', 'b', 'e', 'd'],
+            ['a', 'b', 'd'],
+            ['c', 'a', 'b', 'd'],
+            ['a', 'c', 'b', 'd'],
+            ['d', 'c', 'b'],
+            ['a', 'd', 'c', 'b'],
           ],
         ),
       ]) {
@@ -3158,6 +3284,51 @@ void main() {
           list(['a', 'c', 'd', 'b', 'e']),
         ),
         {'item:l:b': item('b', 4), 'item:l:e': item('e', 5)},
+      );
+    });
+
+    test('an entry moved up here stays before the entries it passed where '
+        'the others here leave a choice', () {
+      Map<String, Map<String, Object?>> list(List<String> keys) => {
+        for (final (i, key) in keys.indexed) 'item:l:$key': item(key, i),
+      };
+      List<String> merged(
+        List<String> base,
+        List<String> remote,
+        List<String> local,
+      ) {
+        final result = mergeSyncData(
+          list(remote),
+          pendingSyncChanges(list(base), list(remote), {}, list(local)),
+        );
+        return [for (final r in result.values) r['key'] as String]..sort(
+          (a, b) => (result['item:l:$a']!['position'] as int).compareTo(
+            result['item:l:$b']!['position'] as int,
+          ),
+        );
+      }
+
+      // "c" moved up one elsewhere, "d" here: after "a" or "b", one each.
+      expect(
+        merged(['a', 'b', 'c', 'd'], ['a', 'c', 'b', 'd'], [
+          'a',
+          'b',
+          'd',
+          'c',
+        ]),
+        ['a', 'd', 'c', 'b'],
+      );
+      // "e" moved up past "c" and "d" here, "a" and "c" down elsewhere:
+      // after "b" it stays before both, before "c" only before one.
+      expect(
+        merged(['a', 'b', 'c', 'd', 'e'], ['b', 'd', 'e', 'a', 'c'], [
+          'a',
+          'b',
+          'e',
+          'c',
+          'd',
+        ]),
+        ['b', 'e', 'd', 'a', 'c'],
       );
     });
 

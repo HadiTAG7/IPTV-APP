@@ -636,10 +636,17 @@ class AccountController with WidgetsBindingObserver {
           // Nothing to apply when the account now holds what was sent, and
           // this device holds what the account does.
           if (syncChanges(sent, merged).isNotEmpty || local.stale) {
+            // Edits made here while the upload ran merge into the account
+            // as now synced as the next sync merges them: in its order and
+            // numbering, not this device's, keeping the fields that sync
+            // received, and what it deleted stays deleted.
             final latest = await local.export();
             final withLateChanges = mergeSyncData(
               merged,
-              syncChanges(sent, latest),
+              pendingSyncChanges(sent, merged, {
+                for (final key in sent.keys)
+                  if (!merged.containsKey(key)) key,
+              }, latest),
             );
             applied = await local.apply(withLateChanges);
           } else {
