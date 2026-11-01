@@ -91,11 +91,16 @@ class FirebaseAccountApi {
       // Never propagate request objects: they contain passwords/tokens/URLs.
       final body = error.response?.data;
       final detail = body is Map ? body['error'] : null;
-      final code = detail is Map
-          ? (detail['status'] ?? detail['message'])
-                ?.toString()
-                .split(' : ')
-                .first
+      // Auth replies name the reason in an upper-case message (securetoken
+      // pairs TOKEN_EXPIRED with the generic status INVALID_ARGUMENT).
+      final message = detail is Map
+          ? detail['message']?.toString().split(' : ').first
+          : null;
+      final code =
+          message != null && RegExp(r'^[A-Z][A-Z0-9_]*$').hasMatch(message)
+          ? message
+          : detail is Map
+          ? (detail['status'] ?? message)?.toString()
           : null;
       if (error.response?.statusCode == 404) {
         throw const AccountException('NOT_FOUND');

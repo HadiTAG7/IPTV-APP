@@ -39,10 +39,11 @@ ANDROID_PACKAGES=(
   "build-tools;36.0.0"
   "ndk;28.2.13676358"
 )
+# libsecret-1-dev: flutter_secure_storage_linux (account sign-in) links it.
 APT_PACKAGES=(
   curl git unzip xz-utils zip
   clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev
-  libmpv-dev mpv ffmpeg xvfb
+  libsecret-1-dev libmpv-dev mpv ffmpeg xvfb
 )
 # Gradle 9 / AGP 9 and apksigner need Java 17+; installed only if PATH has no such java.
 MIN_JAVA=17

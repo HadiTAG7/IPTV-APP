@@ -47,11 +47,11 @@ Requires Android 7.0 (API 24) or newer. Fire TV devices running Vega OS cannot i
 
 من «الحساب والمزامنة» في الإعدادات أو شاشة البداية، أنشئ حسابًا بالبريد وكلمة المرور ثم سجّل بالحساب نفسه على أجهزتك. ابدأ بالجهاز الذي عليه ترتيبك الحالي. تُدمج الاشتراكات وبيانات دخولها والقوائم وترتيب القنوات والمفضلة وسجل المتابعة، مع بقاء إعدادات أداء كل جهاز مستقلة. بعد تسجيل الدخول على جهاز جديد تُحمّل اشتراكاتك ويُحدّث فهرس القنوات تلقائيًا.
 
-تُرسل التغييرات بعد نحو ثانيتين، وتتحقق الأجهزة المفتوحة من التحديثات كل 30 ثانية، وعند العودة للتطبيق أو الضغط على «المزامنة الآن». عند انقطاع الاتصال تبقى التغييرات محلية حتى تنجح المحاولة التالية. تسجيل الخروج يوقف المزامنة ويُبقي بيانات الجهاز؛ يُمنع رفعها لحساب مختلف. ملفات M3U حتى 32 ميجابايت تُنقل مضغوطة ومقسمة، دون رفع مسارات الملفات المحلية.
+تُرسل التغييرات بعد نحو ثانيتين، أما موضع المشاهدة والقنوات الأخيرة فتُرسل كل دقيقتين على الأكثر وعند الخروج من التطبيق، وتتحقق الأجهزة المفتوحة من التحديثات كل 30 ثانية، وعند العودة للتطبيق أو الضغط على «المزامنة الآن». عند انقطاع الاتصال تبقى التغييرات محلية حتى تنجح المحاولة التالية. تسجيل الخروج يوقف المزامنة ويُبقي بيانات الجهاز؛ يُمنع رفعها لحساب مختلف. ملفات M3U حتى 32 ميجابايت تُنقل مضغوطة ومقسمة، دون رفع مسارات الملفات المحلية.
 
 The account backend is the dedicated Firebase project `hadi-iptv-sync-20261031` (email/password Auth and Firestore). Android, TV and Windows use the same authenticated REST client; no experimental Windows Firebase SDK is required. Refresh tokens are stored with platform secure storage, and account passwords are never persisted. Firestore rules restrict every account path to its authenticated owner. The client configuration contains a public API key only; no service-account credential belongs in the app.
 
-Sync uses stable cloud identities, per-record changes, deletion tombstones and revision preconditions. Concurrent changes to different records merge; the latest successfully uploaded change wins for the same record, except an older playback checkpoint cannot replace a newer timestamp. Local edits made during a request remain pending. The source catalogue and EPG cache are downloaded separately by each device, keeping sync small. Channel playback preferences and device layout/decoder/performance choices stay local; interface/audio/subtitle language preferences sync.
+Sync uses stable cloud identities, per-record changes, deletion tombstones and revision preconditions. Concurrent changes to different records merge; the latest successfully uploaded change wins for the same record, except an older playback checkpoint cannot replace a newer timestamp. Local edits made during a request remain pending. Local-only edits commit on top of the last synced revision without re-reading the account; only a change from another device triggers a full read and merge. Playback progress and recent channels upload at most every two minutes and when the app goes to the background. The source catalogue and EPG cache are downloaded separately by each device, keeping sync small. Channel playback preferences and device layout/decoder/performance choices stay local; interface/audio/subtitle language preferences sync.
 
 Deploy backend configuration with `firebase deploy --only auth,firestore --project hadi-iptv-sync-20261031`. Client configuration can be overridden with `--dart-define=FIREBASE_PROJECT_ID=... --dart-define=FIREBASE_API_KEY=...`. Run `flutter test test/account --exclude-tags network` for local account tests. The opt-in live test creates and removes synthetic Auth users only: `IPTV_FIREBASE_LIVE=1 flutter test test/account/firebase_live_test.dart`; remove their Firestore test paths afterward using the IDs saved in the system temporary `iptv-firebase-qa-users.json` file. Never run tests using a real customer's credentials.
 
@@ -60,6 +60,8 @@ When a configured second device first joins an existing account, existing cloud 
 ## Build
 
 Toolchain: Flutter **3.47.7** stable (Dart 3.13.5), JDK 17+, Android SDK 36, build-tools 36.0.0, NDK 28.2.13676358. On Linux, `bash tool/setup_container.sh` installs all of it idempotently (it installs `openjdk-17-jdk-headless` only when no Java 17+ is on `PATH`).
+
+The Linux desktop build (CI and E2E runs) also needs `libsecret-1-dev`, which the setup script installs: account sign-in keeps its session in the Secret Service. A session without one, such as a bare Xvfb display, shows that secure sign-in storage is unavailable when signing in; local data is unaffected.
 
 ```bash
 flutter pub get

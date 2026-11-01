@@ -1576,5 +1576,23 @@ class AppLocalizationsEn extends AppLocalizations {
       'Account sync has not been configured for this build.';
 
   @override
+  String get accountInvalidSignIn => 'Enter a valid email and your password.';
+
+  @override
+  String get accountInvalidEmail => 'Enter a valid email address.';
+
+  @override
+  String get accountTooManyAttempts =>
+      'Too many attempts. Wait a few minutes or reset your password.';
+
+  @override
+  String get accountServiceUnavailable =>
+      'Cannot reach the account service. Check your connection and try again.';
+
+  @override
+  String get accountSessionExpired =>
+      'Your sign-in has expired. Sign in again to resume sync; your data on this device is safe.';
+
+  @override
   String get guideWatchChannel => 'Watch channel';
 }

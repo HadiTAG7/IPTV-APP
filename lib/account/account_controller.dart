@@ -84,6 +84,7 @@ class AccountController with WidgetsBindingObserver {
     this.onImported,
     this.onPreferences,
     this.pollInterval = const Duration(seconds: 30),
+    this.playbackDelay = const Duration(minutes: 2),
   }) : local = local ?? LocalSyncStore(db);
   final AppDatabase db;
   final FirebaseAccountApi api;
@@ -92,6 +93,9 @@ class AccountController with WidgetsBindingObserver {
   final void Function(Set<int>)? onImported;
   final Future<void> Function()? onPreferences;
   final Duration pollInterval;
+
+  /// How long playback progress and recent channels wait for an upload.
+  final Duration playbackDelay;
   final _views = StreamController<AccountView>.broadcast();
   Stream<AccountView> get views => _views.stream;
   AccountView view = const AccountView();
@@ -107,9 +111,23 @@ class AccountController with WidgetsBindingObserver {
   final _restored = Completer<void>();
   bool _authBusy = false;
   bool _needsSync = false;
+
+  /// The pending local changes are playback only and wait for [_debounce].
+  bool _deferred = false;
   String? _revision;
   bool _hasRead = false;
   static const bindingKey = 'account_sync_owner_v1';
+  static const _playbackTables = {'watch_progress', 'recent_channels'};
+
+  /// Replies meaning the saved sign-in can never work again: the password
+  /// was changed or reset, or the account was disabled or deleted.
+  static const _deadSession = {
+    'TOKEN_EXPIRED',
+    'INVALID_REFRESH_TOKEN',
+    'USER_DISABLED',
+    'USER_NOT_FOUND',
+    'UNAUTHENTICATED',
+  };
   String _baselineKey(String uid) => 'account_sync_baseline_v1:$uid';
 
   void _emit({bool busy = false, String? error, DateTime? synced}) {
@@ -138,12 +156,29 @@ class AccountController with WidgetsBindingObserver {
         'recent_channels',
         'settings',
       };
-      if (_applying || !updates.any((u) => watched.contains(u.table))) return;
+      final tables = {
+        for (final u in updates)
+          if (watched.contains(u.table)) u.table,
+      };
+      if (_applying || tables.isEmpty) return;
       _needsSync = true;
+      // Playback saves progress every 10 s and every zap marks a recent
+      // channel: batch those rather than commit to the account each time.
+      if (tables.every(_playbackTables.contains)) {
+        if (_debounce?.isActive ?? false) return;
+        _deferred = true;
+        _debounce = Timer(playbackDelay, () {
+          _deferred = false;
+          unawaited(sync());
+        });
+        return;
+      }
+      _deferred = false;
       _debounce?.cancel();
       _debounce = Timer(const Duration(seconds: 2), () => unawaited(sync()));
     });
     // Lost Android TV keystores only require signing in again; local data stays.
+    String? restoreError;
     try {
       final saved = await vault.read();
       if (_disposed) return;
@@ -153,19 +188,25 @@ class AccountController with WidgetsBindingObserver {
         );
       }
     } on Object {
-      _emit(error: 'SESSION_STORAGE');
+      restoreError = 'SESSION_STORAGE';
     } finally {
       if (!_restored.isCompleted) _restored.complete();
     }
     if (_disposed) return;
     _poll = Timer.periodic(pollInterval, (_) => unawaited(sync()));
-    _emit();
+    _emit(error: restoreError);
     await sync();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _paused = state != AppLifecycleState.resumed;
+    final paused = state != AppLifecycleState.resumed;
+    // Batched playback progress is uploaded before the app is backgrounded.
+    if (paused && !_paused && _needsSync) {
+      _deferred = false;
+      unawaited(sync());
+    }
+    _paused = paused;
     if (!_paused) unawaited(sync(force: true));
   }
 
@@ -191,11 +232,12 @@ class AccountController with WidgetsBindingObserver {
       _session = session;
       _hasRead = false;
       _needsSync = true;
-    } on AccountException catch (e) {
-      _emit(error: e.code);
+    } on AccountException {
+      // The caller shows sign-in failures; the view keeps sync state only.
+      _emit();
       rethrow;
     } on Object {
-      _emit(error: 'SESSION_STORAGE');
+      _emit();
       throw const AccountException('SESSION_STORAGE');
     } finally {
       _authBusy = false;
@@ -228,7 +270,7 @@ class AccountController with WidgetsBindingObserver {
     _running = result;
     return result.whenComplete(() {
       _running = null;
-      if (_needsSync && !_disposed && view.error == null) {
+      if (_needsSync && !_deferred && !_disposed && view.error == null) {
         _debounce?.cancel();
         _debounce = Timer(const Duration(seconds: 2), () => unawaited(sync()));
       }
@@ -238,86 +280,148 @@ class AccountController with WidgetsBindingObserver {
   Future<void> _sync({required bool force}) async {
     _emit(busy: true);
     try {
-      var session = _session!;
-      if (session.expiresAt.isBefore(
-        DateTime.now().add(const Duration(minutes: 2)),
-      )) {
-        session = await api.refresh(session);
-        if (_disposed) return;
-        await vault.write(jsonEncode(session.toJson()));
-        _session = session;
+      try {
+        await _exchange(force: force);
+      } on AccountException catch (e) {
+        if (e.code != 'UNAUTHENTICATED') rethrow;
+        // Firestore refused the ID token before it expired here (a clock
+        // change or a revoked sign-in): refresh once before giving up on it.
+        await _exchange(force: force, refresh: true);
       }
-      final owner = await db.settingsDao.getString(bindingKey);
-      if (owner != session.uid) throw const AccountException('OTHER_ACCOUNT');
-      final baseline = decodeSyncData(
-        await db.settingsDao.getJson(_baselineKey(session.uid)),
+    } on AccountException catch (e) {
+      if (_deadSession.contains(e.code)) {
+        await _expire();
+      } else {
+        _emit(error: e.code);
+      }
+    } on Object {
+      _emit(error: 'SYNC_ERROR');
+    }
+  }
+
+  /// Drops a sign-in that can never work again, as [signOut] does (the
+  /// device binding, baseline and data stay), and asks for a new sign-in.
+  Future<void> _expire() async {
+    try {
+      await vault.write(null);
+    } on Object {
+      // The session is dropped from memory either way.
+    }
+    _session = null;
+    _hasRead = false;
+    _revision = null;
+    _emit(error: 'SESSION_EXPIRED');
+  }
+
+  Future<void> _exchange({required bool force, bool refresh = false}) async {
+    var session = _session!;
+    if (refresh ||
+        session.expiresAt.isBefore(
+          DateTime.now().add(const Duration(minutes: 2)),
+        )) {
+      session = await api.refresh(session);
+      if (_disposed) return;
+      await vault.write(jsonEncode(session.toJson()));
+      _session = session;
+    }
+    final owner = await db.settingsDao.getString(bindingKey);
+    if (owner != session.uid) throw const AccountException('OTHER_ACCOUNT');
+    // Batched playback changes need no local export while the account is
+    // unchanged; they upload when their delay ends.
+    if (!force &&
+        _hasRead &&
+        _deferred &&
+        await api.revision(session) == _revision) {
+      _emit(synced: DateTime.now());
+      return;
+    }
+    final baseline = decodeSyncData(
+      await db.settingsDao.getJson(_baselineKey(session.uid)),
+    );
+    await local.remember(baseline);
+    final before = await local.export();
+    final edits = syncChanges(baseline, before);
+    if (!force &&
+        _hasRead &&
+        edits.isEmpty &&
+        await api.revision(session) == _revision) {
+      _needsSync = false;
+      _emit(synced: DateTime.now());
+      return;
+    }
+    // Only local edits: commit them on top of the last synced state. Its
+    // revision is the write precondition, so a change made elsewhere since
+    // then fails as a CONFLICT and falls back to a full read and merge.
+    var known = !force && _hasRead && edits.isNotEmpty
+        ? RemoteState(baseline, _revision)
+        : null;
+    for (var attempt = 0; attempt < 4; attempt++) {
+      final remote = known ?? await api.read(session);
+      final sent = known != null ? before : await local.export();
+      known = null;
+      final pending = baseline.isEmpty
+          ? initialSyncChanges(remote.data, remote.deletedKeys, sent)
+          : syncChanges(baseline, sent);
+      // A source or list deleted elsewhere wins over an edit made here before
+      // this device heard of it: reviving it alone would drop its contents.
+      pending.removeWhere(
+        (key, r) =>
+            (r?['type'] == 'source' || r?['type'] == 'list') &&
+            baseline.containsKey(key) &&
+            remote.deletedKeys.contains(key),
       );
-      final before = await local.export();
-      if (!force &&
-          _hasRead &&
-          syncChanges(baseline, before).isEmpty &&
-          await api.revision(session) == _revision) {
-        _needsSync = false;
-        _emit(synced: DateTime.now());
-        return;
+      final merged = mergeSyncData(remote.data, pending);
+      // Source/list deletion wins over orphaned children from offline devices.
+      merged.removeWhere(
+        (key, r) =>
+            r['type'] != 'source' &&
+            r.containsKey('source') &&
+            !merged.containsKey('source:${r['source']}'),
+      );
+      merged.removeWhere(
+        (key, r) =>
+            r['type'] == 'item' && !merged.containsKey('list:${r['list']}'),
+      );
+      // Playlist chunks commit before their source record, so an upload cut
+      // off between commits never publishes a playlist with missing chunks.
+      final changes = syncChanges(remote.data, merged);
+      String? committedRevision;
+      try {
+        committedRevision = await api.write(session, remote, {
+          for (final e in changes.entries)
+            if (e.key.startsWith('file:')) e.key: e.value,
+          ...changes,
+        });
+      } on AccountException catch (e) {
+        if (e.code == 'CONFLICT' && attempt < 3) continue;
+        rethrow;
       }
-      for (var attempt = 0; attempt < 4; attempt++) {
-        final remote = await api.read(session);
-        final sent = await local.export();
-        final pending = baseline.isEmpty
-            ? initialSyncChanges(remote.data, remote.deletedKeys, sent)
-            : syncChanges(baseline, sent);
-        final merged = mergeSyncData(remote.data, pending);
-        // Source/list deletion wins over orphaned children from offline devices.
-        merged.removeWhere(
-          (key, r) =>
-              r['type'] != 'source' &&
-              r.containsKey('source') &&
-              !merged.containsKey('source:${r['source']}'),
-        );
-        merged.removeWhere(
-          (key, r) =>
-              r['type'] == 'item' && !merged.containsKey('list:${r['list']}'),
-        );
-        String? committedRevision;
-        try {
-          committedRevision = await api.write(
-            session,
-            remote,
-            syncChanges(remote.data, merged),
-          );
-        } on AccountException catch (e) {
-          if (e.code == 'CONFLICT' && attempt < 3) continue;
-          rethrow;
-        }
-        if (_disposed) return;
-        _applying = true;
-        Set<int> imports = {};
-        try {
-          await db.transaction(() async {
+      if (_disposed) return;
+      _applying = true;
+      Set<int> imports = {};
+      try {
+        await db.transaction(() async {
+          // Nothing to apply when the account now holds what was sent.
+          if (syncChanges(sent, merged).isNotEmpty) {
             final latest = await local.export();
             final withLateChanges = mergeSyncData(
               merged,
               syncChanges(sent, latest),
             );
             imports = await local.apply(withLateChanges);
-            await db.settingsDao.setJson(_baselineKey(session.uid), merged);
-          });
-          await onPreferences?.call();
-        } finally {
-          _applying = false;
-        }
-        onImported?.call(imports);
-        _revision = committedRevision;
-        _hasRead = true;
-        _needsSync = syncChanges(merged, await local.export()).isNotEmpty;
-        _emit(synced: DateTime.now());
-        return;
+          }
+          await db.settingsDao.setJson(_baselineKey(session.uid), merged);
+        });
+        await onPreferences?.call();
+      } finally {
+        _applying = false;
       }
-    } on AccountException catch (e) {
-      _emit(error: e.code);
-    } on Object {
-      _emit(error: 'SYNC_ERROR');
+      onImported?.call(imports);
+      _revision = committedRevision;
+      _hasRead = true;
+      _needsSync = syncChanges(merged, await local.export()).isNotEmpty;
+      _emit(synced: DateTime.now());
+      return;
     }
   }
 

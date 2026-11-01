@@ -1553,7 +1553,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get accountResetSent =>
-      'إذا كان هناك حساب بهذا البريد، سيصلك رابط استعادة كلمة المرور.';
+      'إذا كان هذا البريد مرتبطًا بحساب، فسيصلك رابط لاستعادة كلمة المرور.';
 
   @override
   String get accountSyncNow => 'المزامنة الآن';
@@ -1587,7 +1587,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get accountOtherOwner =>
-      'بيانات هذا الجهاز مرتبطة بحساب آخر. سجّل بالحساب الأصلي للحفاظ على خصوصية بياناتك.';
+      'بيانات هذا الجهاز مرتبطة بحساب آخر. سجّل الدخول بالحساب الأصلي للحفاظ على خصوصية بياناتك.';
 
   @override
   String get accountSyncFailed =>
@@ -1603,6 +1603,24 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get accountNotConfigured => 'لم تُجهّز مزامنة الحساب لهذه النسخة بعد.';
+
+  @override
+  String get accountInvalidSignIn => 'أدخل بريدًا صحيحًا وكلمة المرور.';
+
+  @override
+  String get accountInvalidEmail => 'أدخل بريدًا إلكترونيًا صحيحًا.';
+
+  @override
+  String get accountTooManyAttempts =>
+      'محاولات كثيرة جدًا. انتظر بضع دقائق أو استعد كلمة المرور.';
+
+  @override
+  String get accountServiceUnavailable =>
+      'تعذّر الوصول إلى خدمة الحساب. تحقق من الاتصال وحاول مجددًا.';
+
+  @override
+  String get accountSessionExpired =>
+      'انتهت صلاحية تسجيل الدخول. سجّل الدخول مجددًا لاستئناف المزامنة؛ بياناتك على هذا الجهاز محفوظة.';
 
   @override
   String get guideWatchChannel => 'مشاهدة القناة';

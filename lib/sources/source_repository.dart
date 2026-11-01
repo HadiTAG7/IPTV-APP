@@ -487,9 +487,15 @@ class SourceRepository {
 
   Future<void> _deleteImportedFile(String path) async {
     try {
-      final root = _join(await _appSupportDir(), importDirName);
+      final support = await _appSupportDir();
+      final root = _join(support, importDirName);
       final file = File(path);
-      if (file.parent.absolute.path == Directory(root).absolute.path &&
+      final folder = file.parent.absolute.path;
+      // Account sync in v0.1.7 kept received playlists in appSupport itself.
+      final synced =
+          folder == Directory(support).absolute.path &&
+          file.uri.pathSegments.last.startsWith('cloud-');
+      if ((folder == Directory(root).absolute.path || synced) &&
           file.existsSync()) {
         await file.delete();
       }

@@ -2726,6 +2726,36 @@ abstract class AppLocalizations {
   /// **'Account sync has not been configured for this build.'**
   String get accountNotConfigured;
 
+  /// No description provided for @accountInvalidSignIn.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a valid email and your password.'**
+  String get accountInvalidSignIn;
+
+  /// No description provided for @accountInvalidEmail.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a valid email address.'**
+  String get accountInvalidEmail;
+
+  /// No description provided for @accountTooManyAttempts.
+  ///
+  /// In en, this message translates to:
+  /// **'Too many attempts. Wait a few minutes or reset your password.'**
+  String get accountTooManyAttempts;
+
+  /// No description provided for @accountServiceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Cannot reach the account service. Check your connection and try again.'**
+  String get accountServiceUnavailable;
+
+  /// No description provided for @accountSessionExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'Your sign-in has expired. Sign in again to resume sync; your data on this device is safe.'**
+  String get accountSessionExpired;
+
   /// Button in the programme info of the guide: plays the programme's channel live.
   ///
   /// In en, this message translates to:

@@ -15,18 +15,31 @@ import 'firebase_config.dart';
 Future<void> openAccountScreen(BuildContext context) => Navigator.of(context)
     .push<void>(MaterialPageRoute<void>(builder: (_) => const AccountScreen()));
 
-String accountErrorText(AppLocalizations l, String code) => switch (code) {
+/// While [signedOut], a failure comes from signing in or resetting the
+/// password, never from sync, so unknown codes mean the account service
+/// could not be reached.
+String accountErrorText(
+  AppLocalizations l,
+  String code, {
+  bool signedOut = false,
+}) => switch (code) {
   'FORM' => l.accountInvalidForm,
+  'FORM_SIGN_IN' => l.accountInvalidSignIn,
+  'FORM_EMAIL' => l.accountInvalidEmail,
   'EMAIL_EXISTS' => l.accountExists,
   'OTHER_ACCOUNT' => l.accountOtherOwner,
   'SESSION_STORAGE' => l.accountStorageFailed,
+  'SESSION_EXPIRED' => l.accountSessionExpired,
   'PLAYLIST_FILE_MISSING' || 'PLAYLIST_FILE_TOO_LARGE' => l.accountFileError,
+  'TOO_MANY_ATTEMPTS_TRY_LATER' ||
+  'RESET_PASSWORD_EXCEED_LIMIT' => l.accountTooManyAttempts,
   'INVALID_LOGIN_CREDENTIALS' ||
   'INVALID_PASSWORD' ||
   'EMAIL_NOT_FOUND' ||
   'INVALID_EMAIL' ||
   'USER_DISABLED' ||
   'WEAK_PASSWORD' => l.accountAuthFailed,
+  _ when signedOut => l.accountServiceUnavailable,
   _ => l.accountSyncFailed,
 };
 
@@ -78,7 +91,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     if (!_validEmail ||
         _password.text.length < (_create ? 8 : 1) ||
         (_create && _confirm.text != _password.text)) {
-      setState(() => _error = 'FORM');
+      setState(() => _error = _create ? 'FORM' : 'FORM_SIGN_IN');
       return;
     }
     unawaited(
@@ -99,6 +112,25 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     final busy = _busy || account.busy;
     final error = _error ?? account.error;
     final tv = FormFactorScope.isTv(context);
+    // Right under the button just pressed: on a TV the remote cannot scroll
+    // to text below the last control.
+    final feedback = [
+      if (error != null) ...[
+        const SizedBox(height: Spacing.md),
+        Semantics(
+          key: const ValueKey('account-error'),
+          liveRegion: true,
+          child: Text(
+            accountErrorText(l, error, signedOut: account.email == null),
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ),
+      ],
+      if (_message != null) ...[
+        const SizedBox(height: Spacing.md),
+        Text(_message!, key: const ValueKey('account-message')),
+      ],
+    ];
     return Scaffold(
       appBar: AppBar(
         title: Text(l.accountTitle),
@@ -186,8 +218,10 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                           busy: busy,
                           expand: true,
                         ),
+                        ...feedback,
                         const SizedBox(height: Spacing.sm),
                         TvButton(
+                          key: const ValueKey('account-toggle'),
                           label: _create
                               ? l.accountHaveAccount
                               : l.accountNeedAccount,
@@ -202,11 +236,15 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                         ),
                         const SizedBox(height: Spacing.sm),
                         TvButton(
+                          key: const ValueKey('account-reset'),
                           label: l.accountReset,
                           busy: busy,
                           onSelect: () {
                             if (!_validEmail) {
-                              setState(() => _error = 'FORM');
+                              setState(() {
+                                _error = 'FORM_EMAIL';
+                                _message = null;
+                              });
                               return;
                             }
                             unawaited(
@@ -226,6 +264,11 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                         Text(
                           account.email!,
                           textDirection: TextDirection.ltr,
+                          // Aligned to the start edge like the lines below.
+                          textAlign:
+                              Directionality.of(context) == TextDirection.rtl
+                              ? TextAlign.right
+                              : TextAlign.left,
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                         const SizedBox(height: Spacing.md),
@@ -252,6 +295,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                             ),
                           ),
                         ),
+                        ...feedback,
                         const SizedBox(height: Spacing.lg),
                         Text(
                           l.accountLocalData,
@@ -268,22 +312,6 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                             ),
                           ),
                         ),
-                      ],
-                      if (error != null) ...[
-                        const SizedBox(height: Spacing.md),
-                        Semantics(
-                          liveRegion: true,
-                          child: Text(
-                            accountErrorText(l, error),
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.error,
-                            ),
-                          ),
-                        ),
-                      ],
-                      if (_message != null) ...[
-                        const SizedBox(height: Spacing.md),
-                        Text(_message!),
                       ],
                     ],
                   ),

@@ -994,6 +994,11 @@
   "accountStorageFailed": "Secure sign-in storage is unavailable. Your existing data is safe. Try signing in again.",
   "accountFileError": "A playlist file is missing or exceeds 32 MB. Restore it or use a playlist URL, then retry sync.",
   "accountNotConfigured": "Account sync has not been configured for this build.",
+  "accountInvalidSignIn": "Enter a valid email and your password.",
+  "accountInvalidEmail": "Enter a valid email address.",
+  "accountTooManyAttempts": "Too many attempts. Wait a few minutes or reset your password.",
+  "accountServiceUnavailable": "Cannot reach the account service. Check your connection and try again.",
+  "accountSessionExpired": "Your sign-in has expired. Sign in again to resume sync; your data on this device is safe.",
   "guideWatchChannel": "Watch channel",
   "@guideWatchChannel": {
     "description": "Button in the programme info of the guide: plays the programme's channel live."
