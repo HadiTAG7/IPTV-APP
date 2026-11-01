@@ -1499,7 +1499,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get accountIntro =>
-      'Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favourites, viewing progress and language settings sync automatically. Your existing data is merged when you sign in.';
+      'Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favorites, viewing progress and language settings sync automatically. Your existing data is merged when you sign in.';
 
   @override
   String get accountEmail => 'Email';
@@ -1562,7 +1562,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get accountOtherOwner =>
-      'This device\'s data belongs to another account. Sign in with the original account to keep your data private.';
+      'This device\'s data belongs to another account. Sign in with that account to keep syncing it, or switch this device to the account you entered.';
 
   @override
   String get accountSyncFailed =>
@@ -1600,6 +1600,32 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get accountSignInAgain => 'Sign in again';
+
+  @override
+  String accountOtherOwnerNamed(String owner) {
+    return 'This device\'s data belongs to ⁨$owner⁩. Sign in with that account to keep syncing it, or switch this device to the account you entered.';
+  }
+
+  @override
+  String get accountSwitch => 'Switch this device to this account';
+
+  @override
+  String get accountSwitchTitle => 'Switch this device to another account?';
+
+  @override
+  String accountSwitchBody(String owner) {
+    return 'This device stops syncing with ⁨$owner⁩. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with. ⁨$owner⁩ keeps its own copy, which this device no longer changes.';
+  }
+
+  @override
+  String get accountSwitchBodyUnnamed =>
+      'This device stops syncing with the account it was linked to. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with. The previous account keeps its own copy, which this device no longer changes.';
+
+  @override
+  String get accountSwitchConfirm => 'Switch';
+
+  @override
+  String get accountSyncStopped => 'Sync stopped. Open to see why.';
 
   @override
   String get guideWatchChannel => 'Watch channel';

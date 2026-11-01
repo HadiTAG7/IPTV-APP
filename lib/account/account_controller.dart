@@ -37,6 +37,7 @@ class AccountView {
     this.error,
     this.lastSync,
     this.linked = false,
+    this.owner,
   });
   final String? email;
   final bool busy;
@@ -46,6 +47,10 @@ class AccountView {
   /// This device's data belongs to an account, also while signed out: its
   /// changes, deletions included, reach the other devices once it syncs.
   final bool linked;
+
+  /// The email of the account this device's data belongs to, when known (a
+  /// device an earlier version linked learns it at its next sign-in).
+  final String? owner;
 }
 
 final accountControllerProvider = Provider<AccountController>((ref) {
@@ -144,6 +149,7 @@ class AccountController with WidgetsBindingObserver {
   bool _paused = false;
   bool _started = false;
   bool _linked = false;
+  String? _owner;
 
   /// The saved sign-in expired or was lost: the view asks for a new one
   /// until a sign-in succeeds.
@@ -161,6 +167,9 @@ class AccountController with WidgetsBindingObserver {
   String? _revision;
   bool _hasRead = false;
   static const bindingKey = 'account_sync_owner_v1';
+
+  /// The email of the account [bindingKey] names, to say whose it is.
+  static const ownerEmailKey = 'account_sync_owner_email_v1';
 
   /// True from a sign-in to a sign-out, false after it; unset before this
   /// version. The secure storage can lose the saved sign-in (Android resets
@@ -188,6 +197,7 @@ class AccountController with WidgetsBindingObserver {
       error: error ?? (_expired ? 'SESSION_EXPIRED' : null),
       lastSync: synced ?? view.lastSync,
       linked: _linked,
+      owner: _linked ? _owner : null,
     );
     _views.add(view);
   }
@@ -268,25 +278,34 @@ class AccountController with WidgetsBindingObserver {
     // A lost or unreadable keystore only requires signing in again; local
     // data stays.
     String? restoreError;
+    bool? signedIn;
     try {
-      _linked = await db.settingsDao.getString(bindingKey) != null;
-      final signedIn = await db.settingsDao.getBool(signedInKey);
+      final owner = await db.settingsDao.getString(bindingKey);
+      _linked = owner != null;
+      _owner = await db.settingsDao.getString(ownerEmailKey);
+      signedIn = await db.settingsDao.getBool(signedInKey);
       final saved = await _vault(vault.read);
       if (_disposed) return;
       if (saved != null && signedIn == false) {
         // Signed out, but the secure storage failed to delete the sign-in.
         await _forgetSession();
       } else if (saved != null) {
-        _session = AccountSession.fromJson(
+        final session = _session = AccountSession.fromJson(
           jsonDecode(saved) as Map<String, dynamic>,
         );
         if (signedIn == null) await db.settingsDao.setBool(signedInKey, true);
+        // Linked by an earlier version, which kept no email.
+        if (_owner == null && owner == session.uid) {
+          await db.settingsDao.setString(ownerEmailKey, _owner = session.email);
+        }
       } else if (signedIn ?? false) {
         // The secure storage lost the saved sign-in.
         _expired = true;
       }
     } on Object {
       restoreError = 'SESSION_STORAGE';
+      // The saved sign-in cannot be used: syncing needs a new one.
+      if (signedIn ?? false) _expired = true;
     } finally {
       if (!_restored.isCompleted) _restored.complete();
     }
@@ -326,14 +345,24 @@ class AccountController with WidgetsBindingObserver {
       if (_started) await _restored.future;
       await _running;
       if (_disposed) return;
+      // A new account is never the one this device's data belongs to: it is
+      // refused before it is created.
+      if (create && await db.settingsDao.getString(bindingKey) != null) {
+        await _otherAccount();
+      }
       final session = await api.signIn(email, password, create: create);
       final owner = await db.settingsDao.getString(bindingKey);
-      if (owner != null && owner != session.uid) {
-        throw const AccountException('OTHER_ACCOUNT');
+      if (owner != null && owner != session.uid) await _otherAccount();
+      try {
+        await _vault(() => vault.write(jsonEncode(session.toJson())));
+      } on Object {
+        // Signed in already: as with a refreshed token, the session syncs
+        // from memory, and after a restart the device asks for a sign-in.
       }
-      await _vault(() => vault.write(jsonEncode(session.toJson())));
       await db.settingsDao.setString(bindingKey, session.uid);
+      await db.settingsDao.setString(ownerEmailKey, session.email);
       await db.settingsDao.setBool(signedInKey, true);
+      _owner = session.email;
       _session = session;
       _linked = true;
       _expired = false;
@@ -352,6 +381,14 @@ class AccountController with WidgetsBindingObserver {
     await sync(force: true);
   }
 
+  /// Refuses a sign-in to an account other than the one this device's data
+  /// belongs to, whose email the view then names, when known.
+  Future<Never> _otherAccount() async {
+    _linked = true;
+    _owner = await db.settingsDao.getString(ownerEmailKey);
+    throw const AccountException('OTHER_ACCOUNT');
+  }
+
   Future<void> signOut() async {
     if (_authBusy) return;
     _authBusy = true;
@@ -365,6 +402,34 @@ class AccountController with WidgetsBindingObserver {
       _session = null;
       _hasRead = false;
       _revision = null;
+      _emit();
+    } finally {
+      _authBusy = false;
+    }
+  }
+
+  /// Unlinks this device, signed out, from the account its data belongs to,
+  /// so another account can sign in. Nothing is deleted: the data stays
+  /// here and merges into the next account as at a first sign-in, and the
+  /// old account keeps its copy, which this device no longer changes.
+  Future<void> release() async {
+    if (_authBusy || _session != null) return;
+    _authBusy = true;
+    try {
+      if (_started) await _restored.future;
+      await _running;
+      final owner = await db.settingsDao.getString(bindingKey);
+      await db.transaction(() async {
+        // Without its baseline a later sign-in to the old account is a first
+        // sign-in too, which deletes nothing there.
+        if (owner != null) await db.settingsDao.remove(_baselineKey(owner));
+        await db.settingsDao.remove(bindingKey);
+        await db.settingsDao.remove(ownerEmailKey);
+        await db.settingsDao.setBool(signedInKey, false);
+      });
+      _linked = false;
+      _owner = null;
+      _expired = false;
       _emit();
     } finally {
       _authBusy = false;
@@ -478,15 +543,7 @@ class AccountController with WidgetsBindingObserver {
       known = null;
       final pending = baseline.isEmpty
           ? initialSyncChanges(remote.data, remote.deletedKeys, sent)
-          : syncChanges(baseline, sent);
-      // A source or list deleted elsewhere wins over an edit made here before
-      // this device heard of it: reviving it alone would drop its contents.
-      pending.removeWhere(
-        (key, r) =>
-            (r?['type'] == 'source' || r?['type'] == 'list') &&
-            baseline.containsKey(key) &&
-            remote.deletedKeys.contains(key),
-      );
+          : pendingSyncChanges(baseline, remote.data, remote.deletedKeys, sent);
       final merged = mergeSyncData(remote.data, pending);
       // Source/list deletion wins over orphaned children from offline devices.
       merged.removeWhere(

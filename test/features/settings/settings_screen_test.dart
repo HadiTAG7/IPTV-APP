@@ -101,6 +101,11 @@ void main() {
         'sign-in expired', (tester) async {
       for (final (account, value) in [
         (const AccountView(error: 'SESSION_EXPIRED'), l10n.accountSignInAgain),
+        // A saved sign-in the secure storage could not read.
+        (
+          const AccountView(error: 'SESSION_STORAGE', linked: true),
+          l10n.accountSignInAgain,
+        ),
         (
           const AccountView(email: 'viewer@example.test', linked: true),
           'viewer@example.test',
@@ -115,6 +120,44 @@ void main() {
         );
         await openSettingsTv(tester);
         expect(_inRow('settings-account', value), findsOneWidget);
+        await h.dispose(tester);
+      }
+    });
+
+    testWidgets('$lang TV: the account row says when sync stopped, but not '
+        'while the connection is down', (tester) async {
+      for (final (error, stopped) in [
+        ('PLAYLIST_FILE_TOO_LARGE', true),
+        ('RECORD_TOO_LARGE', true),
+        ('SYNC_ERROR', true),
+        ('NETWORK_ERROR', false),
+        (null, false),
+      ]) {
+        final h = await pumpSettingsApp(
+          tester,
+          locale: locale,
+          overrides: [
+            accountViewProvider.overrideWith(
+              (ref) => Stream.value(
+                AccountView(
+                  email: 'viewer@example.test',
+                  linked: true,
+                  error: error,
+                ),
+              ),
+            ),
+          ],
+        );
+        await openSettingsTv(tester);
+        expect(
+          _inRow('settings-account', l10n.accountSyncStopped),
+          stopped ? findsOneWidget : findsNothing,
+          reason: error,
+        );
+        expect(
+          _inRow('settings-account', 'viewer@example.test'),
+          findsOneWidget,
+        );
         await h.dispose(tester);
       }
     });

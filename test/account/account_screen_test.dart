@@ -488,5 +488,248 @@ void main() {
         expect(address.left, moreOrLessEquals(status.left, epsilon: 2));
       }
     });
+
+    /// Lets the controller's database and account calls run.
+    Future<void> work(WidgetTester tester) async {
+      for (var i = 0; i < 8; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+    }
+
+    for (final tv in [false, true]) {
+      testWidgets('$lang ${tv ? 'TV' : 'phone'}: Done on the last field '
+          'submits, and the keyboard stays closed over the result', (
+        tester,
+      ) async {
+        applyFocusHighlightStrategy(tv: tv);
+        addTearDown(() => applyFocusHighlightStrategy(tv: false));
+        final db = openTestDb();
+        addTearDown(db.close);
+        final l = await pumpAccount(
+          tester,
+          lang: lang,
+          tv: tv,
+          size: tv ? const Size(960, 540) : null,
+          account: controller(FailingApi('INVALID_LOGIN_CREDENTIALS'), db),
+        );
+        for (final create in [false, true]) {
+          if (create) await tapKey(tester, 'account-toggle');
+          await typeText(
+            tester,
+            find.byKey(const ValueKey('account-email')),
+            'viewer@example.test',
+          );
+          await tester.testTextInput.receiveAction(TextInputAction.next);
+          await tester.pumpAndSettle();
+          await tester.enterText(
+            find.byKey(const ValueKey('account-password')),
+            'sample-password',
+          );
+          if (create) {
+            await tester.testTextInput.receiveAction(TextInputAction.next);
+            await tester.pumpAndSettle();
+            await tester.enterText(
+              find.byKey(const ValueKey('account-confirm')),
+              'sample-password',
+            );
+          }
+          await tester.testTextInput.receiveAction(TextInputAction.done);
+          await work(tester);
+          expect(find.text(l.accountAuthFailed), findsOneWidget);
+          expect(tester.testTextInput.isVisible, isFalse, reason: '$create');
+        }
+      });
+    }
+
+    testWidgets('$lang TV: signing in with another account offers to move '
+        'this device to it, after saying what happens to its data', (
+      tester,
+    ) async {
+      applyFocusHighlightStrategy(tv: true);
+      addTearDown(() => applyFocusHighlightStrategy(tv: false));
+      final db = openTestDb();
+      addTearDown(db.close);
+      final cloud = Cloud();
+      await tester.runAsync(() async {
+        await db.sourcesDao.create(
+          const SourceConfig(
+            kind: SourceKind.xtream,
+            name: 'Sports',
+            url: 'https://provider.example',
+            username: 'sample',
+            password: 'private-password',
+          ),
+        );
+        final first = AccountController(
+          db: db,
+          api: LocalApi(cloud),
+          vault: MemoryVault(),
+        );
+        await first.authenticate('owner@example.test', 'sample-password');
+        await first.signOut();
+        first.dispose();
+      });
+      late AccountController account;
+      final l = await pumpAccount(
+        tester,
+        lang: lang,
+        tv: true,
+        size: const Size(960, 540),
+        account: accountControllerProvider.overrideWith((ref) {
+          account = AccountController(
+            db: db,
+            api: LocalApi(cloud),
+            vault: MemoryVault(),
+          );
+          ref.onDispose(account.dispose);
+          return account;
+        }),
+      );
+      await typeText(
+        tester,
+        find.byKey(const ValueKey('account-email')),
+        'other@example.test',
+      );
+      await typeText(
+        tester,
+        find.byKey(const ValueKey('account-password')),
+        'sample-password',
+      );
+      await tapKey(tester, 'account-submit');
+      await work(tester);
+      const owner = 'owner@example.test';
+      final message = l.accountOtherOwnerNamed(owner);
+      expect(message, contains('\u2068$owner\u2069'));
+      expect(find.text(message), findsOneWidget);
+      // Cancel keeps the device as it was.
+      await tapKey(tester, 'account-switch');
+      expect(find.text(l.accountSwitchBody(owner)), findsOneWidget);
+      await tapKey(tester, 'account-switch-cancel');
+      expect(find.byType(SwitchAccountDialog), findsNothing);
+      expect(account.view.linked, isTrue);
+      await tapKey(tester, 'account-switch');
+      await tapKey(tester, 'account-switch-confirm');
+      await work(tester);
+      expect(account.view.email, 'other@example.test');
+      expect(find.byKey(const ValueKey('account-sync')), findsOneWidget);
+      // The remote keeps a focused control.
+      expect(
+        FocusManager.instance.primaryFocus?.context
+            ?.findAncestorWidgetOfExactType<TvButton>()
+            ?.key,
+        const ValueKey('account-sync'),
+      );
+      await tester.runAsync(() async {
+        expect(await db.sourcesDao.all(), hasLength(1));
+      });
+    });
+
+    test('$lang: switching a device linked by an earlier version explains '
+        'it without the email', () {
+      final l = lookupAppLocalizations(Locale(lang));
+      expect(l.accountSwitchBodyUnnamed, isNot(contains('\u2068')));
+      expect(l.accountSwitchBody('a@example.test'), contains('\u2068'));
+    });
+
+    testWidgets('$lang TV: Sign out answers during a background poll', (
+      tester,
+    ) async {
+      applyFocusHighlightStrategy(tv: true);
+      addTearDown(() => applyFocusHighlightStrategy(tv: false));
+      final db = openTestDb();
+      addTearDown(db.close);
+      final api = GatedApi(Cloud());
+      late AccountController account;
+      await pumpAccount(
+        tester,
+        lang: lang,
+        tv: true,
+        size: const Size(960, 540),
+        account: accountControllerProvider.overrideWith((ref) {
+          account = AccountController(db: db, api: api, vault: MemoryVault());
+          ref.onDispose(account.dispose);
+          return account;
+        }),
+      );
+      await tester.runAsync(
+        () => account.authenticate('viewer@example.test', 'sample-password'),
+      );
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      expect(
+        FocusManager.instance.primaryFocus?.context
+            ?.findAncestorWidgetOfExactType<TvButton>()
+            ?.key,
+        const ValueKey('account-sign-out'),
+      );
+      // The 30 s poll, its revision check slow to answer.
+      final gate = api.gate = Completer<void>();
+      final poll = account.sync();
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
+      Finder spinner(String key) => find.descendant(
+        of: find.byKey(ValueKey(key)),
+        matching: find.byType(CircularProgressIndicator),
+      );
+      expect(spinner('account-sync'), findsOneWidget);
+      expect(spinner('account-sign-out'), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      api.gate = null;
+      gate.complete();
+      await tester.runAsync(() => poll);
+      await work(tester);
+      expect(account.view.email, isNull);
+    });
+
+    testWidgets('$lang phone: the reset confirmation is announced', (
+      tester,
+    ) async {
+      final db = openTestDb();
+      addTearDown(db.close);
+      final l = await pumpAccount(
+        tester,
+        lang: lang,
+        tv: false,
+        account: controller(FailingApi(null), db),
+      );
+      await fill(tester);
+      await tapKey(tester, 'account-reset');
+      expect(find.text(l.accountResetSent), findsOneWidget);
+      expect(
+        tester
+            .widget<Semantics>(find.byKey(const ValueKey('account-message')))
+            .properties
+            .liveRegion,
+        isTrue,
+      );
+    });
+  }
+
+  test('English copy spells favorites as the Favorites tab does', () {
+    expect(
+      File('lib/l10n/app_en.arb').readAsStringSync(),
+      isNot(contains('avourite')),
+    );
+  });
+}
+
+/// A background poll whose revision check waits for [gate].
+class GatedApi extends LocalApi {
+  GatedApi(super.cloud);
+  Completer<void>? gate;
+  @override
+  Future<String?> revision(AccountSession session) async {
+    await gate?.future;
+    return super.revision(session);
   }
 }

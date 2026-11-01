@@ -91,7 +91,10 @@ void main() {
     }
   });
 
-  Widget form({TextInputAction secondAction = TextInputAction.done}) => Center(
+  Widget form({
+    TextInputAction secondAction = TextInputAction.done,
+    ValueChanged<String>? onSubmitted,
+  }) => Center(
     child: SizedBox(
       width: 400,
       child: Column(
@@ -107,12 +110,14 @@ void main() {
             focusNode: first,
             nextFocusNode: second,
             decoration: const InputDecoration(labelText: 'Server'),
+            onSubmitted: onSubmitted,
           ),
           const SizedBox(height: 16),
           TvTextField(
             focusNode: second,
             textInputAction: secondAction,
             decoration: const InputDecoration(labelText: 'Username'),
+            onSubmitted: onSubmitted,
           ),
           const SizedBox(height: 16),
           TvFocusable(
@@ -240,6 +245,28 @@ void main() {
       await press(tester, LogicalKeyboardKey.arrowDown);
       expect(below.hasPrimaryFocus, isTrue);
       await press(tester, LogicalKeyboardKey.arrowUp);
+      expect(second.hasPrimaryFocus, isTrue);
+      expect(sent(tester), isNot(contains('TextInput.show')));
+      expect(tester.testTextInput.isVisible, isFalse);
+    });
+
+    testWidgets('Done submits and the keyboard stays closed over what the '
+        'submission shows; Next submits and moves on', (tester) async {
+      final submitted = <String>[];
+      await pumpTv(tester, tv(form(onSubmitted: submitted.add)));
+      first.requestFocus();
+      await tester.pumpAndSettle();
+      await press(tester, LogicalKeyboardKey.select);
+      await tester.enterText(find.byType(TextField).first, 'host');
+      await tester.testTextInput.receiveAction(TextInputAction.next);
+      await tester.pumpAndSettle();
+      expect(second.hasPrimaryFocus, isTrue);
+      expect(submitted, ['host']);
+      await tester.enterText(find.byType(TextField).last, 'user');
+      clear(tester);
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(submitted, ['host', 'user']);
       expect(second.hasPrimaryFocus, isTrue);
       expect(sent(tester), isNot(contains('TextInput.show')));
       expect(tester.testTextInput.isVisible, isFalse);

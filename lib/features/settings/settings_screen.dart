@@ -226,6 +226,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final android = platform == TargetPlatform.android;
     final source = ref.watch(activeSourceProvider);
     final version = ref.watch(appVersionProvider).value;
+    final account = ref.watch(accountViewProvider).value;
     final engines = [
       EngineSetting.auto,
       if (android) EngineSetting.exo,
@@ -258,7 +259,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         large: large,
         icon: Icons.account_circle_outlined,
         title: l10n.accountTitle,
-        value: _accountValue(l10n, ref.watch(accountViewProvider).value),
+        value: _accountValue(l10n, account),
+        detail: _accountStopped(account) ? l10n.accountSyncStopped : null,
+        detailColor: AppColors.error,
         onSelect: () => unawaited(openAccountScreen(context)),
       ),
       SettingsTile(
@@ -701,12 +704,21 @@ class _Note extends StatelessWidget {
   }
 }
 
-/// The signed-in email; after an expired sign-in, a request to sign in
-/// again, since a TV user rarely opens the account screen to see why sync
-/// stopped.
+/// The signed-in email; after an expired sign-in, or one the secure storage
+/// could not read on a linked device, a request to sign in again, since a
+/// TV user rarely opens the account screen to see why sync stopped.
 String? _accountValue(AppLocalizations l10n, AccountView? view) =>
     view?.email ??
-    (view?.error == 'SESSION_EXPIRED' ? l10n.accountSignInAgain : null);
+    (view?.error == 'SESSION_EXPIRED' ||
+            view?.error == 'SESSION_STORAGE' && view!.linked
+        ? l10n.accountSignInAgain
+        : null);
+
+/// Signed in, sync failed for a reason that does not clear by itself.
+bool _accountStopped(AccountView? view) {
+  final error = view?.error;
+  return view?.email != null && error != null && !accountErrorPasses(error);
+}
 
 String _localeLabel(AppLocalizations l10n, AppLocaleSetting v) => switch (v) {
   AppLocaleSetting.auto => l10n.languageAuto,

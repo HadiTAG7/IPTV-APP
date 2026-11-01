@@ -17,16 +17,19 @@ Future<void> openAccountScreen(BuildContext context) => Navigator.of(context)
 
 /// While [signedOut], a failure comes from signing in or resetting the
 /// password, never from sync, so unknown codes mean the account service
-/// could not be reached.
+/// could not be reached. [owner] is the email of the account this device's
+/// data belongs to, when known.
 String accountErrorText(
   AppLocalizations l,
   String code, {
   bool signedOut = false,
+  String? owner,
 }) => switch (code) {
   'FORM' => l.accountInvalidForm,
   'FORM_SIGN_IN' => l.accountInvalidSignIn,
   'FORM_EMAIL' => l.accountInvalidEmail,
   'EMAIL_EXISTS' => l.accountExists,
+  'OTHER_ACCOUNT' when owner != null => l.accountOtherOwnerNamed(owner),
   'OTHER_ACCOUNT' => l.accountOtherOwner,
   'SESSION_STORAGE' => l.accountStorageFailed,
   'SESSION_EXPIRED' => l.accountSessionExpired,
@@ -43,6 +46,52 @@ String accountErrorText(
   _ => l.accountSyncFailed,
 };
 
+/// Whether sync failed with [code] for a reason that clears by itself (the
+/// connection, the service, another device writing at the same time); any
+/// other failure stops sync until it is dealt with.
+bool accountErrorPasses(String code) => const {
+  'NETWORK_ERROR',
+  'UNAVAILABLE',
+  'DEADLINE_EXCEEDED',
+  'INTERNAL',
+  'RESOURCE_EXHAUSTED',
+  'CONFLICT',
+}.contains(code);
+
+/// Asks before [AccountController.release]; pops true to switch. Cancel
+/// has the focus, so a stray OK never switches.
+class SwitchAccountDialog extends StatelessWidget {
+  const SwitchAccountDialog({super.key, this.owner});
+
+  /// The email of the account this device's data belongs to, when known.
+  final String? owner;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final owner = this.owner;
+    return AlertDialog(
+      title: Text(l.accountSwitchTitle),
+      content: Text(
+        owner == null ? l.accountSwitchBodyUnnamed : l.accountSwitchBody(owner),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('account-switch-cancel'),
+          autofocus: true,
+          onPressed: () => Navigator.of(context).pop(false),
+          child: Text(l.commonCancel),
+        ),
+        TextButton(
+          key: const ValueKey('account-switch-confirm'),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: Text(l.accountSwitchConfirm),
+        ),
+      ],
+    );
+  }
+}
+
 class AccountScreen extends ConsumerStatefulWidget {
   const AccountScreen({super.key});
   @override
@@ -53,6 +102,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
+  final _submitNode = FocusNode(debugLabel: 'account-submit');
   bool _create = false;
   bool _busy = false;
   String? _error;
@@ -66,6 +116,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     _email.dispose();
     _password.dispose();
     _confirm.dispose();
+    _submitNode.dispose();
     super.dispose();
   }
 
@@ -129,6 +180,21 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     );
   }
 
+  /// After a confirmation, unlinks this device from the account its data
+  /// belongs to and signs in with the account entered, from Sign in, where
+  /// its progress and result show.
+  Future<void> _switchAccount(String? owner) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => SwitchAccountDialog(owner: owner),
+    );
+    if (confirmed != true || !mounted) return;
+    await _run(() => ref.read(accountControllerProvider).release());
+    if (!mounted || _error != null) return;
+    _submitNode.requestFocus();
+    _authenticate();
+  }
+
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
@@ -149,14 +215,34 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
           key: const ValueKey('account-error'),
           liveRegion: true,
           child: Text(
-            accountErrorText(l, error, signedOut: account.email == null),
+            accountErrorText(
+              l,
+              error,
+              signedOut: account.email == null,
+              owner: account.owner,
+            ),
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
         ),
+        // Signing in with another account: the way to move this device to
+        // it, after saying what happens to its data.
+        if (error == 'OTHER_ACCOUNT' && account.email == null) ...[
+          const SizedBox(height: Spacing.sm),
+          TvButton(
+            key: const ValueKey('account-switch'),
+            label: l.accountSwitch,
+            busy: busy,
+            onSelect: () => unawaited(_switchAccount(account.owner)),
+          ),
+        ],
       ],
       if (_message != null) ...[
         const SizedBox(height: Spacing.md),
-        Text(_message!, key: const ValueKey('account-message')),
+        Semantics(
+          key: const ValueKey('account-message'),
+          liveRegion: true,
+          child: Text(_message!),
+        ),
       ],
     ];
     return Scaffold(
@@ -240,6 +326,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                         const SizedBox(height: Spacing.lg),
                         TvButton(
                           key: const ValueKey('account-submit'),
+                          focusNode: _submitNode,
                           label: _create ? l.accountCreate : l.accountSignIn,
                           onSelect: _authenticate,
                           primary: true,
@@ -333,7 +420,8 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                         TvButton(
                           key: const ValueKey('account-sign-out'),
                           label: l.accountSignOut,
-                          busy: busy,
+                          // Not while a poll runs: signing out waits for it.
+                          busy: _busy,
                           onSelect: () => unawaited(
                             _run(
                               () =>

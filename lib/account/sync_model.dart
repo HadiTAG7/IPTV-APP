@@ -63,6 +63,139 @@ SyncData mergeSyncData(
   return merged;
 }
 
+/// The record types this version holds, and their fields. Types and fields
+/// a newer version adds are kept as received, never deleted or stripped
+/// (see `LocalSyncStore.export`).
+const syncFields = <String, Set<String>>{
+  'source': {
+    'type',
+    'source',
+    'name',
+    'kind',
+    'url',
+    'username',
+    'password',
+    'userAgent',
+    'referer',
+    'liveFormat',
+    'epgOffsetMin',
+    'position',
+    'fileParts',
+    'fileHash',
+  },
+  'file': {'type', 'source', 'part', 'data'},
+  'favorite': {'type', 'source', 'kind', 'key', 'position', 'addedAt'},
+  'list': {'type', 'source', 'list', 'name', 'position', 'createdAt'},
+  'item': {'type', 'list', 'key', 'position', 'addedAt'},
+  'progress': {
+    'type',
+    'source',
+    'kind',
+    'key',
+    'seriesKey',
+    'positionMs',
+    'durationMs',
+    'updatedAt',
+    'finished',
+  },
+  'recent': {'type', 'source', 'key', 'lastWatchedAt'},
+  'preferences': {'type', 'locale', 'preferredAudioLang', 'preferredSubLang'},
+};
+
+/// Fields of a source record that name its playlist file and chunks.
+const _playlistFields = {'kind', 'url', 'fileParts', 'fileHash'};
+
+/// This device's changes since [baseline], the account as last synced, to
+/// merge into the account as now read: [remote], with tombstones [deleted].
+///
+/// * Only a tombstone deletes: a record the account lost without one (its
+///   documents deleted in the console, an older backup restored) is
+///   uploaded again instead of being deleted here.
+/// * A record deleted elsewhere wins over an edit made here before this
+///   device heard of it: reviving a source or list alone would drop its
+///   contents, and a list entry or favourite that only moved (a removal
+///   here renumbers the rest) is no re-add.
+/// * A record changed both here and elsewhere keeps the fields each side
+///   changed, this device's where both did. A playlist file's fields name
+///   its chunks, so they come from one side together, and a playlist
+///   replaced here goes with all of its chunks.
+Map<String, Map<String, Object?>?> pendingSyncChanges(
+  SyncData baseline,
+  SyncData remote,
+  Set<String> deleted,
+  SyncData local,
+) {
+  final changes = syncChanges(baseline, local);
+  for (final e in local.entries) {
+    if (baseline.containsKey(e.key) &&
+        !remote.containsKey(e.key) &&
+        !deleted.contains(e.key)) {
+      changes[e.key] = e.value;
+    }
+  }
+  changes.removeWhere((key, r) {
+    final base = baseline[key];
+    if (r == null || base == null || !deleted.contains(key)) return false;
+    return switch (r['type']) {
+      'source' || 'list' => true,
+      'item' ||
+      'favorite' => syncEqual({...r, 'position': 0}, {...base, 'position': 0}),
+      _ => false,
+    };
+  });
+  for (final e in changes.entries.toList()) {
+    final mine = e.value;
+    final base = baseline[e.key];
+    final theirs = remote[e.key];
+    if (mine == null ||
+        base == null ||
+        theirs == null ||
+        syncEqual(base, theirs)) {
+      continue;
+    }
+    final merged = changes[e.key] = _mergeRecord(base, mine, theirs);
+    if (merged['type'] != 'source' ||
+        merged['fileHash'] == null ||
+        syncEqual(merged['fileHash'], theirs['fileHash'])) {
+      continue;
+    }
+    // Chunks equal to the last synced ones are no change here, yet the
+    // account now holds the other playlist's.
+    for (final c in local.entries) {
+      if (c.value['type'] == 'file' && c.value['source'] == merged['source']) {
+        changes[c.key] = c.value;
+      }
+    }
+  }
+  return changes;
+}
+
+/// [mine] and [theirs], both changed since [base], field by field.
+Map<String, Object?> _mergeRecord(
+  Map<String, Object?> base,
+  Map<String, Object?> mine,
+  Map<String, Object?> theirs,
+) {
+  // A playback checkpoint is one moment (the newer wins in mergeSyncData),
+  // and a playlist chunk goes with its source record.
+  if (mine['type'] == 'progress' || mine['type'] == 'file') return mine;
+  bool changed(String field) => !syncEqual(base[field], mine[field]);
+  final playlist = mine['type'] == 'source' && _playlistFields.any(changed);
+  final merged = Map.of(theirs);
+  for (final field in {...base.keys, ...mine.keys}) {
+    final ours = mine['type'] == 'source' && _playlistFields.contains(field)
+        ? playlist
+        : changed(field);
+    if (!ours) continue;
+    if (mine.containsKey(field)) {
+      merged[field] = mine[field];
+    } else {
+      merged.remove(field);
+    }
+  }
+  return merged;
+}
+
 SyncData decodeSyncData(Object? value) => value is Map
     ? {
         for (final e in value.entries)

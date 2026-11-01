@@ -23,6 +23,10 @@ typedef _Playlist = ({
   String hash,
 });
 
+/// Account records this version cannot hold, and the fields it does not
+/// know of the records it holds.
+typedef _Foreign = ({SyncData records, SyncData fields});
+
 /// Maps device-local integer IDs to stable cloud IDs without migrating the
 /// catalogue database. Only account data is exported, never the catalogue.
 class LocalSyncStore {
@@ -39,6 +43,11 @@ class LocalSyncStore {
   /// no source uses them (a rolled-back apply still does).
   final _replaced = <String>{};
   final _random = Random();
+
+  /// What the account last synced holds that this version cannot hold here
+  /// (see [_foreignOf]). [export] returns it as received, so it never looks
+  /// deleted or changed on this device.
+  _Foreign _foreign = (records: {}, fields: {});
 
   Future<void> _load() async {
     if (_loaded) return;
@@ -217,6 +226,13 @@ class LocalSyncStore {
       'preferredAudioLang': settings.preferredAudioLang,
       'preferredSubLang': settings.preferredSubLang,
     };
+    for (final e in _foreign.records.entries) {
+      result[e.key] = e.value;
+    }
+    for (final e in _foreign.fields.entries) {
+      final held = result[e.key];
+      if (held != null) result[e.key] = {...e.value, ...held};
+    }
     if (!syncEqual(await db.settingsDao.getJson(_idsKey), _ids)) {
       await db.settingsDao.setJson(_idsKey, _ids);
     }
@@ -248,9 +264,11 @@ class LocalSyncStore {
   }
 
   /// Keeps the account's encoding of playlist files unchanged since [data]
-  /// was synced, so a restart does not re-encode and re-upload them.
+  /// was synced, so a restart does not re-encode and re-upload them, and
+  /// what of [data] this version cannot hold.
   Future<void> remember(SyncData data) async {
     await _load();
+    _foreign = _foreignOf(data);
     final local = {
       for (final e in _ids.entries)
         if (e.key.startsWith('source:'))
@@ -340,6 +358,72 @@ class LocalSyncStore {
     }
     if (!syncEqual(before, _ids)) await db.settingsDao.setJson(_idsKey, _ids);
   });
+
+  /// What of [data] this version cannot hold here: records of types a newer
+  /// version added, or with a kind or format it added, with everything in
+  /// their sources and lists; and of the other records, the fields a newer
+  /// version added. Kept as received, a newer device's data survives the
+  /// syncs of an older one.
+  static _Foreign _foreignOf(SyncData data) {
+    bool known(Object? name, List<Enum> values) =>
+        values.any((v) => v.name == name);
+    final records = <String, Map<String, Object?>>{};
+    final sources = <Object?>{};
+    final lists = <Object?>{};
+    for (final e in data.entries) {
+      final r = e.value;
+      final held = switch (r['type']) {
+        'source' =>
+          known(r['kind'], SourceKind.values) &&
+              known(r['liveFormat'], LiveFormat.values),
+        'favorite' => known(r['kind'], ContentKind.values),
+        'progress' => known(r['kind'], PlayableKind.values),
+        final type => syncFields.containsKey(type),
+      };
+      if (held) continue;
+      records[e.key] = r;
+      if (r['type'] == 'source') sources.add(r['source'] ?? e.key);
+    }
+    if (sources.isNotEmpty) {
+      for (final e in data.entries) {
+        if (e.value['type'] == 'list' && sources.contains(e.value['source'])) {
+          lists.add(e.value['list'] ?? e.key);
+        }
+      }
+      for (final e in data.entries) {
+        final r = e.value;
+        if (r['type'] == 'item'
+            ? lists.contains(r['list'])
+            : sources.contains(r['source'])) {
+          records[e.key] = r;
+        }
+      }
+    }
+    final fields = <String, Map<String, Object?>>{};
+    for (final e in data.entries) {
+      if (records.containsKey(e.key)) continue;
+      final names = syncFields[e.value['type']]!;
+      final added = {
+        for (final f in e.value.entries)
+          if (!names.contains(f.key)) f.key: f.value,
+      };
+      if (added.isNotEmpty) fields[e.key] = added;
+    }
+    return (records: records, fields: fields);
+  }
+
+  /// [data] without what [foreign] names.
+  static SyncData _holdable(SyncData data, _Foreign foreign) => {
+    for (final e in data.entries)
+      if (!foreign.records.containsKey(e.key))
+        e.key: foreign.fields.containsKey(e.key)
+            ? {
+                for (final f in e.value.entries)
+                  if (!foreign.fields[e.key]!.containsKey(f.key))
+                    f.key: f.value,
+              }
+            : e.value,
+  };
 
   /// Account records of [type] whose ID no row here holds, in their order.
   static List<Map<String, Object?>> _unheld(
@@ -468,18 +552,24 @@ class LocalSyncStore {
   /// Returns the sources whose catalogue needs an import, and those whose
   /// guide offset changed: their guides need a forced refresh.
   Future<({Set<int> imports, Set<int> guides})> apply(SyncData target) async {
-    final current = await export();
-    final changed = syncChanges(current, target);
+    final foreign = _foreignOf(target);
+    final exported = await export();
+    final current = _holdable(exported, _foreignOf(exported));
+    final held = _holdable(target, foreign);
+    // What this version cannot hold is neither applied nor deleted here.
+    final changed = syncChanges(current, held)
+      ..removeWhere((key, _) => foreign.records.containsKey(key));
     final needImport = <int>{};
     final guides = <int>{};
     try {
-      await _apply(target, current, changed, needImport, guides);
+      await _apply(held, current, changed, needImport, guides);
     } on Object {
       // The rollback also removed rows created here: forget the cloud IDs
       // given to them, or a later local row would inherit one.
       _loaded = false;
       rethrow;
     }
+    _foreign = foreign;
     return (imports: needImport, guides: guides);
   }
 
@@ -515,12 +605,15 @@ class LocalSyncStore {
               );
             }
           case 'item':
+            // Without closing the gap as a removal here does: the other
+            // entries keep the positions the account gives them.
             if (lid != null) {
-              await db.channelListsDao.setChannel(
-                lid,
-                old['key'] as String,
-                false,
-              );
+              await (db.delete(db.channelListItems)..where(
+                    (i) =>
+                        i.listId.equals(lid) &
+                        i.key.equals(old['key'] as String),
+                  ))
+                  .go();
             }
           case 'progress':
             if (sid != null) {
@@ -566,17 +659,20 @@ class LocalSyncStore {
           if (oldFile != null && current[e.key]?['fileHash'] == r['fileHash']) {
             // The same playlist: keep the local copy and its catalogue.
             url = oldFile;
-          } else {
-            final encoded = _encoded(target, r);
-            if (encoded == null) {
-              throw const AccountException('INVALID_PLAYLIST');
-            }
+          } else if (_encoded(target, r) case final encoded?) {
             url = await _receive(
               encoded,
               r['fileHash']! as String,
               oldFile,
               cloudId,
             );
+          } else if (oldFile != null) {
+            // Chunks that do not match their record (merged so by an older
+            // version): the local copy stays, and the next upload sends it
+            // with its own chunks, which repairs the account.
+            url = oldFile;
+          } else {
+            throw const AccountException('INVALID_PLAYLIST');
           }
         }
         if (oldFile != null && oldFile != url) _replaced.add(oldFile);

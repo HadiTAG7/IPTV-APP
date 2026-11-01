@@ -203,7 +203,23 @@ class _TvTextFieldState extends State<TvTextField> {
         ?.requestKeyboard();
   }
 
+  /// Also calls [TvTextField.onSubmitted]: given to the [TextField], it would
+  /// make the field, still focused after Done, restart its input connection
+  /// and show the keyboard again (flutter#84240), over what the submission
+  /// shows.
   void _onEditingComplete() {
+    final text =
+        _node.context
+            ?.findAncestorStateOfType<EditableTextState>()
+            ?.textEditingValue
+            .text ??
+        widget.controller?.text ??
+        '';
+    _moveOnOrHide();
+    widget.onSubmitted?.call(text);
+  }
+
+  void _moveOnOrHide() {
     if (widget.textInputAction == TextInputAction.next) {
       _handOffKeyboard(() {
         final next = widget.nextFocusNode;
@@ -260,7 +276,6 @@ class _TvTextFieldState extends State<TvTextField> {
         style: widget.style,
         maxLines: 1,
         onChanged: widget.onChanged,
-        onSubmitted: widget.onSubmitted,
         onEditingComplete: _onEditingComplete,
         // Read-only keeps the caret, so Left/Right still show where it is.
         readOnly: _readOnly,

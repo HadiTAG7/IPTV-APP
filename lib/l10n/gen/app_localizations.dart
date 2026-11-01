@@ -2591,7 +2591,7 @@ abstract class AppLocalizations {
   /// No description provided for @accountIntro.
   ///
   /// In en, this message translates to:
-  /// **'Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favourites, viewing progress and language settings sync automatically. Your existing data is merged when you sign in.'**
+  /// **'Use the same account on your phone, TV and Windows. Subscriptions and their login details, lists, channel order, favorites, viewing progress and language settings sync automatically. Your existing data is merged when you sign in.'**
   String get accountIntro;
 
   /// No description provided for @accountEmail.
@@ -2705,7 +2705,7 @@ abstract class AppLocalizations {
   /// No description provided for @accountOtherOwner.
   ///
   /// In en, this message translates to:
-  /// **'This device\'s data belongs to another account. Sign in with the original account to keep your data private.'**
+  /// **'This device\'s data belongs to another account. Sign in with that account to keep syncing it, or switch this device to the account you entered.'**
   String get accountOtherOwner;
 
   /// No description provided for @accountSyncFailed.
@@ -2767,6 +2767,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Sign in again'**
   String get accountSignInAgain;
+
+  /// Shown instead of accountOtherOwner when the email of the account this device's data belongs to is known. {owner} is that email, wrapped in U+2068/U+2069 (first-strong isolate) so it keeps its own direction.
+  ///
+  /// In en, this message translates to:
+  /// **'This device\'s data belongs to ⁨{owner}⁩. Sign in with that account to keep syncing it, or switch this device to the account you entered.'**
+  String accountOtherOwnerNamed(String owner);
+
+  /// Button under the other-account message: unlinks this device from the account its data belongs to, after a confirmation, and signs in with the account just entered.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch this device to this account'**
+  String get accountSwitch;
+
+  /// No description provided for @accountSwitchTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch this device to another account?'**
+  String get accountSwitchTitle;
+
+  /// Confirmation before switching accounts. {owner} is the email of the account this device's data belonged to, wrapped in U+2068/U+2069 (first-strong isolate).
+  ///
+  /// In en, this message translates to:
+  /// **'This device stops syncing with ⁨{owner}⁩. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with. ⁨{owner}⁩ keeps its own copy, which this device no longer changes.'**
+  String accountSwitchBody(String owner);
+
+  /// accountSwitchBody for a device linked by an earlier version, which did not keep the account's email.
+  ///
+  /// In en, this message translates to:
+  /// **'This device stops syncing with the account it was linked to. Its subscriptions and their login details, lists, favorites and viewing progress stay on this device and are merged into the account you sign in with. The previous account keeps its own copy, which this device no longer changes.'**
+  String get accountSwitchBodyUnnamed;
+
+  /// No description provided for @accountSwitchConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch'**
+  String get accountSwitchConfirm;
+
+  /// Line under the Account & sync row in Settings while a failure that does not clear by itself stops sync.
+  ///
+  /// In en, this message translates to:
+  /// **'Sync stopped. Open to see why.'**
+  String get accountSyncStopped;
 
   /// Button in the programme info of the guide: plays the programme's channel live.
   ///

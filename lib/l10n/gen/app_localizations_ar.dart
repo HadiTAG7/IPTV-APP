@@ -1592,7 +1592,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get accountOtherOwner =>
-      'بيانات هذا الجهاز مرتبطة بحساب آخر. سجّل الدخول بالحساب الأصلي للحفاظ على خصوصية بياناتك.';
+      'بيانات هذا الجهاز مرتبطة بحساب آخر. سجّل الدخول بذلك الحساب لمتابعة مزامنتها، أو انقل هذا الجهاز إلى الحساب الذي أدخلته.';
 
   @override
   String get accountSyncFailed =>
@@ -1629,6 +1629,32 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get accountSignInAgain => 'سجّل الدخول مجددًا';
+
+  @override
+  String accountOtherOwnerNamed(String owner) {
+    return 'بيانات هذا الجهاز مرتبطة بالحساب ⁨$owner⁩. سجّل الدخول بذلك الحساب لمتابعة مزامنتها، أو انقل هذا الجهاز إلى الحساب الذي أدخلته.';
+  }
+
+  @override
+  String get accountSwitch => 'نقل هذا الجهاز إلى هذا الحساب';
+
+  @override
+  String get accountSwitchTitle => 'نقل هذا الجهاز إلى حساب آخر؟';
+
+  @override
+  String accountSwitchBody(String owner) {
+    return 'سيتوقف هذا الجهاز عن المزامنة مع الحساب ⁨$owner⁩. تبقى الاشتراكات وبيانات دخولها والقوائم والمفضلة ومتابعة المشاهدة على هذا الجهاز، وتُدمج في الحساب الذي تسجّل الدخول به. ويحتفظ الحساب ⁨$owner⁩ بنسخته، ولن يغيّرها هذا الجهاز بعد الآن.';
+  }
+
+  @override
+  String get accountSwitchBodyUnnamed =>
+      'سيتوقف هذا الجهاز عن المزامنة مع الحساب المرتبط به. تبقى الاشتراكات وبيانات دخولها والقوائم والمفضلة ومتابعة المشاهدة على هذا الجهاز، وتُدمج في الحساب الذي تسجّل الدخول به. ويحتفظ الحساب السابق بنسخته، ولن يغيّرها هذا الجهاز بعد الآن.';
+
+  @override
+  String get accountSwitchConfirm => 'نقل';
+
+  @override
+  String get accountSyncStopped => 'توقفت المزامنة. افتح الحساب لمعرفة السبب.';
 
   @override
   String get guideWatchChannel => 'مشاهدة القناة';
