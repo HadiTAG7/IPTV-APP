@@ -2302,6 +2302,34 @@ void main() {
     expect(await phone.channelListsDao.channelKeys(lid), ['d', 'a', 'c']);
   });
 
+  test('two channels moved to the end on the phone and two others swapped '
+      'on the TV meanwhile: the channel nobody moved down stays', () async {
+    final id = await seed(phone);
+    final lid = await phone.channelListsDao.createList(
+      id,
+      'Sports',
+      channels: ['a', 'b', 'c', 'd', 'e'],
+    );
+    await login(a);
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    final tlid = (await tv.channelListsDao.lists(tid)).single.id;
+    await phone.channelListsDao.moveChannel(lid, 'a', 4);
+    await phone.channelListsDao.moveChannel(lid, 'c', 3);
+    await a.sync();
+    cloud.offline = true;
+    // The account already has "d" above "c": the TV's swap changes nothing.
+    await tv.channelListsDao.moveChannel(tlid, 'c', 1);
+    await b.sync();
+    cloud.offline = false;
+    await b.sync();
+    await a.sync();
+    expect([a.view.error, b.view.error], [null, null]);
+    const order = ['b', 'd', 'e', 'a', 'c'];
+    expect(await phone.channelListsDao.channelKeys(lid), order);
+    expect(await tv.channelListsDao.channelKeys(tlid), order);
+  });
+
   for (final (name, late, order)
       in <(String, Future<void> Function(AppDatabase, int), List<String>)>[
         (

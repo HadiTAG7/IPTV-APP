@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' show max, min;
 
 import 'package:crypto/crypto.dart';
 
@@ -293,7 +294,16 @@ void _place(
         }
         if (k == previous) after = (s + 1, score);
       }
-      if (up && before != null && before.$2 == best) {
+      // Right before the entry it passed only while nothing held here lies
+      // between the two places: the account moved that entry away, so
+      // following it would carry this one past entries nobody moved.
+      bool adjacent((int, int) a, (int, int) b) => !order
+          .sublist(min(a.$1, b.$1), max(a.$1, b.$1))
+          .any((k) => here.containsKey(k));
+      if (up &&
+          before != null &&
+          before.$2 == best &&
+          (after == null || adjacent(after, before))) {
         at = before.$1;
       } else if (after != null && after.$2 == best) {
         at = after.$1;
