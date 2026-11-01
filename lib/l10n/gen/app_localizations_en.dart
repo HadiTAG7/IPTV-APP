@@ -1542,6 +1542,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get accountWaiting => 'Ready to sync';
 
   @override
+  String get accountStopped => 'Sync stopped';
+
+  @override
   String get accountSignOut => 'Sign out';
 
   @override

@@ -894,6 +894,42 @@ void main() {
       );
     });
 
+    for (final (code, stopped) in [
+      ('PERMISSION_DENIED', true),
+      ('RECORD_TOO_LARGE', true),
+      ('NETWORK_ERROR', false),
+    ]) {
+      testWidgets('$lang TV: the status line agrees with a sync that '
+          '${stopped ? 'stopped' : 'could not finish'} ($code)', (
+        tester,
+      ) async {
+        final l = await pumpAccount(
+          tester,
+          lang: lang,
+          tv: true,
+          size: const Size(960, 540),
+          account: view(
+            AccountView(
+              email: 'viewer@example.test',
+              linked: true,
+              error: code,
+              lastSync: DateTime(2026),
+            ),
+          ),
+        );
+        expect(find.text(accountErrorText(l, code)), findsOneWidget);
+        expect(
+          find.text(l.accountStopped),
+          stopped ? findsOneWidget : findsNothing,
+        );
+        expect(
+          find.text(l.accountWaiting),
+          stopped ? findsNothing : findsOneWidget,
+        );
+        expect(find.text(l.accountSynced), findsNothing);
+      });
+    }
+
     test('$lang: switching a device linked by an earlier version explains '
         'it without the email', () {
       final l = lookupAppLocalizations(Locale(lang));

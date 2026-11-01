@@ -404,9 +404,12 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                         const SizedBox(height: Spacing.md),
+                        // Never "ready" over a reason sync stopped.
                         Text(
                           account.busy
                               ? l.accountSyncing
+                              : error != null && !accountErrorPasses(error)
+                              ? l.accountStopped
                               : account.lastSync != null && error == null
                               ? l.accountSynced
                               : l.accountWaiting,

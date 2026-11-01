@@ -1573,6 +1573,9 @@ class AppLocalizationsAr extends AppLocalizations {
   String get accountWaiting => 'جاهز للمزامنة';
 
   @override
+  String get accountStopped => 'المزامنة متوقفة';
+
+  @override
   String get accountSignOut => 'تسجيل الخروج';
 
   @override

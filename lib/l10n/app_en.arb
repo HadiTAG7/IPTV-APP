@@ -993,6 +993,10 @@
   "accountSyncing": "Syncing…",
   "accountSynced": "Your account is up to date",
   "accountWaiting": "Ready to sync",
+  "accountStopped": "Sync stopped",
+  "@accountStopped": {
+    "description": "Status line under the signed-in email on the account screen while a failure that does not clear by itself stops sync; the reason shows under Sync now."
+  },
   "accountSignOut": "Sign out",
   "accountLocalData": "Signing out pauses sync. Downloaded data stays on this device and remains linked to this account. Device performance settings stay independent.",
   "accountInvalidForm": "Enter a valid email and a password of at least 8 characters. Password confirmation must match.",

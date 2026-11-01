@@ -2481,6 +2481,223 @@ void main() {
     });
   }
 
+  // A list ["a", "b", "c", "d"] changed on the phone, then on the TV before
+  // it heard of that change, in one upload. Each order made keeps its
+  // edits: the TV's on top of the phone's.
+  final tvEdits = <(String, Future<void> Function(AppDatabase, int))>[
+    (
+      'a channel removed and another appended',
+      (db, lid) async {
+        await db.channelListsDao.setChannel(lid, 'a', false);
+        await db.channelListsDao.setChannel(lid, 'e', true);
+      },
+    ),
+    (
+      'a channel appended and moved up',
+      (db, lid) async {
+        await db.channelListsDao.setChannel(lid, 'e', true);
+        await db.channelListsDao.moveChannel(lid, 'e', -1);
+      },
+    ),
+    (
+      'a channel removed',
+      (db, lid) async {
+        await db.channelListsDao.setChannel(lid, 'c', false);
+      },
+    ),
+    (
+      'a channel moved to the top',
+      (db, lid) async {
+        await db.channelListsDao.moveChannel(lid, 'c', -2);
+      },
+    ),
+    (
+      'two channels swapped',
+      (db, lid) async {
+        await db.channelListsDao.moveChannel(lid, 'c', -1);
+      },
+    ),
+    (
+      'a channel removed and another moved to the top',
+      (db, lid) async {
+        await db.channelListsDao.setChannel(lid, 'a', false);
+        await db.channelListsDao.moveChannel(lid, 'd', -2);
+      },
+    ),
+  ];
+  for (final (phoneEdit, edit, orders)
+      in <
+        (String, Future<void> Function(AppDatabase, int)?, List<List<String>>)
+      >[
+        (
+          'nothing',
+          null,
+          [
+            ['b', 'c', 'd', 'e'],
+            ['a', 'b', 'c', 'e', 'd'],
+            ['a', 'b', 'd'],
+            ['c', 'a', 'b', 'd'],
+            ['a', 'c', 'b', 'd'],
+            ['d', 'b', 'c'],
+          ],
+        ),
+        (
+          'the last channel moved to the top',
+          (db, lid) async {
+            await db.channelListsDao.moveChannel(lid, 'd', -3);
+          },
+          [
+            ['d', 'b', 'c', 'e'],
+            ['d', 'a', 'b', 'c', 'e'],
+            ['d', 'a', 'b'],
+            ['c', 'd', 'a', 'b'],
+            ['d', 'a', 'c', 'b'],
+            ['d', 'b', 'c'],
+          ],
+        ),
+        (
+          'a channel removed',
+          (db, lid) async {
+            await db.channelListsDao.setChannel(lid, 'b', false);
+          },
+          [
+            ['c', 'd', 'e'],
+            ['a', 'c', 'e', 'd'],
+            ['a', 'd'],
+            ['c', 'a', 'd'],
+            ['a', 'c', 'd'],
+            ['d', 'c'],
+          ],
+        ),
+        (
+          'a channel appended',
+          (db, lid) async {
+            await db.channelListsDao.setChannel(lid, 'x', true);
+          },
+          [
+            ['b', 'c', 'd', 'x', 'e'],
+            ['a', 'b', 'c', 'e', 'd', 'x'],
+            ['a', 'b', 'd', 'x'],
+            ['c', 'a', 'b', 'd', 'x'],
+            ['a', 'c', 'b', 'd', 'x'],
+            ['d', 'b', 'c', 'x'],
+          ],
+        ),
+        (
+          'the first channel moved to the end',
+          (db, lid) async {
+            await db.channelListsDao.moveChannel(lid, 'a', 3);
+          },
+          [
+            ['b', 'c', 'd', 'e'],
+            ['b', 'c', 'e', 'd', 'a'],
+            ['b', 'd', 'a'],
+            ['c', 'b', 'd', 'a'],
+            ['c', 'b', 'd', 'a'],
+            ['d', 'b', 'c'],
+          ],
+        ),
+      ]) {
+    for (final (i, (tvEdit, change)) in tvEdits.indexed) {
+      final order = orders[i];
+      test('$tvEdit on one device and $phoneEdit on another meanwhile keep '
+          'both orders on every device', () async {
+        final id = await seed(phone);
+        final lid = await phone.channelListsDao.createList(
+          id,
+          'Sports',
+          channels: ['a', 'b', 'c', 'd'],
+        );
+        await login(a);
+        await login(b);
+        final tid = (await tv.sourcesDao.all()).single.id;
+        final tlid = (await tv.channelListsDao.lists(tid)).single.id;
+        await edit?.call(phone, lid);
+        await a.sync();
+        // Offline (or signed out, or within the debounce): one upload.
+        cloud.offline = true;
+        await change(tv, tlid);
+        await b.sync();
+        cloud.offline = false;
+        await b.sync();
+        await a.sync();
+        expect([a.view.error, b.view.error], [null, null]);
+        expect(
+          [
+            await phone.channelListsDao.channelKeys(lid),
+            await tv.channelListsDao.channelKeys(tlid),
+          ],
+          [order, order],
+        );
+      });
+    }
+  }
+
+  test('a channel removed and another added while signed out keep the order '
+      'another device made meanwhile', () async {
+    final id = await seed(phone);
+    final lid = await phone.channelListsDao.createList(
+      id,
+      'Sports',
+      channels: ['news', 'sport', 'kids', 'docs'],
+    );
+    await login(a);
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    final tlid = (await tv.channelListsDao.lists(tid)).single.id;
+    await b.signOut();
+    await phone.channelListsDao.moveChannel(lid, 'docs', -3);
+    await a.sync();
+    await tv.channelListsDao.setChannel(tlid, 'news', false);
+    await tv.channelListsDao.setChannel(tlid, 'movies', true);
+    await login(b);
+    await a.sync();
+    expect([a.view.error, b.view.error], [null, null]);
+    const order = ['docs', 'sport', 'kids', 'movies'];
+    expect(
+      [
+        await phone.channelListsDao.channelKeys(lid),
+        await tv.channelListsDao.channelKeys(tlid),
+      ],
+      [order, order],
+    );
+  });
+
+  test('a favourite added and moved up on one device keeps the order '
+      'another device made meanwhile', () async {
+    final id = await seed(phone);
+    for (final key in ['a', 'b', 'c', 'd']) {
+      await phone.favoritesDao.setFavorite(id, ContentKind.live, key, true);
+    }
+    await login(a);
+    await login(b);
+    final tid = (await tv.sourcesDao.all()).single.id;
+    await phone.favoritesDao.reorder(id, ContentKind.live, [
+      'd',
+      'a',
+      'b',
+      'c',
+    ]);
+    await a.sync();
+    cloud.offline = true;
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'a', false);
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'e', true);
+    await tv.favoritesDao.reorder(tid, ContentKind.live, ['b', 'c', 'e', 'd']);
+    await b.sync();
+    cloud.offline = false;
+    await b.sync();
+    await a.sync();
+    expect([a.view.error, b.view.error], [null, null]);
+    const order = ['d', 'b', 'c', 'e'];
+    expect(
+      [
+        await phone.favoritesDao.favoriteKeys(id, ContentKind.live),
+        await tv.favoritesDao.favoriteKeys(tid, ContentKind.live),
+      ],
+      [order, order],
+    );
+  });
+
   test('after a language a newer version added, one chosen here and then '
       'the system language again reach the account and stay', () async {
     final id = await seed(phone);
@@ -2583,6 +2800,51 @@ void main() {
       'renewed-password',
     );
     expect(cloud.data[key]!['kind'], 'webrtc');
+  });
+
+  test('a device moved to another account keeps the fields a newer version '
+      'added to the records it replaces there', () async {
+    final other = Cloud();
+    final api = AccountsApi({'owner': cloud, 'other': other});
+    a.dispose();
+    b.dispose();
+    a = AccountController(db: phone, api: api, vault: MemoryVault());
+    b = AccountController(db: tv, api: api, vault: MemoryVault());
+    final tid = await seed(tv);
+    await tv.favoritesDao.setFavorite(tid, ContentKind.live, 'news', true);
+    await b.authenticate('other@example.test', 'sample-password');
+    final key = other.data.keys.singleWhere((k) => k.startsWith('source:'));
+    final fav = other.data.keys.singleWhere((k) => k.startsWith('favorite:'));
+    // Added by a newer version on another device of that account.
+    FakeApi(other).commit({
+      key: {...other.data[key]!, 'catchupDays': 7},
+      fav: {...other.data[fav]!, 'color': 'red'},
+    });
+    await b.sync();
+    // This device holds the same subscription, renamed, and favourite.
+    final id = await seed(phone);
+    await phone.sourcesDao.updateConfig(
+      id,
+      (await phone.sourcesDao.configFor(id))!.copyWith(name: 'My TV'),
+    );
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'news', true);
+    await login(a);
+    await a.signOut();
+    await expectLater(
+      a.authenticate('other@example.test', 'sample-password'),
+      throwsA(isA<AccountException>()),
+    );
+    await a.switchAccount('other@example.test', 'sample-password');
+    expect(a.view.error, isNull);
+    expect(other.data[key]!['name'], 'My TV');
+    expect(other.data[key]!['catchupDays'], 7);
+    expect(other.data[fav]!['color'], 'red');
+    // And later syncs here keep them too.
+    await phone.favoritesDao.setFavorite(id, ContentKind.live, 'sport', true);
+    await a.sync();
+    expect(a.view.error, isNull);
+    expect(other.data[key]!['catchupDays'], 7);
+    expect(other.data[fav]!['color'], 'red');
   });
 
   test('Create account with its own email on a device an earlier version '
@@ -2796,24 +3058,107 @@ void main() {
       });
     });
 
-    test('in a group with an entry added here every position goes, as the '
-        "new entry's counts on them", () {
+    test('an entry appended here goes last in the order made elsewhere, and '
+        'the entries a removal here shifted keep their positions', () {
       final base = {
         'item:l:a': item('a', 0),
         'item:l:b': item('b', 1),
         'item:l:c': item('c', 2),
+        'item:l:d': item('d', 3),
+      };
+      final remote = {
+        'item:l:d': item('d', 0),
+        'item:l:a': item('a', 1),
+        'item:l:b': item('b', 2),
+        'item:l:c': item('c', 3),
       };
       final local = {
         'item:l:b': item('b', 0),
         'item:l:c': item('c', 1),
         'item:l:d': item('d', 2),
+        'item:l:e': item('e', 3),
       };
+      expect(pendingSyncChanges(base, remote, {}, local), {
+        'item:l:a': null,
+        'item:l:e': item('e', 4),
+      });
       expect(pendingSyncChanges(base, base, {}, local), {
         'item:l:a': null,
+        'item:l:e': item('e', 4),
+      });
+    });
+
+    test('an entry added and moved up here goes after the entry before it '
+        'here, and the entries after it make room', () {
+      final base = {
+        'item:l:a': item('a', 0),
+        'item:l:b': item('b', 1),
+        'item:l:c': item('c', 2),
+      };
+      // Appended elsewhere meanwhile.
+      final remote = {...base, 'item:l:x': item('x', 3)};
+      final local = {
+        ...base,
+        'item:l:d': item('d', 2),
+        'item:l:c': item('c', 3),
+      };
+      expect(pendingSyncChanges(base, remote, {}, local), {
+        'item:l:d': item('d', 2),
+        'item:l:c': item('c', 3),
+        'item:l:x': item('x', 4),
+      });
+    });
+
+    test('an entry moved here keeps its place among the entries around it '
+        'here, and a move made elsewhere stays', () {
+      final base = {
+        'item:l:a': item('a', 0),
+        'item:l:b': item('b', 1),
+        'item:l:c': item('c', 2),
+        'item:l:d': item('d', 3),
+      };
+      // "a" moved to the end elsewhere, "d" to the top here.
+      final remote = {
         'item:l:b': item('b', 0),
         'item:l:c': item('c', 1),
         'item:l:d': item('d', 2),
+        'item:l:a': item('a', 3),
+      };
+      final local = {
+        'item:l:d': item('d', 0),
+        'item:l:a': item('a', 1),
+        'item:l:b': item('b', 2),
+        'item:l:c': item('c', 3),
+      };
+      expect(pendingSyncChanges(base, remote, {}, local), {
+        'item:l:d': item('d', 0),
+        'item:l:b': item('b', 1),
+        'item:l:c': item('c', 2),
       });
+      // "b" moved down one: it stays after "c", and "a" at the end.
+      final down = {
+        ...base,
+        'item:l:b': item('b', 2),
+        'item:l:c': item('c', 1),
+      };
+      expect(pendingSyncChanges(base, remote, {}, down), {
+        'item:l:c': item('c', 0),
+        'item:l:b': item('b', 1),
+      });
+      // "b" moved down two, after "c" and "d", and "d" to the top
+      // elsewhere: after "c", it keeps the most of its order here.
+      Map<String, Map<String, Object?>> list(List<String> keys) => {
+        for (final (i, key) in keys.indexed) 'item:l:$key': item(key, i),
+      };
+      expect(
+        pendingSyncChanges(
+          list(['a', 'b', 'c', 'd', 'e']),
+          list(['d', 'a', 'b', 'c', 'e']),
+          {},
+          list(['a', 'c', 'd', 'b', 'e']),
+        ),
+        {'item:l:b': item('b', 4), 'item:l:e': item('e', 5)},
+      );
     });
 
     test("a device moved to the account on purpose leaves the account's "
@@ -2872,6 +3217,29 @@ void main() {
           'favorite:s:live:b': favorite('b', 1),
           'favorite:s:live:c': favorite('c', 2),
         },
+      );
+    });
+
+    test('a device moved to the account on purpose keeps the fields a newer '
+        "version added to the account's copies it replaces", () {
+      final local = {'source:s': source('Mine', 'h1')};
+      final remote = {
+        'source:s': {...source('Theirs', 'h1'), 'catchupDays': 7},
+      };
+      expect(initialSyncChanges(remote, {}, local, keepLocal: true), {
+        'source:s': {...source('Mine', 'h1'), 'catchupDays': 7},
+      });
+      // Nothing to send when that is all the account's copy has more.
+      expect(
+        initialSyncChanges(
+          {
+            'source:s': {...source('Mine', 'h1'), 'catchupDays': 7},
+          },
+          {},
+          local,
+          keepLocal: true,
+        ),
+        isEmpty,
       );
     });
 

@@ -122,10 +122,10 @@ const _playlistFields = {'kind', 'url', 'fileParts', 'fileHash'};
 ///   device heard of it: reviving a source or list alone would drop its
 ///   contents, and a list entry or favourite that only moved (a removal
 ///   here renumbers the rest) is no re-add.
-/// * A position change that keeps the order of the other entries is no
-///   move: a removal here renumbers the entries after it, and the order
-///   the account has, maybe made on another device meanwhile, stays. In a
-///   group with an entry added here, every position goes.
+/// * Positions follow the account's order as now read, changed only as
+///   this device changed its own (see [_place]): a removal here renumbers
+///   the entries after it, which is no move, and the order the account
+///   has, maybe made on another device meanwhile, stays.
 /// * A record changed both here and elsewhere keeps the fields each side
 ///   changed, this device's where both did. A playlist file's fields name
 ///   its chunks, so they come from one side together, and a playlist
@@ -136,9 +136,7 @@ Map<String, Map<String, Object?>?> pendingSyncChanges(
   Set<String> deleted,
   SyncData local,
 ) {
-  final renumbered = _renumbered(baseline, local);
-  final changes = syncChanges(baseline, local)
-    ..removeWhere((key, _) => renumbered.contains(key));
+  final changes = syncChanges(baseline, local);
   for (final e in local.entries) {
     if (baseline.containsKey(e.key) &&
         !remote.containsKey(e.key) &&
@@ -180,51 +178,182 @@ Map<String, Map<String, Object?>?> pendingSyncChanges(
       }
     }
   }
+  _place(baseline, remote, local, changes);
   return changes;
 }
 
-/// The entries of [local] whose only change since [baseline] is a position
-/// that keeps the order of their group: the entries both hold, sorted by
-/// position, come in the same order. Not in a group with an entry added
-/// here: its position counts on theirs (appended after a removal closed a
-/// gap, or added and moved up), so the whole group goes.
-Set<String> _renumbered(SyncData baseline, SyncData local) {
-  final groups = <String, List<String>>{};
-  final added = <String>{};
-  for (final e in local.entries) {
-    final group = _positionGroup(e.value);
-    if (group == null) continue;
-    if (baseline.containsKey(e.key)) {
-      (groups[group] ??= []).add(e.key);
-    } else {
-      added.add(group);
+/// Gives the entries of each ordered group with an entry in [changes] the
+/// positions of the account's order as now read ([remote]), changed as
+/// this device changed its own since [baseline]:
+///
+/// * The entries placed here (added, sent again, or the fewest that moved
+///   to make the order here, see [_moved]) go, in their order here, where
+///   the most of the others keep their order here to them: after the
+///   entry before them here, unless the account moved that one away, and
+///   last when appended or moved to the end.
+/// * The other entries keep the account's order and positions, so the
+///   positions a removal here closed are no move and an order made on
+///   another device meanwhile stays. Only the entries after a placed one
+///   are renumbered, as far as it needs room.
+///
+/// Positions never tie anew: devices break ties in different ways.
+void _place(
+  SyncData baseline,
+  SyncData remote,
+  SyncData local,
+  Map<String, Map<String, Object?>?> changes,
+) {
+  final groups = {
+    for (final r in changes.values)
+      if (r != null) ?_positionGroup(r),
+  };
+  if (groups.isEmpty) return;
+  Map<String, List<String>> ordered(SyncData data) {
+    final result = <String, List<String>>{};
+    for (final e in data.entries) {
+      final group = _positionGroup(e.value);
+      if (groups.contains(group)) (result[group!] ??= []).add(e.key);
     }
+    return {for (final e in result.entries) e.key: _inOrder(data, e.value)};
   }
-  groups.removeWhere((group, _) => added.contains(group));
-  final renumbered = <String>{};
-  for (final keys in groups.values) {
-    List<String> ordered(SyncData data) => [...keys]
-      ..sort((a, b) {
-        final compared = (data[a]!['position'] as int).compareTo(
-          data[b]!['position'] as int,
-        );
-        return compared == 0 ? a.compareTo(b) : compared;
-      });
-    if (!syncEqual(ordered(baseline), ordered(local))) continue;
-    for (final key in keys) {
-      final base = baseline[key]!;
-      final mine = local[key]!;
-      if (!syncEqual(base, mine) &&
-          syncEqual({...mine, 'position': 0}, {...base, 'position': 0})) {
-        renumbered.add(key);
+
+  final bases = ordered(baseline);
+  final mines = ordered(local);
+  final theirs = ordered(remote);
+  final removed = {
+    for (final e in changes.entries)
+      if (e.value == null) e.key,
+  };
+  for (final group in groups) {
+    final mine = mines[group] ?? const [];
+    // Of the entries the account still has: one deleted elsewhere neither
+    // moved here nor keeps the others in their order.
+    final moved = _moved([...?bases[group]?.where(remote.containsKey)], mine);
+    final placed = {
+      for (final key in mine)
+        if (moved.contains(key) ||
+            changes[key] != null &&
+                (!baseline.containsKey(key) || !remote.containsKey(key)))
+          key,
+    };
+    final order = [
+      for (final key in theirs[group] ?? const <String>[])
+        if (!placed.contains(key) && !removed.contains(key)) key,
+    ];
+    final here = {for (final (i, key) in mine.indexed) key: i};
+    final last = mine.lastIndexWhere(
+      (key) => !placed.contains(key) && remote.containsKey(key),
+    );
+    // The entry here before the next placed one, in [order] already.
+    String? previous;
+    for (final (i, key) in mine.indexed) {
+      if (!placed.contains(key)) {
+        if (remote.containsKey(key)) previous = key;
+        continue;
+      }
+      // Nothing the account has follows it here: appended, or moved to the
+      // end, it goes after what other devices appended meanwhile.
+      if (i > last) {
+        order.add(key);
+        previous = key;
+        continue;
+      }
+      // Where the most of the entries here before it come before it, and
+      // of those after it after it: right after [previous] if that is such
+      // a place (first if none), else the first one.
+      var score = order.where((k) => (here[k] ?? -1) > i).length;
+      var best = score;
+      var at = 0;
+      var after = previous == null ? (0, score) : null;
+      for (final (s, k) in order.indexed) {
+        final j = here[k];
+        if (j != null) score += j < i ? 1 : -1;
+        if (score > best) {
+          best = score;
+          at = s + 1;
+        }
+        if (k == previous) after = (s + 1, score);
+      }
+      if (after != null && after.$2 == best) at = after.$1;
+      order.insert(at, key);
+      previous = key;
+    }
+    // An entry keeps the account's position while that still comes after
+    // the one before it (or ties as the account has them already).
+    int? at;
+    var held = false;
+    for (final key in order) {
+      final account = remote[key];
+      final position = account?['position'] as int?;
+      if (position != null &&
+          !placed.contains(key) &&
+          (at == null || position > at || position == at && held)) {
+        at = position;
+        held = true;
+      } else {
+        at = (at ?? -1) + 1;
+        held = false;
+      }
+      final row = {...(changes[key] ?? account)!, 'position': at};
+      if (syncEqual(row, account)) {
+        changes.remove(key);
+      } else {
+        changes[key] = row;
       }
     }
   }
-  return renumbered;
+}
+
+/// [keys] of [data] in their order: by position, then by key.
+List<String> _inOrder(SyncData data, Iterable<String> keys) =>
+    [...keys]..sort((a, b) {
+      final compared = (data[a]!['position'] as int).compareTo(
+        data[b]!['position'] as int,
+      );
+      return compared == 0 ? a.compareTo(b) : compared;
+    });
+
+/// The fewest entries of [mine] that moved to turn [base], the order last
+/// synced, into it: all of both but a longest run in their order there.
+Set<String> _moved(List<String> base, List<String> mine) {
+  final rank = {for (final (i, key) in base.indexed) key: i};
+  final ranks = [for (final key in mine) ?rank[key]];
+  // Patience sorting: ends[n] ends the run of n + 1 found that ends at the
+  // lowest rank, and before[i] precedes ranks[i] in its run.
+  final ends = <int>[];
+  final before = List.filled(ranks.length, -1);
+  for (final (i, r) in ranks.indexed) {
+    var low = 0;
+    var high = ends.length;
+    while (low < high) {
+      final mid = (low + high) ~/ 2;
+      if (ranks[ends[mid]] < r) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    if (low > 0) before[i] = ends[low - 1];
+    if (low == ends.length) {
+      ends.add(i);
+    } else {
+      ends[low] = i;
+    }
+  }
+  final stay = <int>{};
+  for (var i = ends.isEmpty ? -1 : ends.last; i >= 0; i = before[i]) {
+    stay.add(ranks[i]);
+  }
+  return {
+    for (final r in ranks)
+      if (!stay.contains(r)) base[r],
+  };
 }
 
 /// The ordered group of [row]: its position counts among the group's.
+/// None without a position.
 String? _positionGroup(Map<String, Object?> row) => switch (row['type']) {
+  _ when row['position'] is! int => null,
   'source' => 'sources',
   'list' => jsonEncode(['lists', row['source']]),
   'item' => jsonEncode(['items', row['list']]),
@@ -332,9 +461,20 @@ Map<String, Map<String, Object?>?> initialSyncChanges(
 /// this device's own in each ordered group. The account's language
 /// settings stay, as at any first sign-in, so its other devices keep their
 /// language: the confirmation names only the data that replaces the
-/// account's.
+/// account's. So do the fields of a record a newer version added, of which
+/// this device has no copy.
 Map<String, Map<String, Object?>?> _keepLocal(SyncData remote, SyncData local) {
-  final changes = syncChanges(remote, local)
+  final copies = {
+    for (final MapEntry(:key, :value) in local.entries)
+      key: {
+        if (remote[key] case final theirs?)
+          for (final f in theirs.entries)
+            if (syncFields[value['type']]?.contains(f.key) == false)
+              f.key: f.value,
+        ...value,
+      },
+  };
+  final changes = syncChanges(remote, copies)
     ..removeWhere(
       (key, value) =>
           value == null ||

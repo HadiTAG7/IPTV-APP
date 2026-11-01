@@ -2672,6 +2672,12 @@ abstract class AppLocalizations {
   /// **'Ready to sync'**
   String get accountWaiting;
 
+  /// Status line under the signed-in email on the account screen while a failure that does not clear by itself stops sync; the reason shows under Sync now.
+  ///
+  /// In en, this message translates to:
+  /// **'Sync stopped'**
+  String get accountStopped;
+
   /// No description provided for @accountSignOut.
   ///
   /// In en, this message translates to:
